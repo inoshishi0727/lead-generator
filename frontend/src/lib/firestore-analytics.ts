@@ -160,7 +160,11 @@ export async function getTrends(period: string = "week", lookback: number = 12):
 
   const series: TrendPoint[] = bucketKeys.map((key) => ({
     period: key,
-    ...buckets[key],
+    scraped: buckets[key].scraped,
+    enriched: buckets[key].enriched,
+    scored: buckets[key].scored,
+    sent: buckets[key].sent,
+    converted: buckets[key].converted,
   }));
 
   return { series };
