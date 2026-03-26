@@ -9,7 +9,7 @@ import {
   signOut,
   signInWithEmailAndPassword,
 } from "firebase/auth";
-import { initializeApp } from "firebase/app";
+import { initializeApp, deleteApp } from "firebase/app";
 import {
   doc,
   setDoc,
@@ -80,13 +80,13 @@ export async function inviteUser(
     await sendPasswordResetEmail(auth, email);
 
     // Clean up secondary app
-    await secondaryApp.delete();
+    await deleteApp(secondaryApp);
 
     return { uid, email, tempPassword };
   } catch (error) {
     // Clean up on failure
     try {
-      await secondaryApp.delete();
+      await deleteApp(secondaryApp);
     } catch {}
     throw error;
   }
