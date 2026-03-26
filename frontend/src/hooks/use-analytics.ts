@@ -7,10 +7,13 @@ import type {
   TrendPoint,
 } from "@/lib/types";
 
+const hasBackend = !!process.env.NEXT_PUBLIC_API_URL;
+
 export function useFunnel() {
   return useQuery({
     queryKey: ["analytics", "funnel"],
     queryFn: () => api.get<FunnelData>("/api/analytics/funnel"),
+    enabled: hasBackend,
   });
 }
 
@@ -19,6 +22,7 @@ export function useCategories() {
     queryKey: ["analytics", "categories"],
     queryFn: () =>
       api.get<{ categories: CategoryStat[] }>("/api/analytics/categories"),
+    enabled: hasBackend,
   });
 }
 
@@ -27,6 +31,7 @@ export function useRatios() {
     queryKey: ["analytics", "ratios"],
     queryFn: () =>
       api.get<{ ratios: RatioComparison[] }>("/api/analytics/ratios"),
+    enabled: hasBackend,
   });
 }
 
@@ -37,5 +42,6 @@ export function useTrends(period: string = "week") {
       api.get<{ series: TrendPoint[] }>(
         `/api/analytics/trends?period=${period}`
       ),
+    enabled: hasBackend,
   });
 }

@@ -1,8 +1,9 @@
 import { useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
+const hasBackend = !!process.env.NEXT_PUBLIC_API_URL;
 const WS_URL =
-  typeof window !== "undefined"
+  typeof window !== "undefined" && hasBackend
     ? `ws://${window.location.hostname}:8000/ws`
     : "";
 

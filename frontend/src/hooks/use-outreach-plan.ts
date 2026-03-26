@@ -54,6 +54,8 @@ interface OutreachPlan {
 
 export type { OutreachPlan, OutreachLead };
 
+const hasBackend = !!process.env.NEXT_PUBLIC_API_URL;
+
 export function useOutreachPlan(limit: number = 15) {
   return useQuery({
     queryKey: ["recommendations", "outreach-plan", limit],
@@ -62,5 +64,6 @@ export function useOutreachPlan(limit: number = 15) {
         `/api/recommendations/outreach-plan?limit=${limit}`
       ),
     staleTime: 10 * 60 * 1000,
+    enabled: hasBackend,
   });
 }
