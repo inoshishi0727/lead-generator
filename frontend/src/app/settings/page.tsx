@@ -11,6 +11,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { PasswordInput } from "@/components/password-input";
 import { useConfig } from "@/hooks/use-config";
 import { useAuth } from "@/lib/auth-context";
 import { sendPasswordResetEmail, updatePassword } from "firebase/auth";
@@ -92,8 +93,7 @@ export default function SettingsPage() {
           <form onSubmit={handleChangePassword} className="space-y-3 max-w-sm">
             <div className="space-y-1.5">
               <label className="text-xs font-medium text-muted-foreground">New Password</label>
-              <Input
-                type="password"
+              <PasswordInput
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
                 placeholder="New password"
@@ -102,8 +102,7 @@ export default function SettingsPage() {
             </div>
             <div className="space-y-1.5">
               <label className="text-xs font-medium text-muted-foreground">Confirm Password</label>
-              <Input
-                type="password"
+              <PasswordInput
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 placeholder="Confirm password"

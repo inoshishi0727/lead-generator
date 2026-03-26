@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { PasswordInput } from "@/components/password-input";
 import { Loader2 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 
@@ -73,9 +74,8 @@ export default function LoginPage() {
               <label className="text-sm font-medium" htmlFor="password">
                 Password
               </label>
-              <Input
+              <PasswordInput
                 id="password"
-                type="password"
                 placeholder="Password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
