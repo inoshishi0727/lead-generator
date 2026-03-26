@@ -127,7 +127,7 @@ export function LeadsTable({ leads, isLoading }: Props) {
                   {/* Flag column */}
                   <TableCell className="w-8 px-2">
                     {needsRescrape(lead) ? (
-                      <AlertTriangle className="h-3.5 w-3.5 text-red-400" title="Missing drinks data — re-scrape" />
+                      <AlertTriangle className="h-3.5 w-3.5 text-red-400" />
                     ) : lead.client_status === "approved" ? (
                       <Check className="h-3.5 w-3.5 text-emerald-400" />
                     ) : lead.client_status === "rejected" ? (
