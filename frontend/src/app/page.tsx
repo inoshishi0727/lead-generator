@@ -23,6 +23,7 @@ import {
   Zap,
   TrendingUp,
 } from "lucide-react";
+import { useAuth } from "@/lib/auth-context";
 
 const PIPELINE_STAGES = [
   { key: "scraped", label: "Scraped", color: "bg-zinc-500" },
@@ -36,6 +37,7 @@ const PIPELINE_STAGES = [
 ];
 
 export default function DashboardPage() {
+  const { isAdmin } = useAuth();
   const { startScrape, isStarting, status } = useScrape();
   const { data: leads, isLoading: leadsLoading } = useLeads();
   const { data: messages } = useMessages();
@@ -239,17 +241,19 @@ export default function DashboardPage() {
       {/* Outreach Plan */}
       <OutreachPlan />
 
-      {/* Scrape Controls */}
-      <div className="grid gap-6 lg:grid-cols-2">
-        <ScrapeControl
-          onStart={(queries, limit, headless) =>
-            startScrape({ queries, limit, headless })
-          }
-          isStarting={isStarting}
-          isRunning={isRunning}
-        />
-        {status && <ScrapeStatus status={status} />}
-      </div>
+      {/* Scrape Controls (admin only) */}
+      {isAdmin && (
+        <div className="grid gap-6 lg:grid-cols-2">
+          <ScrapeControl
+            onStart={(queries, limit, headless) =>
+              startScrape({ queries, limit, headless })
+            }
+            isStarting={isStarting}
+            isRunning={isRunning}
+          />
+          {status && <ScrapeStatus status={status} />}
+        </div>
+      )}
     </div>
   );
 }

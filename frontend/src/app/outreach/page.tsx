@@ -14,6 +14,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatCard } from "@/components/stat-card";
 import { MessageCard } from "@/components/message-card";
+import { useAuth } from "@/lib/auth-context";
 import {
   useMessages,
   useGenerateDrafts,
@@ -26,6 +27,7 @@ import {
 const STATUS_FILTERS = ["all", "draft", "approved", "rejected", "sent"] as const;
 
 export default function OutreachPage() {
+  const { isAdmin } = useAuth();
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [showSendWarning, setShowSendWarning] = useState(false);
 
@@ -78,30 +80,34 @@ export default function OutreachPage() {
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold tracking-tight">Outreach</h1>
         <div className="flex gap-2">
-          <Button
-            onClick={handleGenerate}
-            disabled={generateMutation.isPending}
-          >
-            {generateMutation.isPending ? (
-              <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-            ) : (
-              <FileText className="mr-1.5 h-4 w-4" />
-            )}
-            Generate Drafts
-          </Button>
-          <Button
-            variant="outline"
-            onClick={() => regenerateAllMutation.mutate()}
-            disabled={regenerateAllMutation.isPending}
-          >
-            {regenerateAllMutation.isPending ? (
-              <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-            ) : (
-              <RefreshCw className="mr-1.5 h-4 w-4" />
-            )}
-            Regenerate All
-          </Button>
-          {draftCount > 0 && (
+          {isAdmin && (
+            <>
+              <Button
+                onClick={handleGenerate}
+                disabled={generateMutation.isPending}
+              >
+                {generateMutation.isPending ? (
+                  <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                ) : (
+                  <FileText className="mr-1.5 h-4 w-4" />
+                )}
+                Generate Drafts
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => regenerateAllMutation.mutate()}
+                disabled={regenerateAllMutation.isPending}
+              >
+                {regenerateAllMutation.isPending ? (
+                  <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="mr-1.5 h-4 w-4" />
+                )}
+                Regenerate All
+              </Button>
+            </>
+          )}
+          {isAdmin && draftCount > 0 && (
             <Button
               variant="outline"
               className="border-emerald-500 text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/20"
@@ -112,7 +118,7 @@ export default function OutreachPage() {
               Approve All ({draftCount})
             </Button>
           )}
-          {approvedCount > 0 && (
+          {isAdmin && approvedCount > 0 && (
             <Button
               variant="outline"
               className="border-blue-500 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/20"
@@ -127,19 +133,21 @@ export default function OutreachPage() {
               Send Approved ({approvedCount})
             </Button>
           )}
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={handleFollowups}
-            disabled={followupsMutation.isPending}
-          >
-            {followupsMutation.isPending ? (
-              <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-            ) : (
-              <RefreshCw className="mr-1.5 h-4 w-4" />
-            )}
-            Follow-ups
-          </Button>
+          {isAdmin && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleFollowups}
+              disabled={followupsMutation.isPending}
+            >
+              {followupsMutation.isPending ? (
+                <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+              ) : (
+                <RefreshCw className="mr-1.5 h-4 w-4" />
+              )}
+              Follow-ups
+            </Button>
+          )}
         </div>
       </div>
 

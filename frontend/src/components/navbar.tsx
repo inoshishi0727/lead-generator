@@ -3,19 +3,22 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { BarChart3, Mail, Search, Settings, TrendingUp } from "lucide-react";
+import { BarChart3, Mail, Search, Settings, TrendingUp, LogOut, User } from "lucide-react";
 import { DarkModeToggle } from "@/components/dark-mode-toggle";
-
-const links = [
-  { href: "/", label: "Dashboard", icon: BarChart3 },
-  { href: "/leads", label: "Leads", icon: Search },
-  { href: "/outreach", label: "Outreach", icon: Mail },
-  { href: "/analytics", label: "Analytics", icon: TrendingUp },
-  { href: "/settings", label: "Settings", icon: Settings },
-] as const;
+import { useAuth } from "@/lib/auth-context";
+import { Button } from "@/components/ui/button";
 
 export function Navbar() {
   const pathname = usePathname();
+  const { displayName, role, signOut, isAdmin } = useAuth();
+
+  const links = [
+    { href: "/", label: "Dashboard", icon: BarChart3, show: true },
+    { href: "/leads", label: "Leads", icon: Search, show: true },
+    { href: "/outreach", label: "Outreach", icon: Mail, show: true },
+    { href: "/analytics", label: "Analytics", icon: TrendingUp, show: true },
+    { href: "/settings", label: "Settings", icon: Settings, show: isAdmin },
+  ];
 
   return (
     <header className="sticky top-0 z-40 border-b border-border/40 bg-background/80 backdrop-blur-xl">
@@ -24,7 +27,7 @@ export function Navbar() {
           Asterley Bros
         </Link>
         <nav className="flex gap-0.5">
-          {links.map(({ href, label, icon: Icon }) => (
+          {links.filter(l => l.show).map(({ href, label, icon: Icon }) => (
             <Link
               key={href}
               href={href}
@@ -37,20 +40,34 @@ export function Navbar() {
             >
               <Icon className="h-3.5 w-3.5" />
               {label}
-              {pathname === href && (
-                <span className="sr-only">(current)</span>
-              )}
             </Link>
           ))}
         </nav>
-        <div className="ml-auto">
+        <div className="ml-auto flex items-center gap-3">
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <User className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">{displayName}</span>
+            {role && (
+              <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium capitalize">
+                {role}
+              </span>
+            )}
+          </div>
           <DarkModeToggle />
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => signOut()}
+            className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground"
+          >
+            <LogOut className="h-3.5 w-3.5" />
+          </Button>
         </div>
       </div>
       {/* Active indicator line */}
       <div className="mx-auto max-w-6xl px-4">
         <div className="flex gap-0.5">
-          {links.map(({ href }) => (
+          {links.filter(l => l.show).map(({ href }) => (
             <div
               key={href}
               className={cn(

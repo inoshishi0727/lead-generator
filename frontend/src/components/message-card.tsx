@@ -20,6 +20,7 @@ import {
   useRegenerateMessage,
 } from "@/hooks/use-outreach";
 import { useGeneratingLeadId } from "@/hooks/use-live-updates";
+import { useAuth } from "@/lib/auth-context";
 
 interface Props {
   message: OutreachMessage;
@@ -55,6 +56,7 @@ export function MessageCard({ message }: Props) {
   const [editContent, setEditContent] = useState(message.content);
   const [editSubject, setEditSubject] = useState(message.subject ?? "");
 
+  const { isAdmin } = useAuth();
   const updateMutation = useUpdateMessage();
   const regenerateMutation = useRegenerateMessage();
   const generatingLeadId = useGeneratingLeadId();
@@ -207,8 +209,8 @@ export function MessageCard({ message }: Props) {
           )}
         </div>
 
-        {/* Action buttons */}
-        {message.status === "draft" && (
+        {/* Action buttons (admin only) */}
+        {isAdmin && message.status === "draft" && (
           <div className="flex items-center gap-2 pt-1">
             <Button
               size="sm"

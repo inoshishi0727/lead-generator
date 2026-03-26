@@ -18,6 +18,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from src.api.analytics import analytics_router
+from src.api.auth import auth_router
 from src.api.outreach import outreach_router
 from src.api.recommendations import recommendations_router
 from src.api.routes import router
@@ -49,6 +50,7 @@ app.add_middleware(
 
 app.include_router(router)
 app.include_router(analytics_router)
+app.include_router(auth_router)
 app.include_router(outreach_router)
 app.include_router(recommendations_router)
 

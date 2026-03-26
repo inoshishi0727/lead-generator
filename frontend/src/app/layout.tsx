@@ -1,11 +1,11 @@
 import type { Metadata } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
 import { QueryProvider } from "@/components/query-provider";
-import { Navbar } from "@/components/navbar";
 import { JobsProvider } from "@/components/jobs-provider";
 import { ActiveJobsBar } from "@/components/active-jobs-bar";
 import { LiveUpdates } from "@/components/live-updates";
 import { Toaster } from "sonner";
+import { AuthShell } from "@/components/auth-shell";
 import "./globals.css";
 
 const inter = Inter({
@@ -35,14 +35,15 @@ export default function RootLayout({
     >
       <body className="min-h-full flex flex-col font-sans">
         <QueryProvider>
-          <JobsProvider>
-            <LiveUpdates />
-            <Navbar />
-            <ActiveJobsBar />
-            <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-8">
-              {children}
-            </main>
-          </JobsProvider>
+          <AuthShell>
+            <JobsProvider>
+              <LiveUpdates />
+              <ActiveJobsBar />
+              <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-8">
+                {children}
+              </main>
+            </JobsProvider>
+          </AuthShell>
           <Toaster />
         </QueryProvider>
       </body>
