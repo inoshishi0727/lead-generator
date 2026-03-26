@@ -3,7 +3,7 @@
  * Survives navigation and page refreshes.
  */
 
-export type JobType = "scrape" | "enrich" | "generate";
+export type JobType = "scrape" | "enrich" | "generate" | "send" | "followups";
 export type JobStatus = "pending" | "running" | "completed" | "failed";
 
 export interface ActiveJob {
@@ -91,6 +91,10 @@ export function getStatusEndpoint(job: ActiveJob): string {
       return `/api/enrich-status/${job.id}`;
     case "generate":
       return `/api/outreach/generate-status/${job.id}`;
+    case "send":
+      return `/api/outreach/send-status/${job.id}`;
+    case "followups":
+      return `/api/outreach/followup-status/${job.id}`;
   }
 }
 
@@ -102,6 +106,8 @@ export function getJobPage(type: JobType): string {
     case "enrich":
       return "/leads";
     case "generate":
+    case "send":
+    case "followups":
       return "/outreach";
   }
 }
@@ -115,5 +121,9 @@ export function getJobLabel(type: JobType): string {
       return "Enriching";
     case "generate":
       return "Generating Drafts";
+    case "send":
+      return "Sending Emails";
+    case "followups":
+      return "Generating Follow-ups";
   }
 }
