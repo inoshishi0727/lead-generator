@@ -22,11 +22,7 @@ export default function SettingsPage() {
   const { isAdmin, loading, user } = useAuth();
   const router = useRouter();
 
-  useEffect(() => {
-    if (!loading && !isAdmin) {
-      router.replace("/");
-    }
-  }, [isAdmin, loading, router]);
+  // Viewers can access settings for password change only
 
   const { data: config, isLoading } = useConfig();
 
@@ -78,8 +74,8 @@ export default function SettingsPage() {
     <div className="space-y-6">
       <h1 className="text-2xl font-bold tracking-tight">Settings</h1>
 
-      {/* Team Management */}
-      <TeamManager />
+      {/* Team Management (admin only) */}
+      {isAdmin && <TeamManager />}
 
       {/* Change Password */}
       <Card>
@@ -134,8 +130,8 @@ export default function SettingsPage() {
         </CardContent>
       </Card>
 
-      {/* Existing settings */}
-      {config && (
+      {/* System settings (admin only) */}
+      {isAdmin && config && (
         <>
           <EnvStatus envVars={config.env_vars} />
           <SearchQueriesList queries={config.search_queries} />

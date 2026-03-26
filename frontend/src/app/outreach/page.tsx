@@ -80,34 +80,30 @@ export default function OutreachPage() {
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold tracking-tight">Outreach</h1>
         <div className="flex gap-2">
-          {isAdmin && (
-            <>
-              <Button
-                onClick={handleGenerate}
-                disabled={generateMutation.isPending}
-              >
-                {generateMutation.isPending ? (
-                  <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-                ) : (
-                  <FileText className="mr-1.5 h-4 w-4" />
-                )}
-                Generate Drafts
-              </Button>
-              <Button
-                variant="outline"
-                onClick={() => regenerateAllMutation.mutate()}
-                disabled={regenerateAllMutation.isPending}
-              >
-                {regenerateAllMutation.isPending ? (
-                  <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-                ) : (
-                  <RefreshCw className="mr-1.5 h-4 w-4" />
-                )}
-                Regenerate All
-              </Button>
-            </>
-          )}
-          {isAdmin && draftCount > 0 && (
+          <Button
+            onClick={handleGenerate}
+            disabled={generateMutation.isPending}
+          >
+            {generateMutation.isPending ? (
+              <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+            ) : (
+              <FileText className="mr-1.5 h-4 w-4" />
+            )}
+            Generate Drafts
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => regenerateAllMutation.mutate()}
+            disabled={regenerateAllMutation.isPending}
+          >
+            {regenerateAllMutation.isPending ? (
+              <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+            ) : (
+              <RefreshCw className="mr-1.5 h-4 w-4" />
+            )}
+            Regenerate All
+          </Button>
+          {draftCount > 0 && (
             <Button
               variant="outline"
               className="border-emerald-500 text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/20"

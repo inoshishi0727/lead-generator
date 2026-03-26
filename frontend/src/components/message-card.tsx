@@ -209,28 +209,32 @@ export function MessageCard({ message }: Props) {
           )}
         </div>
 
-        {/* Action buttons (admin only) */}
-        {isAdmin && message.status === "draft" && (
+        {/* Action buttons */}
+        {message.status === "draft" && (
           <div className="flex items-center gap-2 pt-1">
-            <Button
-              size="sm"
-              variant="default"
-              className="bg-emerald-600 hover:bg-emerald-700"
-              onClick={handleApprove}
-              disabled={isPending}
-            >
-              <Check className="mr-1 h-3.5 w-3.5" />
-              Approve
-            </Button>
-            <Button
-              size="sm"
-              variant="destructive"
-              onClick={handleReject}
-              disabled={isPending}
-            >
-              <X className="mr-1 h-3.5 w-3.5" />
-              Reject
-            </Button>
+            {isAdmin && (
+              <Button
+                size="sm"
+                variant="default"
+                className="bg-emerald-600 hover:bg-emerald-700"
+                onClick={handleApprove}
+                disabled={isPending}
+              >
+                <Check className="mr-1 h-3.5 w-3.5" />
+                Approve
+              </Button>
+            )}
+            {isAdmin && (
+              <Button
+                size="sm"
+                variant="destructive"
+                onClick={handleReject}
+                disabled={isPending}
+              >
+                <X className="mr-1 h-3.5 w-3.5" />
+                Reject
+              </Button>
+            )}
             <Button
               size="sm"
               variant="outline"

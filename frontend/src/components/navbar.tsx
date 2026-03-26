@@ -17,7 +17,7 @@ export function Navbar() {
     { href: "/leads", label: "Leads", icon: Search, show: true },
     { href: "/outreach", label: "Outreach", icon: Mail, show: true },
     { href: "/analytics", label: "Analytics", icon: TrendingUp, show: true },
-    { href: "/settings", label: "Settings", icon: Settings, show: isAdmin },
+    { href: "/settings", label: "Settings", icon: Settings, show: true },
   ];
 
   return (
