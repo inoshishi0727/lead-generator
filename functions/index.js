@@ -406,3 +406,84 @@ export const regenerateAllDrafts = onCall(
     return { generated, failed, total: docs.length };
   }
 );
+
+// ---- AI Strategy Recommendations ----
+
+const STRATEGY_PROMPT = `You are a sales strategy advisor for Asterley Bros, an English Vermouth, Amaro, and Aperitivo producer in SE London.
+
+Analyze these lead generation statistics and provide actionable recommendations.
+
+Current lead distribution by venue category:
+{category_stats}
+
+Overall metrics:
+- Total leads: {total_leads}
+- Average score: {avg_score}
+- Response rate: {response_rate}%
+- Conversion rate: {conversion_rate}%
+
+Return a JSON object with:
+{
+  "insights": [{"title":"headline","description":"explanation","action":"action to take","priority":"high/medium/low","category":"venue_category or null"}],
+  "ratio_adjustments": [{"category":"venue_category","current_ratio":0.10,"recommended_ratio":0.20,"reason":"why"}],
+  "query_suggestions": ["search query 1", "query 2"]
+}
+
+Provide 3-5 insights. Return ONLY valid JSON.`;
+
+export const getStrategy = onCall(
+  { timeoutSeconds: 60, memory: "256MiB", secrets: ["GEMINI_API_KEY"] },
+  async (request) => {
+    if (!request.auth) throw new HttpsError("unauthenticated", "Must be signed in.");
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) throw new HttpsError("failed-precondition", "GEMINI_API_KEY not configured.");
+
+    const ai = new GoogleGenAI({ apiKey });
+    const leadsSnap = await db.collection("leads").get();
+    const docs = leadsSnap.docs.map((d) => d.data());
+    const total = docs.length;
+    const scores = docs.filter((d) => d.score != null).map((d) => d.score);
+    const avgScore = scores.length ? Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 10) / 10 : 0;
+    const sent = docs.filter((d) => ["sent","follow_up_1","follow_up_2","responded","converted","declined"].includes(d.stage)).length;
+    const responded = docs.filter((d) => ["responded","converted"].includes(d.stage)).length;
+    const converted = docs.filter((d) => d.stage === "converted").length;
+
+    const byCategory = {};
+    for (const doc of docs) {
+      const cat = (doc.enrichment || {}).venue_category || "other";
+      if (!byCategory[cat]) byCategory[cat] = [];
+      byCategory[cat].push(doc);
+    }
+    const categoryLines = Object.entries(byCategory)
+      .sort((a, b) => b[1].length - a[1].length)
+      .map(([cat, catDocs]) => {
+        const s = catDocs.filter(d => ["sent","follow_up_1","follow_up_2","responded","converted","declined"].includes(d.stage)).length;
+        return `- ${cat}: ${catDocs.length} leads, ${s} sent`;
+      });
+
+    const prompt = STRATEGY_PROMPT
+      .replace("{category_stats}", categoryLines.join("\n"))
+      .replace("{total_leads}", String(total))
+      .replace("{avg_score}", String(avgScore))
+      .replace("{response_rate}", String(sent > 0 ? Math.round(responded/sent*100) : 0))
+      .replace("{conversion_rate}", String(total > 0 ? Math.round(converted/total*100) : 0));
+
+    try {
+      const response = await ai.models.generateContent({
+        model: "gemini-2.5-flash", contents: prompt,
+        config: { maxOutputTokens: 1500, temperature: 0.3 },
+      });
+      const text = response.text || "";
+      const start = text.indexOf("{");
+      const end = text.lastIndexOf("}");
+      if (start >= 0 && end > start) {
+        const parsed = JSON.parse(text.slice(start, end + 1));
+        parsed.generated_at = new Date().toISOString();
+        return parsed;
+      }
+    } catch (err) {
+      console.error("Strategy failed:", err.message);
+    }
+    return { insights: [], ratio_adjustments: [], query_suggestions: [], generated_at: new Date().toISOString() };
+  }
+);
