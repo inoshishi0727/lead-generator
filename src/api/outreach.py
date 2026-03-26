@@ -156,6 +156,10 @@ def _run_draft_generation(run_id: str, lead_ids: list[str] | None) -> None:
                     else OutreachChannel.EMAIL
                 )
 
+                # Notify frontend which lead is being drafted
+                from src.events import emit as _emit
+                _emit("draft_generating", lead_id=str(lead.id), business_name=lead.business_name)
+
                 # Generate draft
                 message = generator.generate_draft(lead, channel)
 
@@ -480,6 +484,9 @@ def _run_regenerate_all(run_id: str) -> None:
                     else OutreachChannel.EMAIL
                 )
 
+                from src.events import emit as _emit
+                _emit("draft_generating", lead_id=str(lead.id), business_name=lead.business_name)
+
                 message = generator.generate_draft(lead, channel)
 
                 enrichment = doc.get("enrichment") or {}
@@ -508,9 +515,8 @@ def _run_regenerate_all(run_id: str) -> None:
                 generated += 1
                 _generate_runs[run_id]["generated"] = generated
 
-                if generated % 5 == 0:
-                    from src.events import emit
-                    emit("drafts_generated", generated=generated, total=len(docs))
+                from src.events import emit
+                emit("draft_ready", lead_id=str(lead.id), business_name=lead.business_name, generated=generated, total=len(docs))
 
                 log.info("regenerated_draft", lead=lead.business_name)
 

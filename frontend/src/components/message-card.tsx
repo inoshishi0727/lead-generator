@@ -19,6 +19,7 @@ import {
   useUpdateMessage,
   useRegenerateMessage,
 } from "@/hooks/use-outreach";
+import { useGeneratingLeadId } from "@/hooks/use-live-updates";
 
 interface Props {
   message: OutreachMessage;
@@ -56,9 +57,10 @@ export function MessageCard({ message }: Props) {
 
   const updateMutation = useUpdateMessage();
   const regenerateMutation = useRegenerateMessage();
+  const generatingLeadId = useGeneratingLeadId();
 
   const ChannelIcon = message.channel === "email" ? Mail : MessageCircle;
-  const isRegenerating = regenerateMutation.isPending;
+  const isRegenerating = regenerateMutation.isPending || generatingLeadId === message.lead_id;
 
   function handleApprove() {
     const updates: { id: string; status: string; content?: string; subject?: string } = {

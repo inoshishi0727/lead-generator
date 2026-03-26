@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
 const hasBackend = !!process.env.NEXT_PUBLIC_API_URL;
@@ -6,6 +6,29 @@ const WS_URL =
   typeof window !== "undefined" && hasBackend
     ? `ws://${window.location.hostname}:8000/ws`
     : "";
+
+// --- Generating leads tracker (module-level singleton) ---
+let _generatingLeadId: string | null = null;
+let _listeners = new Set<() => void>();
+
+function getSnapshot() {
+  return _generatingLeadId;
+}
+
+function subscribe(listener: () => void) {
+  _listeners.add(listener);
+  return () => { _listeners.delete(listener); };
+}
+
+function setGeneratingLead(leadId: string | null) {
+  _generatingLeadId = leadId;
+  _listeners.forEach((fn) => fn());
+}
+
+/** Returns the lead_id currently being drafted, or null. */
+export function useGeneratingLeadId(): string | null {
+  return useSyncExternalStore(subscribe, getSnapshot, () => null);
+}
 
 /**
  * Connects to the backend WebSocket and invalidates TanStack Query cache
@@ -34,7 +57,15 @@ export function useLiveUpdates() {
           } else if (type === "enrichment_done") {
             qc.invalidateQueries({ queryKey: ["leads"] });
             qc.invalidateQueries({ queryKey: ["analytics"] });
+          } else if (type === "draft_generating") {
+            // A specific lead is currently being drafted
+            setGeneratingLead(data.lead_id ?? null);
+          } else if (type === "draft_ready") {
+            // A draft just finished for this lead
+            setGeneratingLead(null);
+            qc.invalidateQueries({ queryKey: ["outreach"] });
           } else if (type === "drafts_generated") {
+            setGeneratingLead(null);
             qc.invalidateQueries({ queryKey: ["outreach"] });
           } else if (type === "messages_sent") {
             qc.invalidateQueries({ queryKey: ["outreach"] });
@@ -49,7 +80,6 @@ export function useLiveUpdates() {
       };
 
       ws.onclose = () => {
-        // Auto-reconnect after 3s
         reconnectTimer = setTimeout(connect, 3000);
       };
 
