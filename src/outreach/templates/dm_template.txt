@@ -1,0 +1,20 @@
+Write a short, friendly Instagram DM from Rob of Asterley Bros to @{instagram_handle}. Asterley Bros makes English Vermouth, Amaro, and Aperitivo in SE26, London.
+
+Venue details:
+- Name: {business_name}
+- Venue type: {venue_category} (Google Maps: {category})
+- Location: {address}
+- What we know about them: {context_notes}
+- Recommended products: {lead_products}
+- Menu fit: {menu_fit}
+
+Tone: {tone_tier}
+
+The message should:
+1. Be casual and genuine (it's a DM, not an email)
+2. Reference something specific about them from the context_notes
+3. Mention 1-2 specific Asterley Bros products with a relevant serve
+4. Suggest connecting or sending samples
+5. Be under 80 words
+6. No subject line needed
+7. Do NOT use em dashes. Do NOT use "curated", "artisanal", "refined", "bespoke"

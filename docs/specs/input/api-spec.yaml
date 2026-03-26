@@ -1,0 +1,211 @@
+openapi: "3.1.0"
+info:
+  title: Asterley Bros Lead Generation — Internal API
+  version: "0.1.0"
+  description: >
+    Internal contracts for data flow between system components.
+    Not a REST API — these define the Pydantic model schemas and
+    function signatures used across modules.
+
+components:
+  schemas:
+    Lead:
+      type: object
+      required: [source, business_name]
+      properties:
+        id:
+          type: string
+          format: uuid
+        source:
+          type: string
+          enum: [google_maps, instagram]
+        business_name:
+          type: string
+        address:
+          type: string
+          nullable: true
+        phone:
+          type: string
+          nullable: true
+        website:
+          type: string
+          format: uri
+          nullable: true
+        email:
+          type: string
+          format: email
+          nullable: true
+        rating:
+          type: number
+          format: float
+          nullable: true
+        review_count:
+          type: integer
+          nullable: true
+        category:
+          type: string
+          nullable: true
+        instagram_handle:
+          type: string
+          nullable: true
+        instagram_followers:
+          type: integer
+          nullable: true
+        score:
+          type: integer
+          minimum: 0
+          maximum: 100
+          nullable: true
+        score_breakdown:
+          type: object
+          additionalProperties:
+            type: object
+            properties:
+              points:
+                type: integer
+              reason:
+                type: string
+          nullable: true
+        stage:
+          type: string
+          enum:
+            - scraped
+            - scored
+            - draft_generated
+            - approved
+            - sent
+            - follow_up_1
+            - follow_up_2
+            - responded
+            - converted
+            - declined
+          default: scraped
+        scraped_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    OutreachMessage:
+      type: object
+      required: [lead_id, channel, content]
+      properties:
+        id:
+          type: string
+          format: uuid
+        lead_id:
+          type: string
+          format: uuid
+        channel:
+          type: string
+          enum: [email, instagram_dm]
+        subject:
+          type: string
+          nullable: true
+          description: "Email subject line (null for DMs)"
+        content:
+          type: string
+        status:
+          type: string
+          enum: [draft, approved, rejected, sent, delivered, bounced, opened]
+          default: draft
+        attempt_number:
+          type: integer
+          default: 1
+        created_at:
+          type: string
+          format: date-time
+        sent_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    ScrapeRun:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        source:
+          type: string
+          enum: [google_maps, instagram]
+        query:
+          type: string
+        leads_found:
+          type: integer
+        leads_new:
+          type: integer
+        status:
+          type: string
+          enum: [running, completed, failed]
+        error:
+          type: string
+          nullable: true
+        started_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    ScoringRequest:
+      type: object
+      required: [lead_id]
+      properties:
+        lead_id:
+          type: string
+          format: uuid
+        weights_override:
+          type: object
+          additionalProperties:
+            type: integer
+          nullable: true
+
+    ScoringResult:
+      type: object
+      properties:
+        lead_id:
+          type: string
+          format: uuid
+        total_score:
+          type: integer
+        breakdown:
+          type: object
+          additionalProperties:
+            type: object
+            properties:
+              points:
+                type: integer
+              reason:
+                type: string
+        passed_threshold:
+          type: boolean
+
+    DraftRequest:
+      type: object
+      required: [lead_id, channel]
+      properties:
+        lead_id:
+          type: string
+          format: uuid
+        channel:
+          type: string
+          enum: [email, instagram_dm]
+        template_override:
+          type: string
+          nullable: true
+
+    PipelineStageUpdate:
+      type: object
+      required: [lead_id, new_stage]
+      properties:
+        lead_id:
+          type: string
+          format: uuid
+        new_stage:
+          type: string
+        notes:
+          type: string
+          nullable: true

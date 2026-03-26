@@ -1,0 +1,409 @@
+"""Firestore CRUD operations for leads, scrape runs, and activity logs.
+
+All functions are safe to call when Firestore is unavailable — they return
+empty results / 0 and log a warning instead of raising.
+"""
+
+from __future__ import annotations
+
+from typing import Optional
+
+import structlog
+
+from google.cloud.firestore_v1.base_query import FieldFilter
+
+from src.db.client import get_firestore_client
+from src.db.models import ActivityLog, Lead, ScrapeRun
+
+log = structlog.get_logger()
+
+
+def _dedup_key(lead: Lead) -> str:
+    """Generate a composite dedup key from source, name, and address."""
+    parts = [
+        lead.source.value,
+        lead.business_name.strip().lower(),
+        (lead.address or "").strip().lower(),
+    ]
+    return "|".join(parts)
+
+
+def get_known_dedup_keys(source: str = "google_maps") -> set[str]:
+    """Return all existing dedup keys for a given source.
+
+    Returns an empty set if Firestore is unavailable.
+    """
+    db = get_firestore_client()
+    if db is None:
+        return set()
+
+    try:
+        query = db.collection("leads").where(filter=FieldFilter("source", "==", source))
+        keys: set[str] = set()
+        for doc in query.stream():
+            data = doc.to_dict()
+            if "dedup_key" in data:
+                keys.add(data["dedup_key"])
+        log.debug("dedup_keys_loaded", source=source, count=len(keys))
+        return keys
+    except Exception as exc:
+        log.warning("dedup_keys_failed", error=str(exc))
+        return set()
+
+
+def save_lead_immediate(lead: Lead) -> bool:
+    """Atomically check-and-insert a single lead. Returns True if inserted.
+
+    Used by parallel scrapers to save each lead the moment it's extracted,
+    preventing duplicates across concurrent workers.
+    """
+    from src.db import cache
+
+    db = get_firestore_client()
+    if db is None:
+        log.debug("save_lead_immediate_skipped_no_firestore", lead=lead.business_name)
+        return False
+
+    try:
+        key = _dedup_key(lead)
+        collection = db.collection("leads")
+
+        # Check if already exists
+        existing = collection.where(filter=FieldFilter("dedup_key", "==", key)).limit(1).get()
+        if existing:
+            log.debug("lead_already_exists", business_name=lead.business_name, key=key)
+            return False
+
+        doc_ref = collection.document(str(lead.id))
+        doc_data = lead.model_dump(mode="json")
+        doc_data["dedup_key"] = key
+        doc_ref.set(doc_data)
+        cache.invalidate("leads:")
+        log.info("lead_saved_immediate", business_name=lead.business_name)
+        return True
+    except Exception as exc:
+        log.warning("save_lead_immediate_failed", lead=lead.business_name, error=str(exc))
+        return False
+
+
+def save_leads(leads: list[Lead]) -> int:
+    """Batch-write leads to Firestore, skipping duplicates.
+
+    Returns the number of newly inserted leads, or 0 if Firestore is unavailable.
+    """
+    if not leads:
+        return 0
+
+    db = get_firestore_client()
+    if db is None:
+        log.debug("save_leads_skipped_no_firestore", count=len(leads))
+        return 0
+
+    try:
+        collection = db.collection("leads")
+        inserted = 0
+
+        # Build set of existing dedup keys
+        existing_keys: set[str] = set()
+        for doc in collection.stream():
+            data = doc.to_dict()
+            if "dedup_key" in data:
+                existing_keys.add(data["dedup_key"])
+
+        batch = db.batch()
+        batch_count = 0
+
+        for lead in leads:
+            key = _dedup_key(lead)
+            if key in existing_keys:
+                log.debug("lead_dedup_skip", business_name=lead.business_name)
+                continue
+
+            doc_ref = collection.document(str(lead.id))
+            doc_data = lead.model_dump(mode="json")
+            doc_data["dedup_key"] = key
+            batch.set(doc_ref, doc_data)
+            existing_keys.add(key)
+            inserted += 1
+            batch_count += 1
+
+            # Firestore batch limit is 500
+            if batch_count >= 499:
+                batch.commit()
+                batch = db.batch()
+                batch_count = 0
+
+        if batch_count > 0:
+            batch.commit()
+
+        log.info("leads_saved", total=len(leads), inserted=inserted)
+        return inserted
+    except Exception as exc:
+        log.warning("save_leads_failed", error=str(exc))
+        return 0
+
+
+def get_leads(
+    source: Optional[str] = None,
+    stage: Optional[str] = None,
+    search: Optional[str] = None,
+) -> list[dict]:
+    """Query leads from Firestore with optional filters. Cached for 60s.
+
+    Returns an empty list if Firestore is unavailable.
+    """
+    from src.db import cache
+
+    cache_key = f"leads:{source or ''}:{stage or ''}:{search or ''}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    db = get_firestore_client()
+    if db is None:
+        return []
+
+    try:
+        query = db.collection("leads")
+
+        if source and source != "All":
+            source_val = "google_maps" if source == "Google Maps" else source.lower()
+            query = query.where(filter=FieldFilter("source", "==", source_val))
+
+        if stage and stage != "All":
+            query = query.where(filter=FieldFilter("stage", "==", stage))
+
+        results = []
+        for doc in query.stream():
+            data = doc.to_dict()
+            if search:
+                name = (data.get("business_name") or "").lower()
+                if search.lower() not in name:
+                    continue
+            results.append(data)
+
+        cache.set(cache_key, results, ttl=60)
+        return results
+    except Exception as exc:
+        log.warning("get_leads_failed", error=str(exc))
+        return []
+
+
+def save_scrape_run(run: ScrapeRun) -> None:
+    """Write a single scrape run document."""
+    db = get_firestore_client()
+    if db is None:
+        return
+
+    try:
+        doc_ref = db.collection("scrape_runs").document(str(run.id))
+        doc_ref.set(run.model_dump(mode="json"))
+        log.info("scrape_run_saved", run_id=str(run.id))
+    except Exception as exc:
+        log.warning("save_scrape_run_failed", error=str(exc))
+
+
+def update_scrape_run(run_id: str, updates: dict) -> None:
+    """Partially update a scrape run document."""
+    db = get_firestore_client()
+    if db is None:
+        return
+
+    try:
+        doc_ref = db.collection("scrape_runs").document(run_id)
+        doc_ref.update(updates)
+        log.info("scrape_run_updated", run_id=run_id)
+    except Exception as exc:
+        log.warning("update_scrape_run_failed", error=str(exc))
+
+
+def update_lead(lead_id: str, updates: dict) -> bool:
+    """Partially update a lead document in Firestore."""
+    from src.db import cache
+
+    db = get_firestore_client()
+    if db is None:
+        return False
+
+    try:
+        doc_ref = db.collection("leads").document(lead_id)
+        doc_ref.update(updates)
+        cache.invalidate("leads:")
+        log.debug("lead_updated", lead_id=lead_id)
+        return True
+    except Exception as exc:
+        log.warning("update_lead_failed", lead_id=lead_id, error=str(exc))
+        return False
+
+
+def get_lead_by_id(lead_id: str) -> dict | None:
+    """Fetch a single lead document by ID."""
+    db = get_firestore_client()
+    if db is None:
+        return None
+
+    try:
+        doc = db.collection("leads").document(lead_id).get()
+        if doc.exists:
+            return doc.to_dict()
+        return None
+    except Exception as exc:
+        log.warning("get_lead_by_id_failed", lead_id=lead_id, error=str(exc))
+        return None
+
+
+def get_leads_by_stage(stage: str) -> list[dict]:
+    """Query all leads in a given pipeline stage."""
+    db = get_firestore_client()
+    if db is None:
+        return []
+
+    try:
+        query = db.collection("leads").where(filter=FieldFilter("stage", "==", stage))
+        return [doc.to_dict() for doc in query.stream()]
+    except Exception as exc:
+        log.warning("get_leads_by_stage_failed", stage=stage, error=str(exc))
+        return []
+
+
+def save_config(key: str, data: dict) -> None:
+    """Persist a config document to Firestore."""
+    db = get_firestore_client()
+    if db is None:
+        return
+
+    try:
+        db.collection("config").document(key).set(data)
+        log.info("config_saved", key=key)
+    except Exception as exc:
+        log.warning("save_config_failed", key=key, error=str(exc))
+
+
+def get_config(key: str) -> dict | None:
+    """Load a config document from Firestore."""
+    db = get_firestore_client()
+    if db is None:
+        return None
+
+    try:
+        doc = db.collection("config").document(key).get()
+        if doc.exists:
+            return doc.to_dict()
+        return None
+    except Exception as exc:
+        log.warning("get_config_failed", key=key, error=str(exc))
+        return None
+
+
+def save_outreach_message(message_data: dict) -> bool:
+    """Save an outreach message document to Firestore."""
+    from src.db import cache
+
+    db = get_firestore_client()
+    if db is None:
+        return False
+
+    try:
+        doc_id = message_data.get("id", str(__import__("uuid").uuid4()))
+        db.collection("outreach_messages").document(doc_id).set(message_data)
+        cache.invalidate("outreach_msgs:")
+        log.debug("outreach_message_saved", id=doc_id)
+        return True
+    except Exception as exc:
+        log.warning("save_outreach_message_failed", error=str(exc))
+        return False
+
+
+def get_outreach_messages(
+    lead_id: str | None = None,
+    status: str | None = None,
+    channel: str | None = None,
+) -> list[dict]:
+    """Query outreach messages with optional filters. Cached for 120s."""
+    from src.db import cache
+
+    cache_key = f"outreach_msgs:{lead_id or ''}:{status or ''}:{channel or ''}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    db = get_firestore_client()
+    if db is None:
+        return []
+
+    try:
+        query = db.collection("outreach_messages")
+        if lead_id:
+            query = query.where(filter=FieldFilter("lead_id", "==", lead_id))
+        if status:
+            query = query.where(filter=FieldFilter("status", "==", status))
+        if channel:
+            query = query.where(filter=FieldFilter("channel", "==", channel))
+        results = [doc.to_dict() for doc in query.stream()]
+        cache.set(cache_key, results, ttl=120)
+        return results
+    except Exception as exc:
+        log.warning("get_outreach_messages_failed", error=str(exc))
+        return []
+
+
+def get_outreach_message_by_id(message_id: str) -> dict | None:
+    """Fetch a single outreach message by ID."""
+    db = get_firestore_client()
+    if db is None:
+        return None
+
+    try:
+        doc = db.collection("outreach_messages").document(message_id).get()
+        if doc.exists:
+            return doc.to_dict()
+        return None
+    except Exception as exc:
+        log.warning("get_outreach_message_by_id_failed", error=str(exc))
+        return None
+
+
+def update_outreach_message(message_id: str, updates: dict) -> bool:
+    """Update an outreach message document."""
+    from src.db import cache
+
+    db = get_firestore_client()
+    if db is None:
+        return False
+
+    try:
+        db.collection("outreach_messages").document(message_id).update(updates)
+        cache.invalidate("outreach_msgs:")
+        log.debug("outreach_message_updated", id=message_id)
+        return True
+    except Exception as exc:
+        log.warning("update_outreach_message_failed", error=str(exc))
+        return False
+
+
+def log_activity(
+    event_type: str,
+    entity_type: str | None = None,
+    entity_id: str | None = None,
+    details: dict | None = None,
+) -> None:
+    """Write an activity log event to Firestore."""
+    db = get_firestore_client()
+    if db is None:
+        return
+
+    try:
+        entry = ActivityLog(
+            event_type=event_type,
+            entity_type=entity_type,
+            details=details,
+        )
+        if entity_id:
+            import uuid
+            entry.entity_id = uuid.UUID(entity_id)
+
+        doc_ref = db.collection("activity_log").document(str(entry.id))
+        doc_ref.set(entry.model_dump(mode="json"))
+        log.debug("activity_logged", event_type=event_type)
+    except Exception as exc:
+        log.warning("log_activity_failed", error=str(exc))
