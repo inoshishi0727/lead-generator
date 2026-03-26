@@ -17,6 +17,7 @@ import { MessageCard } from "@/components/message-card";
 import {
   useMessages,
   useGenerateDrafts,
+  useRegenerateAll,
   useBatchApprove,
   useSendApproved,
   useGenerateFollowups,
@@ -33,6 +34,7 @@ export default function OutreachPage() {
   );
 
   const generateMutation = useGenerateDrafts();
+  const regenerateAllMutation = useRegenerateAll();
   const batchApproveMutation = useBatchApprove();
   const sendMutation = useSendApproved();
   const followupsMutation = useGenerateFollowups();
@@ -86,6 +88,18 @@ export default function OutreachPage() {
               <FileText className="mr-1.5 h-4 w-4" />
             )}
             Generate Drafts
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => regenerateAllMutation.mutate()}
+            disabled={regenerateAllMutation.isPending}
+          >
+            {regenerateAllMutation.isPending ? (
+              <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+            ) : (
+              <RefreshCw className="mr-1.5 h-4 w-4" />
+            )}
+            Regenerate All
           </Button>
           {draftCount > 0 && (
             <Button

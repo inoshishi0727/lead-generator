@@ -45,6 +45,21 @@ export function useGenerateDrafts() {
   });
 }
 
+export function useRegenerateAll() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      api.post<{ run_id: string; status: string }>(
+        "/api/outreach/regenerate-all",
+        {}
+      ),
+    onSuccess: (data) => {
+      addJob("generate", data.run_id);
+      qc.invalidateQueries({ queryKey: ["outreach"] });
+    },
+  });
+}
+
 export function useUpdateMessage() {
   const qc = useQueryClient();
   return useMutation({

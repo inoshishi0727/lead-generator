@@ -407,6 +407,150 @@ async def approve_batch(req: BatchApproveRequest):
 
 
 # ---------------------------------------------------------------------------
+# Regenerate all drafts
+# ---------------------------------------------------------------------------
+
+
+def _run_regenerate_all(run_id: str) -> None:
+    """Delete all existing drafts and regenerate from scratch."""
+    try:
+        _generate_runs[run_id]["status"] = "running"
+
+        from src.db.firestore import (
+            get_leads,
+            get_outreach_messages,
+            save_outreach_message,
+            update_lead,
+            update_outreach_message,
+        )
+        from src.db.models import (
+            EnrichmentData,
+            Lead,
+            LeadSource,
+            OutreachChannel,
+        )
+        from src.outreach.drafts import DraftGenerator
+
+        # Delete all existing draft messages
+        existing_messages = get_outreach_messages()
+        for msg in existing_messages:
+            if msg.get("status") == "draft":
+                update_outreach_message(msg["id"], {"status": "rejected"})
+
+        # Get all leads with email and enrichment
+        all_docs = get_leads()
+        docs = [
+            d for d in all_docs
+            if d.get("email") and _has_enrichment(d)
+        ]
+
+        _generate_runs[run_id]["total"] = len(docs)
+
+        config = load_config()
+        generator = DraftGenerator(config=config)
+        generated = 0
+        failed = 0
+
+        for doc in docs:
+            try:
+                enrichment_data = None
+                if doc.get("enrichment"):
+                    enrichment_data = EnrichmentData(**doc["enrichment"])
+
+                lead = Lead(
+                    id=doc.get("id"),
+                    source=LeadSource(doc["source"]),
+                    business_name=doc["business_name"],
+                    address=doc.get("address"),
+                    phone=doc.get("phone"),
+                    website=doc.get("website"),
+                    email=doc.get("email"),
+                    email_found=doc.get("email_found", False),
+                    rating=doc.get("rating"),
+                    review_count=doc.get("review_count"),
+                    category=doc.get("category"),
+                    instagram_handle=doc.get("instagram_handle"),
+                    instagram_followers=doc.get("instagram_followers"),
+                    enrichment=enrichment_data,
+                )
+
+                channel = (
+                    OutreachChannel.INSTAGRAM_DM
+                    if lead.source.value == "instagram" and not lead.email
+                    else OutreachChannel.EMAIL
+                )
+
+                message = generator.generate_draft(lead, channel)
+
+                enrichment = doc.get("enrichment") or {}
+                contact = enrichment.get("contact") or {}
+
+                msg_data = {
+                    "id": str(message.id),
+                    "lead_id": str(lead.id),
+                    "business_name": lead.business_name,
+                    "venue_category": enrichment.get("venue_category"),
+                    "channel": message.channel.value,
+                    "subject": message.subject,
+                    "content": message.content,
+                    "status": "draft",
+                    "step_number": 1,
+                    "created_at": message.created_at.isoformat(),
+                    "tone_tier": enrichment.get("tone_tier"),
+                    "lead_products": enrichment.get("lead_products", []),
+                    "contact_name": contact.get("name"),
+                    "context_notes": enrichment.get("context_notes"),
+                    "menu_fit": enrichment.get("menu_fit"),
+                }
+                save_outreach_message(msg_data)
+                update_lead(str(lead.id), {"stage": "draft_generated"})
+
+                generated += 1
+                _generate_runs[run_id]["generated"] = generated
+
+                if generated % 5 == 0:
+                    from src.events import emit
+                    emit("drafts_generated", generated=generated, total=len(docs))
+
+                log.info("regenerated_draft", lead=lead.business_name)
+
+            except Exception as exc:
+                failed += 1
+                _generate_runs[run_id]["failed"] = failed
+                log.warning("regenerate_failed", lead=doc.get("business_name"), error=str(exc))
+
+        _generate_runs[run_id].update(
+            status="completed",
+            generated=generated,
+            failed=failed,
+            completed_at=datetime.now().isoformat(),
+        )
+        from src.events import emit
+        emit("drafts_generated", generated=generated, status="completed")
+        log.info("regenerate_all_done", run_id=run_id, generated=generated, failed=failed)
+
+    except Exception as exc:
+        _generate_runs[run_id].update(status="failed", error=str(exc))
+        log.exception("regenerate_all_thread_failed", run_id=run_id)
+
+
+@outreach_router.post("/regenerate-all", response_model=GenerateDraftsStatusResponse)
+async def regenerate_all_drafts() -> GenerateDraftsStatusResponse:
+    """Delete all existing drafts and regenerate from scratch."""
+    run_id = str(uuid4())
+    _generate_runs[run_id] = {"status": "pending", "total": 0, "generated": 0, "failed": 0}
+
+    thread = threading.Thread(
+        target=_run_regenerate_all,
+        args=(run_id,),
+        daemon=True,
+    )
+    thread.start()
+
+    return GenerateDraftsStatusResponse(run_id=run_id, status="pending")
+
+
+# ---------------------------------------------------------------------------
 # Send approved emails
 # ---------------------------------------------------------------------------
 
