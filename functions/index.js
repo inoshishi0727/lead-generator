@@ -1,5 +1,6 @@
 import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { initializeApp } from "firebase-admin/app";
+import { getAuth } from "firebase-admin/auth";
 import { getFirestore } from "firebase-admin/firestore";
 import { GoogleGenAI } from "@google/genai";
 
@@ -485,5 +486,44 @@ export const getStrategy = onCall(
       console.error("Strategy failed:", err.message);
     }
     return { insights: [], ratio_adjustments: [], query_suggestions: [], generated_at: new Date().toISOString() };
+  }
+);
+
+// ---- User Deletion ----
+
+/**
+ * Fully delete a user: Auth + Firestore.
+ */
+export const deleteUser = onCall(
+  { timeoutSeconds: 30, memory: "256MiB" },
+  async (request) => {
+    if (!request.auth) throw new HttpsError("unauthenticated", "Must be signed in.");
+
+    // Check caller is admin
+    const callerSnap = await db.collection("users").doc(request.auth.uid).get();
+    if (!callerSnap.exists || callerSnap.data().role !== "admin") {
+      throw new HttpsError("permission-denied", "Admin only.");
+    }
+
+    const { uid } = request.data;
+    if (!uid) throw new HttpsError("invalid-argument", "uid required.");
+
+    // Don't let admin delete themselves
+    if (uid === request.auth.uid) {
+      throw new HttpsError("failed-precondition", "Cannot delete yourself.");
+    }
+
+    try {
+      // Delete from Firebase Auth
+      await getAuth().deleteUser(uid);
+    } catch (err) {
+      console.error("Auth delete failed:", err.message);
+      // Continue to delete Firestore doc even if Auth delete fails
+    }
+
+    // Delete Firestore user doc
+    await db.collection("users").doc(uid).delete();
+
+    return { status: "deleted", uid };
   }
 );

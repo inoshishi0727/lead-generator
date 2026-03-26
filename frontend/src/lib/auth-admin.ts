@@ -19,7 +19,8 @@ import {
   query,
   where,
 } from "firebase/firestore";
-import { auth, db } from "./firebase";
+import { httpsCallable } from "firebase/functions";
+import { auth, db, functions } from "./firebase";
 
 export interface InviteResult {
   uid: string;
@@ -115,8 +116,9 @@ export async function getTeamMembers(
 }
 
 export async function removeTeamMember(uid: string): Promise<void> {
-  // Remove Firestore profile (can't delete Auth user from client-side without Admin SDK)
-  await deleteDoc(doc(db, "users", uid));
+  // Call Cloud Function to delete both Auth user and Firestore profile
+  const fn = httpsCallable<{ uid: string }, { status: string }>(functions, "deleteUser");
+  await fn({ uid });
 }
 
 function generateTempPassword(): string {
