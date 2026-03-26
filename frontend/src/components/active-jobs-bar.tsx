@@ -8,15 +8,19 @@ import {
   Search,
   Sparkles,
   FileText,
+  Send,
+  RefreshCw,
   X,
 } from "lucide-react";
 import { useJobs } from "@/components/jobs-provider";
-import { getJobLabel, getJobPage, type ActiveJob } from "@/lib/job-store";
+import { getJobLabel, getJobPage, type ActiveJob, type JobType } from "@/lib/job-store";
 
-const typeIcons = {
+const typeIcons: Record<JobType, typeof Search> = {
   scrape: Search,
   enrich: Sparkles,
   generate: FileText,
+  send: Send,
+  followups: RefreshCw,
 };
 
 function JobPill({ job, onDismiss }: { job: ActiveJob; onDismiss: () => void }) {
