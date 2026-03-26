@@ -5,9 +5,14 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { PasswordInput } from "@/components/password-input";
 import { Badge } from "@/components/ui/badge";
-import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
+import {
+  inviteUser,
+  getTeamMembers,
+  removeTeamMember,
+} from "@/lib/auth-admin";
 import {
   Users,
   UserPlus,
@@ -17,16 +22,6 @@ import {
   Check,
 } from "lucide-react";
 
-interface TeamMember {
-  uid: string;
-  email: string;
-  display_name: string;
-  role: string;
-  workspace_id: string;
-}
-
-const hasBackend = !!process.env.NEXT_PUBLIC_API_URL;
-
 export function TeamManager() {
   const { workspaceId } = useAuth();
   const qc = useQueryClient();
@@ -34,26 +29,20 @@ export function TeamManager() {
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
   const [role, setRole] = useState<"admin" | "viewer">("viewer");
-  const [resetLink, setResetLink] = useState<string | null>(null);
+  const [tempPassword, setTempPassword] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
   const teamQuery = useQuery({
     queryKey: ["team", workspaceId],
-    queryFn: () =>
-      api.get<{ members: TeamMember[] }>(
-        `/api/auth/team?workspace_id=${workspaceId ?? ""}`
-      ),
-    enabled: hasBackend && !!workspaceId,
+    queryFn: () => getTeamMembers(workspaceId ?? ""),
+    enabled: !!workspaceId,
   });
 
   const inviteMutation = useMutation({
-    mutationFn: (data: { email: string; display_name: string; role: string }) =>
-      api.post<{ uid: string; email: string; reset_link: string }>(
-        "/api/auth/invite",
-        { ...data, workspace_id: workspaceId ?? "" }
-      ),
+    mutationFn: (data: { email: string; display_name: string; role: "admin" | "viewer" }) =>
+      inviteUser(data.email, data.display_name, data.role, workspaceId ?? ""),
     onSuccess: (data) => {
-      setResetLink(data.reset_link);
+      setTempPassword(data.tempPassword);
       setEmail("");
       setName("");
       qc.invalidateQueries({ queryKey: ["team"] });
@@ -61,7 +50,7 @@ export function TeamManager() {
   });
 
   const removeMutation = useMutation({
-    mutationFn: (uid: string) => api.post(`/api/auth/team/${uid}`, {}),
+    mutationFn: (uid: string) => removeTeamMember(uid),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["team"] });
     },
@@ -70,7 +59,7 @@ export function TeamManager() {
   function handleInvite(e: React.FormEvent) {
     e.preventDefault();
     if (!email.trim()) return;
-    setResetLink(null);
+    setTempPassword(null);
     inviteMutation.mutate({
       email: email.trim(),
       display_name: name.trim(),
@@ -78,15 +67,15 @@ export function TeamManager() {
     });
   }
 
-  function handleCopyLink() {
-    if (resetLink) {
-      navigator.clipboard.writeText(resetLink);
+  function handleCopyPassword() {
+    if (tempPassword) {
+      navigator.clipboard.writeText(tempPassword);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     }
   }
 
-  const members = teamQuery.data?.members ?? [];
+  const members = teamQuery.data ?? [];
 
   return (
     <Card>
@@ -170,20 +159,20 @@ export function TeamManager() {
           </div>
         </form>
 
-        {/* Reset link after invite */}
-        {resetLink && (
+        {/* Temp password after invite */}
+        {tempPassword && (
           <div className="rounded-md border border-emerald-500/30 bg-emerald-500/5 p-3 space-y-2">
             <p className="text-xs text-emerald-400 font-medium">
-              User invited. Send them this password reset link:
+              User invited! They'll get a password reset email. Temporary password:
             </p>
             <div className="flex items-center gap-2">
-              <code className="flex-1 rounded bg-muted px-2 py-1 text-xs break-all">
-                {resetLink}
+              <code className="flex-1 rounded bg-muted px-2 py-1 text-xs font-mono">
+                {tempPassword}
               </code>
               <Button
                 size="sm"
                 variant="outline"
-                onClick={handleCopyLink}
+                onClick={handleCopyPassword}
                 className="shrink-0"
               >
                 {copied ? (
@@ -193,6 +182,9 @@ export function TeamManager() {
                 )}
               </Button>
             </div>
+            <p className="text-[10px] text-muted-foreground">
+              They can use this to sign in, or check their email for a reset link to set their own.
+            </p>
           </div>
         )}
 
