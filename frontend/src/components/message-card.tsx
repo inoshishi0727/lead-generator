@@ -8,6 +8,8 @@ import {
   Mail,
   MessageCircle,
   Pencil,
+  Loader2,
+  Clock,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -31,6 +33,22 @@ const statusColors: Record<string, string> = {
   sent: "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400",
 };
 
+function formatDate(dateStr: string | null): string {
+  if (!dateStr) return "";
+  try {
+    const d = new Date(dateStr);
+    return d.toLocaleDateString("en-GB", {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    return dateStr;
+  }
+}
+
 export function MessageCard({ message }: Props) {
   const [editing, setEditing] = useState(false);
   const [editContent, setEditContent] = useState(message.content);
@@ -40,6 +58,7 @@ export function MessageCard({ message }: Props) {
   const regenerateMutation = useRegenerateMessage();
 
   const ChannelIcon = message.channel === "email" ? Mail : MessageCircle;
+  const isRegenerating = regenerateMutation.isPending;
 
   function handleApprove() {
     const updates: { id: string; status: string; content?: string; subject?: string } = {
@@ -76,7 +95,7 @@ export function MessageCard({ message }: Props) {
     updateMutation.isPending || regenerateMutation.isPending;
 
   return (
-    <Card className="overflow-hidden">
+    <Card className={`overflow-hidden transition-opacity ${isRegenerating ? "opacity-50" : ""}`}>
       <CardContent className="space-y-3 p-4">
         {/* Header row */}
         <div className="flex flex-wrap items-center gap-2">
@@ -87,7 +106,14 @@ export function MessageCard({ message }: Props) {
             variant="outline"
             className={statusColors[message.status] ?? ""}
           >
-            {message.status}
+            {isRegenerating ? (
+              <span className="flex items-center gap-1">
+                <Loader2 className="h-3 w-3 animate-spin" />
+                Regenerating
+              </span>
+            ) : (
+              message.status
+            )}
           </Badge>
           <Badge variant="secondary" className="gap-1">
             <ChannelIcon className="h-3 w-3" />
@@ -107,6 +133,13 @@ export function MessageCard({ message }: Props) {
             <Badge variant="outline" className="capitalize text-xs">
               {message.tone_tier.replace(/_/g, " ")}
             </Badge>
+          )}
+          {/* Date/time */}
+          {message.created_at && (
+            <span className="ml-auto flex items-center gap-1 text-xs text-muted-foreground">
+              <Clock className="h-3 w-3" />
+              {formatDate(message.created_at)}
+            </span>
           )}
         </div>
 
@@ -154,7 +187,12 @@ export function MessageCard({ message }: Props) {
         {/* Message content */}
         <div>
           <p className="text-xs text-muted-foreground mb-0.5">Message</p>
-          {editing ? (
+          {isRegenerating ? (
+            <div className="flex items-center justify-center rounded bg-muted/30 p-8">
+              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+              <span className="ml-2 text-sm text-muted-foreground">Regenerating draft...</span>
+            </div>
+          ) : editing ? (
             <textarea
               className="w-full min-h-[160px] rounded border border-input bg-background px-2 py-1.5 text-sm leading-relaxed"
               value={editContent}
@@ -195,7 +233,11 @@ export function MessageCard({ message }: Props) {
               onClick={handleRegenerate}
               disabled={isPending}
             >
-              <RefreshCw className="mr-1 h-3.5 w-3.5" />
+              {isRegenerating ? (
+                <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="mr-1 h-3.5 w-3.5" />
+              )}
               Regenerate
             </Button>
             {!editing ? (
