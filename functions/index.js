@@ -408,6 +408,132 @@ export const regenerateAllDrafts = onCall(
   }
 );
 
+// ---- Outreach Plan ----
+
+const SEASONS = {
+  spring_summer: { months: [3,4,5,6], products: ["ASTERLEY ORIGINAL","SCHOFIELD'S","ROSÉ","DISPENSE"], hook: "Spring/Summer menus", serves: "Spritzes, White Negronis, highballs" },
+  high_summer: { months: [7,8], products: ["ASTERLEY ORIGINAL","ROSÉ","RED"], hook: "terrace season", serves: "Spritzes, long drinks, pre-batched Negronis" },
+  autumn_winter: { months: [9,10,11,12,2], products: ["ESTATE","DISPENSE","BRITANNICA","ASTERLEY ORIGINAL"], hook: "Autumn/Winter menus", serves: "Negronis, Manhattans, digestivos" },
+  january: { months: [1], products: ["SCHOFIELD'S","ESTATE","DISPENSE"], hook: "Dry January / low ABV", serves: "Reverse Martini, Americano, low ABV Spritzes" },
+};
+
+const SEASONAL_CAT_PRIORITY = {
+  spring_summer: { cocktail_bar:10, wine_bar:9, hotel_bar:8, italian_restaurant:8, bottle_shop:7, gastropub:6, restaurant_groups:5 },
+  high_summer: { gastropub:10, hotel_bar:9, cocktail_bar:8, wine_bar:7 },
+  autumn_winter: { cocktail_bar:10, hotel_bar:9, italian_restaurant:9, wine_bar:8, restaurant_groups:7 },
+  january: { wine_bar:10, cocktail_bar:9, hotel_bar:8, gastropub:7, bottle_shop:6 },
+};
+
+function getSeason() {
+  const m = new Date().getMonth() + 1;
+  for (const [name, cfg] of Object.entries(SEASONS)) {
+    if (cfg.months.includes(m)) return name;
+  }
+  return "spring_summer";
+}
+
+function getSendWindow() {
+  const now = new Date();
+  const wd = now.getDay(); // 0=Sun
+  const BEST = [2,3,4]; // Tue,Wed,Thu
+  if (BEST.includes(wd) && now.getHours() >= 10 && now.getHours() < 13) {
+    return { status: "now", label: "Right now", day: now.toLocaleDateString("en",{weekday:"long"}), time: "10am-1pm" };
+  }
+  for (let i = 1; i < 8; i++) {
+    const d = new Date(now.getTime() + i * 86400000);
+    if (BEST.includes(d.getDay())) {
+      return { status: "upcoming", label: `${d.toLocaleDateString("en",{weekday:"long"})} 10am-1pm`, day: d.toLocaleDateString("en",{weekday:"long"}), time: "10am-1pm" };
+    }
+  }
+  return { status: "upcoming", label: "Tuesday 10am-1pm", day: "Tuesday", time: "10am-1pm" };
+}
+
+export const getOutreachPlan = onCall(
+  { timeoutSeconds: 30, memory: "256MiB" },
+  async (request) => {
+    if (!request.auth) throw new HttpsError("unauthenticated", "Must be signed in.");
+
+    const limit = request.data?.limit || 15;
+    const leadsSnap = await db.collection("leads").get();
+    const docs = leadsSnap.docs.map(d => d.data());
+
+    if (!docs.length) {
+      return { season: "unknown", recommended: [], total_eligible: 0, weekly_target: 100, weekly_progress: { total: 0, remaining: 100, by_category: {} }, scrape_recommendations: [], generated_at: new Date().toISOString() };
+    }
+
+    const season = getSeason();
+    const seasonCfg = SEASONS[season];
+    const catPriority = SEASONAL_CAT_PRIORITY[season] || {};
+    const sendWindow = getSendWindow();
+
+    const scoredLeads = [];
+    for (const lead of docs) {
+      if (!lead.email) continue;
+      const stage = lead.stage || "";
+      if (["sent","follow_up_1","follow_up_2","responded","converted","declined","approved"].includes(stage)) continue;
+
+      const e = lead.enrichment || {};
+      const venueCat = e.venue_category || "other";
+      const menuFit = e.menu_fit || "unknown";
+      const leadProducts = e.lead_products || [];
+      const contact = e.contact || {};
+
+      let priority = 0;
+      const reasons = [];
+
+      const catScore = catPriority[venueCat] || 2;
+      priority += catScore * 3;
+      if (catScore >= 8) reasons.push(`${venueCat.replace(/_/g," ")} is high-priority for ${seasonCfg.hook}`);
+
+      if (menuFit === "strong") { priority += 20; reasons.push("Strong menu fit"); }
+      else if (menuFit === "moderate") { priority += 10; }
+
+      if (e.enrichment_status === "success") { priority += 10; if (e.why_asterley_fits) reasons.push(e.why_asterley_fits); }
+
+      const seasonalProducts = new Set(seasonCfg.products);
+      const overlap = leadProducts.filter(p => seasonalProducts.has(p));
+      if (overlap.length) { priority += overlap.length * 5; reasons.push(`Seasonal: ${overlap.join(", ")}`); }
+
+      const score = lead.score;
+      if (score > 60) priority += 15;
+      else if (score > 40) priority += 8;
+
+      if (contact.name) { priority += 5; reasons.push(`Contact: ${contact.name}`); }
+
+      scoredLeads.push({
+        lead_id: lead.id || "",
+        business_name: lead.business_name || "",
+        venue_category: venueCat,
+        email: lead.email,
+        priority,
+        reasons: reasons.slice(0, 3),
+        lead_products: overlap.length ? overlap : leadProducts.slice(0, 2),
+        seasonal_hook: seasonCfg.hook,
+        suggested_serves: seasonCfg.serves,
+        contact_name: contact.name || null,
+        menu_fit: menuFit,
+        score: score || null,
+      });
+    }
+
+    scoredLeads.sort((a, b) => b.priority - a.priority);
+
+    return {
+      season,
+      seasonal_hook: seasonCfg.hook,
+      seasonal_products: seasonCfg.products,
+      seasonal_serves: seasonCfg.serves,
+      send_window: sendWindow,
+      total_eligible: scoredLeads.length,
+      recommended: scoredLeads.slice(0, limit),
+      weekly_target: 100,
+      weekly_progress: { total: docs.length, remaining: Math.max(0, 100 - docs.length), by_category: {} },
+      scrape_recommendations: [],
+      generated_at: new Date().toISOString(),
+    };
+  }
+);
+
 // ---- AI Strategy Recommendations ----
 
 const STRATEGY_PROMPT = `You are a sales strategy advisor for Asterley Bros, an English Vermouth, Amaro, and Aperitivo producer in SE London.

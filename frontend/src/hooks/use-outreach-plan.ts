@@ -1,4 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
+import { httpsCallable } from "firebase/functions";
+import { functions } from "@/lib/firebase";
 import { api } from "@/lib/api";
 
 interface OutreachLead {
@@ -59,11 +61,19 @@ const hasBackend = !!process.env.NEXT_PUBLIC_API_URL;
 export function useOutreachPlan(limit: number = 15) {
   return useQuery({
     queryKey: ["recommendations", "outreach-plan", limit],
-    queryFn: () =>
-      api.get<OutreachPlan>(
-        `/api/recommendations/outreach-plan?limit=${limit}`
-      ),
+    queryFn: async () => {
+      if (hasBackend) {
+        return api.get<OutreachPlan>(
+          `/api/recommendations/outreach-plan?limit=${limit}`
+        );
+      }
+      const fn = httpsCallable<{ limit: number }, OutreachPlan>(
+        functions,
+        "getOutreachPlan"
+      );
+      const result = await fn({ limit });
+      return result.data;
+    },
     staleTime: 10 * 60 * 1000,
-    enabled: hasBackend,
   });
 }
