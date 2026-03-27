@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { getLeads } from "@/lib/firestore-api";
 import type { Lead } from "@/lib/types";
@@ -23,5 +23,18 @@ export function useLeads(filters?: LeadFilters) {
     queryKey: ["leads", filters],
     queryFn: () =>
       useFirestore ? getLeads(filters) : api.get<Lead[]>(path),
+  });
+}
+
+export function useEnrichLeads() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (opts?: { force?: boolean }) =>
+      api.post<{ run_id: string; status: string }>("/api/enrich", {
+        force: opts?.force ?? false,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["leads"] });
+    },
   });
 }

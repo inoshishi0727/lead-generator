@@ -2,9 +2,11 @@
 
 import { useState } from "react";
 import { LeadsTable } from "@/components/leads-table";
-import { useLeads } from "@/hooks/use-leads";
+import { useLeads, useEnrichLeads } from "@/hooks/use-leads";
 import { Input } from "@/components/ui/input";
-import { Search } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { useAuth } from "@/lib/auth-context";
+import { Search, Sparkles, Loader2 } from "lucide-react";
 
 const SOURCE_OPTIONS = [
   { value: "", label: "All Sources" },
@@ -23,10 +25,12 @@ const STAGE_OPTIONS = [
 ];
 
 export default function LeadsPage() {
+  const { isAdmin } = useAuth();
   const [source, setSource] = useState("");
   const [stage, setStage] = useState("");
   const [search, setSearch] = useState("");
   const [emailOnly, setEmailOnly] = useState(true);
+  const enrichMutation = useEnrichLeads();
 
   const { data: rawLeads, isLoading } = useLeads({
     source: source || undefined,
@@ -43,12 +47,41 @@ export default function LeadsPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">Leads</h1>
-        <p className="text-sm text-muted-foreground">
-          {total} lead{total !== 1 ? "s" : ""}
-        </p>
+      <div className="flex items-end justify-between">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">Leads</h1>
+          <p className="text-sm text-muted-foreground">
+            {total} lead{total !== 1 ? "s" : ""}
+          </p>
+        </div>
+        {isAdmin && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => enrichMutation.mutate()}
+            disabled={enrichMutation.isPending}
+          >
+            {enrichMutation.isPending ? (
+              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Sparkles className="mr-1.5 h-3.5 w-3.5" />
+            )}
+            Enrich All
+          </Button>
+        )}
       </div>
+
+      {enrichMutation.isSuccess && (
+        <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/20 dark:text-emerald-400">
+          Enrichment started. This runs in the background using the backend. Check back in a few minutes.
+        </div>
+      )}
+
+      {enrichMutation.isError && (
+        <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800 dark:border-red-800 dark:bg-red-950/20 dark:text-red-400">
+          Enrichment failed. Make sure the Python backend is running (uv run uvicorn main:app).
+        </div>
+      )}
 
       <div className="flex flex-wrap gap-3">
         <select

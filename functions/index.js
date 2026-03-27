@@ -466,11 +466,15 @@ export const getOutreachPlan = onCall(
     const catPriority = SEASONAL_CAT_PRIORITY[season] || {};
     const sendWindow = getSendWindow();
 
+    console.log(`getOutreachPlan: ${docs.length} total leads`);
+    const withEmail = docs.filter(d => d.email).length;
+    console.log(`getOutreachPlan: ${withEmail} have email`);
+
     const scoredLeads = [];
     for (const lead of docs) {
       if (!lead.email) continue;
       const stage = lead.stage || "";
-      if (["sent","follow_up_1","follow_up_2","responded","converted","declined","approved"].includes(stage)) continue;
+      if (["sent","follow_up_1","follow_up_2","responded","converted","declined"].includes(stage)) continue;
 
       const e = lead.enrichment || {};
       const venueCat = e.venue_category || "other";
