@@ -58,7 +58,7 @@ export default function LeadsPage() {
           <Button
             variant="outline"
             size="sm"
-            onClick={() => enrichMutation.mutate()}
+            onClick={() => enrichMutation.mutate({})}
             disabled={enrichMutation.isPending}
           >
             {enrichMutation.isPending ? (
