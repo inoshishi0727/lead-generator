@@ -317,6 +317,9 @@ export const generateDrafts = functions
       );
     }
 
+    // Batch limit to avoid timeout
+    docs = docs.slice(0, 20);
+
     let generated = 0;
     let failed = 0;
 
