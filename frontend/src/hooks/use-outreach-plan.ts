@@ -68,17 +68,12 @@ export function useOutreachPlan(limit: number = 10) {
   return useQuery({
     queryKey: ["recommendations", "outreach-plan", limit],
     queryFn: async () => {
-      if (hasBackend) {
-        return api.get<OutreachPlan>(
-          `/api/recommendations/outreach-plan?limit=${limit}`
-        );
+      const res = await fetch(`/api/outreach-plan?limit=${limit}`);
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to load outreach plan");
       }
-      const fn = httpsCallable<{ limit: number }, OutreachPlan>(
-        functions,
-        "getOutreachPlan"
-      );
-      const result = await fn({ limit });
-      return result.data;
+      return res.json() as Promise<OutreachPlan>;
     },
     staleTime: 10 * 60 * 1000,
   });
