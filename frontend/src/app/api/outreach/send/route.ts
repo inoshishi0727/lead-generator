@@ -69,7 +69,7 @@ export async function POST(req: NextRequest) {
     const messages = approvedSnap.docs.map((d) => ({
       id: d.id,
       ...d.data(),
-    }));
+    })) as Record<string, any>[];
     const toSend = messages.slice(0, remaining);
 
     // Init SendGrid
