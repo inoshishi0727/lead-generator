@@ -662,12 +662,12 @@ export const getOutreachPlan = functions
     scoredLeads.sort((a, b) => b.priority - a.priority);
     const topLeads = scoredLeads.slice(0, limit);
 
-    // Generate AI weekly focus summary
+    // Generate AI weekly focus summary via Gemini
     let aiSummary = null;
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (apiKey && topLeads.length > 0) {
+    const geminiKey = process.env.GEMINI_API_KEY;
+    if (geminiKey && topLeads.length > 0) {
       try {
-        const anthropic = new Anthropic({ apiKey });
+        const ai = new GoogleGenAI({ apiKey: geminiKey });
 
         const catBreakdown = Object.entries(categoryCounts)
           .sort((a, b) => b[1] - a[1])
@@ -694,14 +694,14 @@ Write a 2-3 sentence weekly outreach briefing for Rob (founder). Be specific:
 - Which product to lead with
 - One tactical tip based on the actual lead mix
 
-Keep it punchy and actionable. No fluff. Write as a strategist briefing, not marketing copy.`;
+Keep it punchy and actionable. No fluff. Write as a strategist briefing, not marketing copy.
+Do NOT use markdown, bold, headers, or bullet points. Plain text only.`;
 
-        const response = await anthropic.messages.create({
-          model: CLAUDE_MODEL,
-          max_tokens: 200,
-          messages: [{ role: "user", content: prompt }],
+        const response = await ai.models.generateContent({
+          model: "gemini-2.5-flash",
+          contents: prompt,
         });
-        aiSummary = response.content[0].text || null;
+        aiSummary = response.text || null;
       } catch (err) {
         console.error("AI summary generation failed:", err.message);
       }

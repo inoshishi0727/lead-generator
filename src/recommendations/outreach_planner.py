@@ -181,17 +181,14 @@ def _generate_ai_summary(
     scored_leads: list[dict],
     category_counts: dict[str, int],
 ) -> str | None:
-    """Generate a 2-3 sentence weekly focus briefing via Claude."""
-    import os
-
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key or not scored_leads:
+    """Generate a 2-3 sentence weekly focus briefing via Gemini."""
+    if not scored_leads:
         return None
 
     try:
-        import anthropic
+        from google import genai
 
-        client = anthropic.Anthropic(api_key=api_key)
+        client = genai.Client()
 
         cat_breakdown = ", ".join(
             f"{cat.replace('_', ' ')}: {count}"
@@ -219,14 +216,15 @@ Write a 2-3 sentence weekly outreach briefing for Rob (founder). Be specific:
 - Which product to lead with
 - One tactical tip based on the actual lead mix
 
-Keep it punchy and actionable. No fluff. Write as a strategist briefing, not marketing copy."""
+Keep it punchy and actionable. No fluff. Write as a strategist briefing, not marketing copy.
+Do NOT use markdown, bold, headers, or bullet points. Plain text only."""
 
-        response = client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=200,
-            messages=[{"role": "user", "content": prompt}],
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+            config={"max_output_tokens": 200, "temperature": 0.3},
         )
-        return response.content[0].text
+        return response.text
     except Exception as exc:
         log.warning("ai_summary_failed", error=str(exc))
         return None
