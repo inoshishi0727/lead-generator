@@ -29,10 +29,18 @@ export function useLeads(filters?: LeadFilters) {
 export function useEnrichLeads() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (opts?: { force?: boolean }) =>
-      api.post<{ run_id: string; status: string }>("/api/enrich", {
-        force: opts?.force ?? false,
-      }),
+    mutationFn: async (opts?: { force?: boolean }) => {
+      const res = await fetch("/api/enrich", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ force: opts?.force ?? false }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Enrichment failed");
+      }
+      return res.json();
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["leads"] });
     },
