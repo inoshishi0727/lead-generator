@@ -7,7 +7,7 @@ interface OutreachLead {
   lead_id: string;
   business_name: string;
   venue_category: string;
-  email: string;
+  email: string | null;
   priority: number;
   reasons: string[];
   lead_products: string[];
@@ -46,11 +46,11 @@ interface OutreachPlan {
     day: string;
     time: string;
   };
+  ai_summary: string | null;
   total_eligible: number;
   recommended: OutreachLead[];
   weekly_target: number;
   weekly_progress: WeeklyProgress;
-  scrape_recommendations: ScrapeRecommendation[];
   generated_at: string;
 }
 
@@ -58,7 +58,7 @@ export type { OutreachPlan, OutreachLead };
 
 const hasBackend = !!process.env.NEXT_PUBLIC_API_URL;
 
-export function useOutreachPlan(limit: number = 15) {
+export function useOutreachPlan(limit: number = 10) {
   return useQuery({
     queryKey: ["recommendations", "outreach-plan", limit],
     queryFn: async () => {

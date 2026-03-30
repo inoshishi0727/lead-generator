@@ -175,7 +175,64 @@ def recommend_scrapes(weekly_stats: dict, season: str) -> list[dict]:
     return [r for r in recs if r["suggested_leads"] > 0]
 
 
-def plan_outreach(leads: list[dict], limit: int = 15) -> dict:
+def _generate_ai_summary(
+    season: str,
+    season_cfg: dict,
+    scored_leads: list[dict],
+    category_counts: dict[str, int],
+) -> str | None:
+    """Generate a 2-3 sentence weekly focus briefing via Claude."""
+    import os
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key or not scored_leads:
+        return None
+
+    try:
+        import anthropic
+
+        client = anthropic.Anthropic(api_key=api_key)
+
+        cat_breakdown = ", ".join(
+            f"{cat.replace('_', ' ')}: {count}"
+            for cat, count in sorted(category_counts.items(), key=lambda x: -x[1])
+        )
+        top_summary = "; ".join(
+            f"{l['business_name']} ({l['venue_category'].replace('_', ' ')}"
+            f"{', ' + l['menu_fit'] + ' fit' if l['menu_fit'] != 'unknown' else ''})"
+            for l in scored_leads[:5]
+        )
+
+        prompt = f"""You are the sales strategist for Asterley Bros (English Vermouth, Amaro & Aperitivo, SE London).
+
+Season: {season.replace('_', ' ')}
+Seasonal hook: {season_cfg['hook']}
+Seasonal products: {', '.join(season_cfg['products'])}
+Best serves right now: {season_cfg['serves']}
+Total active leads: {len(scored_leads)}
+With email: {sum(1 for l in scored_leads if l.get('email'))}
+Category breakdown: {cat_breakdown}
+Top leads this week: {top_summary}
+
+Write a 2-3 sentence weekly outreach briefing for Rob (founder). Be specific:
+- Which venue category to prioritise this week and why (tie to season/timing)
+- Which product to lead with
+- One tactical tip based on the actual lead mix
+
+Keep it punchy and actionable. No fluff. Write as a strategist briefing, not marketing copy."""
+
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=200,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return response.content[0].text
+    except Exception as exc:
+        log.warning("ai_summary_failed", error=str(exc))
+        return None
+
+
+def plan_outreach(leads: list[dict], limit: int = 10) -> dict:
     """Generate a smart outreach plan for this week.
 
     Returns prioritized leads with reasoning for each.
@@ -186,26 +243,27 @@ def plan_outreach(leads: list[dict], limit: int = 15) -> dict:
     send_window = get_send_window()
 
     scored_leads = []
+    category_counts: dict[str, int] = {}
 
     for lead in leads:
-        # Skip leads without email or already contacted
-        if not lead.get("email"):
-            continue
         stage = lead.get("stage", "")
-        if stage in ("sent", "follow_up_1", "follow_up_2", "responded", "converted", "declined", "approved"):
+        if stage in ("sent", "follow_up_1", "follow_up_2", "responded", "converted", "declined"):
             continue
 
         enrichment = lead.get("enrichment") or {}
-        venue_cat = enrichment.get("venue_category", "other")
+        venue_cat = enrichment.get("venue_category") or lead.get("category") or "other"
         menu_fit = enrichment.get("menu_fit", "unknown")
-        context_notes = enrichment.get("context_notes", "")
         why_fits = enrichment.get("why_asterley_fits", "")
-        drinks = enrichment.get("drinks_programme", "")
         lead_products = enrichment.get("lead_products", [])
 
-        # Score this lead for outreach priority
+        category_counts[venue_cat] = category_counts.get(venue_cat, 0) + 1
+
         priority = 0
         reasons = []
+
+        # Boost leads that have email (ready to contact)
+        if lead.get("email"):
+            priority += 15
 
         # Seasonal category match
         cat_score = category_priority.get(venue_cat, 2)
@@ -252,13 +310,13 @@ def plan_outreach(leads: list[dict], limit: int = 15) -> dict:
             "lead_id": lead.get("id", ""),
             "business_name": lead.get("business_name", ""),
             "venue_category": venue_cat,
-            "email": lead.get("email"),
+            "email": lead.get("email") or None,
             "priority": priority,
-            "reasons": reasons[:3],  # Top 3 reasons
+            "reasons": reasons[:3],
             "lead_products": list(overlap) if overlap else lead_products[:2],
             "seasonal_hook": season_cfg["hook"],
             "suggested_serves": season_cfg["serves"],
-            "contact_name": contact.get("name"),
+            "contact_name": contact.get("name") or lead.get("contact_name"),
             "menu_fit": menu_fit,
             "score": score,
         })
@@ -267,9 +325,11 @@ def plan_outreach(leads: list[dict], limit: int = 15) -> dict:
     scored_leads.sort(key=lambda x: x["priority"], reverse=True)
     top_leads = scored_leads[:limit]
 
-    # Weekly progress + scrape recommendations
+    # AI weekly focus summary
+    ai_summary = _generate_ai_summary(season, season_cfg, scored_leads, category_counts)
+
+    # Weekly progress
     weekly = get_weekly_stats(leads)
-    scrape_recs = recommend_scrapes(weekly, season)
 
     return {
         "season": season,
@@ -277,10 +337,10 @@ def plan_outreach(leads: list[dict], limit: int = 15) -> dict:
         "seasonal_products": season_cfg["products"],
         "seasonal_serves": season_cfg["serves"],
         "send_window": send_window,
+        "ai_summary": ai_summary,
         "total_eligible": len(scored_leads),
         "recommended": top_leads,
         "weekly_target": WEEKLY_TARGET,
         "weekly_progress": weekly,
-        "scrape_recommendations": scrape_recs,
         "generated_at": datetime.now().isoformat(),
     }

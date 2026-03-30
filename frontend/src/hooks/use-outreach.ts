@@ -165,12 +165,19 @@ export interface SendResponse {
 export function useSendApproved() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (force: boolean = false) =>
-      api.post<SendResponse>("/api/outreach/send", { force }),
-    onSuccess: (data) => {
-      if (data.run_id) {
-        addJob("send", data.run_id);
+    mutationFn: async (force: boolean = false) => {
+      const res = await fetch("/api/outreach/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ force }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Send failed");
       }
+      return res.json() as Promise<SendResponse>;
+    },
+    onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: ["outreach"] });
     },
   });

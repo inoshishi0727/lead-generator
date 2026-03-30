@@ -70,21 +70,28 @@ function LeadRow({ lead, rank }: { lead: OutreachLead; rank: number }) {
         {lead.contact_name && (
           <p className="text-[10px] text-muted-foreground">{lead.contact_name}</p>
         )}
-        <a
-          href={`mailto:${lead.email}`}
-          className="text-[10px] text-primary hover:underline flex items-center gap-0.5 justify-end"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <Mail className="h-2.5 w-2.5" />
-          {lead.email.length > 25 ? lead.email.slice(0, 25) + "..." : lead.email}
-        </a>
+        {lead.email ? (
+          <a
+            href={`mailto:${lead.email}`}
+            className="text-[10px] text-primary hover:underline flex items-center gap-0.5 justify-end"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <Mail className="h-2.5 w-2.5" />
+            {lead.email.length > 25 ? lead.email.slice(0, 25) + "..." : lead.email}
+          </a>
+        ) : (
+          <span className="text-[10px] text-zinc-500 flex items-center gap-0.5 justify-end">
+            <Mail className="h-2.5 w-2.5" />
+            No email yet
+          </span>
+        )}
       </div>
     </div>
   );
 }
 
 export function OutreachPlan() {
-  const { data, isLoading } = useOutreachPlan(10);
+  const { data, isLoading, error } = useOutreachPlan(10);
   const { startScrape, isStarting } = useScrape();
 
   if (isLoading) {
@@ -96,6 +103,18 @@ export function OutreachPlan() {
           <Skeleton className="h-16 w-full" />
           <Skeleton className="h-16 w-full" />
           <Skeleton className="h-16 w-full" />
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (error) {
+    return (
+      <Card>
+        <CardHeader><CardTitle>This Week's Outreach</CardTitle></CardHeader>
+        <CardContent>
+          <p className="text-sm text-red-400">Failed to load outreach plan. The cloud function may need redeployment.</p>
+          <p className="text-xs text-muted-foreground mt-1">{String(error)}</p>
         </CardContent>
       </Card>
     );
@@ -115,7 +134,7 @@ export function OutreachPlan() {
   const SeasonIcon = SEASON_ICONS[data.season] ?? Sun;
   const progress = data.weekly_progress;
   const progressPct = Math.min(100, Math.round((progress.total / data.weekly_target) * 100));
-  const scrapeRecs = data.scrape_recommendations ?? [];
+  const scrapeRecs: { category: string; priority: number; current: number; target: number; gap: number; suggested_leads: number; queries: string[]; reason: string }[] = [];
 
   return (
     <Card>
@@ -216,6 +235,19 @@ export function OutreachPlan() {
                 </Button>
               </div>
             ))}
+          </div>
+        )}
+
+        {/* AI weekly focus summary */}
+        {data.ai_summary && (
+          <div className="rounded-lg border border-purple-500/20 bg-purple-500/5 p-3">
+            <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-purple-400 mb-1.5">
+              <Sparkles className="h-3 w-3" />
+              Weekly Focus
+            </p>
+            <p className="text-sm leading-relaxed text-foreground/90">
+              {data.ai_summary}
+            </p>
           </div>
         )}
 
