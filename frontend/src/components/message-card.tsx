@@ -10,6 +10,7 @@ import {
   Pencil,
   Loader2,
   Clock,
+  Send,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -18,6 +19,7 @@ import type { OutreachMessage } from "@/lib/types";
 import {
   useUpdateMessage,
   useRegenerateMessage,
+  useSendMessage,
 } from "@/hooks/use-outreach";
 import { useGeneratingLeadId } from "@/hooks/use-live-updates";
 import { useAuth } from "@/lib/auth-context";
@@ -59,6 +61,7 @@ export function MessageCard({ message }: Props) {
   const { isAdmin } = useAuth();
   const updateMutation = useUpdateMessage();
   const regenerateMutation = useRegenerateMessage();
+  const sendMutation = useSendMessage();
   const generatingLeadId = useGeneratingLeadId();
 
   const ChannelIcon = message.channel === "email" ? Mail : MessageCircle;
@@ -148,8 +151,13 @@ export function MessageCard({ message }: Props) {
         </div>
 
         {/* Context row */}
-        {(message.contact_name || message.context_notes) && (
+        {(message.contact_name || message.context_notes || message.recipient_email) && (
           <div className="text-xs text-muted-foreground space-y-0.5">
+            {message.recipient_email && (
+              <p>
+                To: <span className="font-medium text-foreground">{message.recipient_email}</span>
+              </p>
+            )}
             {message.contact_name && (
               <p>
                 Contact: <span className="font-medium text-foreground">{message.contact_name}</span>
@@ -268,6 +276,25 @@ export function MessageCard({ message }: Props) {
                 Save Edit
               </Button>
             )}
+          </div>
+        )}
+        {/* Send button for approved messages */}
+        {message.status === "approved" && isAdmin && (
+          <div className="flex items-center gap-2 pt-1">
+            <Button
+              size="sm"
+              variant="default"
+              className="bg-blue-600 hover:bg-blue-700"
+              onClick={() => sendMutation.mutate(message.id)}
+              disabled={sendMutation.isPending}
+            >
+              {sendMutation.isPending ? (
+                <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Send className="mr-1 h-3.5 w-3.5" />
+              )}
+              Send
+            </Button>
           </div>
         )}
       </CardContent>

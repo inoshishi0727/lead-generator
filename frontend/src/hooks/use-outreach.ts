@@ -166,18 +166,34 @@ export function useSendApproved() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (force: boolean = false) => {
-      const res = await fetch("/api/outreach/send", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ force }),
-      });
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || "Send failed");
+      if (hasBackend) {
+        return api.post<SendResponse>("/api/outreach/send", { force });
       }
-      return res.json() as Promise<SendResponse>;
+      const fn = httpsCallable<
+        { force?: boolean },
+        SendResponse
+      >(functions, "sendApproved");
+      const result = await fn({ force });
+      return result.data;
     },
-    onSuccess: (data) => {
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["outreach"] });
+    },
+  });
+}
+
+export function useSendMessage() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (messageId: string) => {
+      const fn = httpsCallable<
+        { force: boolean; message_ids: string[] },
+        SendResponse
+      >(functions, "sendApproved");
+      const result = await fn({ force: true, message_ids: [messageId] });
+      return result.data;
+    },
+    onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["outreach"] });
     },
   });

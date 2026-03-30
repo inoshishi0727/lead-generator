@@ -1,6 +1,4 @@
 import { useQuery } from "@tanstack/react-query";
-import { httpsCallable } from "firebase/functions";
-import { functions } from "@/lib/firebase";
 import { api } from "@/lib/api";
 import type { StrategyResponse, LeadRecommendation } from "@/lib/types";
 
@@ -9,13 +7,12 @@ const hasBackend = !!process.env.NEXT_PUBLIC_API_URL;
 export function useStrategy() {
   return useQuery({
     queryKey: ["recommendations", "strategy"],
-    queryFn: async () => {
+    queryFn: async (): Promise<StrategyResponse> => {
       if (hasBackend) {
         return api.get<StrategyResponse>("/api/recommendations/strategy");
       }
-      const fn = httpsCallable<Record<string, never>, StrategyResponse>(functions, "getStrategy");
-      const result = await fn({});
-      return result.data;
+      // Strategy requires server-side Gemini API — return empty when no backend
+      return { insights: [], ratio_adjustments: [], query_suggestions: [], generated_at: new Date().toISOString() };
     },
     staleTime: 5 * 60 * 1000,
   });

@@ -364,6 +364,7 @@ export const generateDrafts = functions
           contact_name: leadDoc.contact_name || contact.name || null,
           context_notes: enrichment.context_notes || null,
           menu_fit: enrichment.menu_fit || null,
+          recipient_email: leadDoc.email || leadDoc.contact_email || null,
           workspace_id: leadDoc.workspace_id || "",
         });
 
@@ -528,6 +529,7 @@ export const regenerateAllDrafts = functions
           contact_name: leadDoc.contact_name || contact.name || null,
           context_notes: enrichment.context_notes || null,
           menu_fit: enrichment.menu_fit || null,
+          recipient_email: leadDoc.email || leadDoc.contact_email || null,
           workspace_id: leadDoc.workspace_id || "",
         });
 
@@ -586,7 +588,7 @@ function getSendWindow() {
 }
 
 export const getOutreachPlan = functions
-  .runWith({ timeoutSeconds: 60, memory: "256MB", secrets: ["ANTHROPIC_API_KEY"] })
+  .runWith({ timeoutSeconds: 60, memory: "256MB", secrets: ["GEMINI_API_KEY"] })
   .https.onCall(async (data, context) => {
     if (!context.auth) throw new HttpsError("unauthenticated", "Must be signed in.");
 
@@ -853,17 +855,28 @@ export const sendApproved = functions
 
     const remaining = DAILY_CAP - sentTodaySnap.size;
 
-    // Get approved emails
-    const approvedSnap = await db.collection("outreach_messages")
-      .where("status", "==", "approved")
-      .where("channel", "==", "email")
-      .get();
+    // Get messages to send
+    const messageIds = data?.message_ids || null;
+    let messages;
 
-    if (approvedSnap.empty) {
+    if (messageIds && messageIds.length > 0) {
+      // Send specific messages
+      const promises = messageIds.map((id) => db.collection("outreach_messages").doc(id).get());
+      const snaps = await Promise.all(promises);
+      messages = snaps.filter((s) => s.exists).map((s) => ({ id: s.id, ...s.data() }));
+    } else {
+      // Send all approved emails
+      const approvedSnap = await db.collection("outreach_messages")
+        .where("status", "==", "approved")
+        .where("channel", "==", "email")
+        .get();
+      messages = approvedSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    }
+
+    if (!messages.length) {
       return { status: "completed", sent: 0, failed: 0, total: 0 };
     }
 
-    const messages = approvedSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
     const toSend = messages.slice(0, remaining);
 
     // Init SendGrid
