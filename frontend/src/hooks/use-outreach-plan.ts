@@ -51,7 +51,12 @@ interface OutreachPlan {
   recommended: OutreachLead[];
   weekly_target: number;
   weekly_progress: WeeklyProgress;
-  scrape_recommendations: string[];
+  scrape_recommendations: {
+    category: string;
+    queries: string[];
+    suggested_leads: number;
+    reason: string;
+  }[];
   generated_at: string;
 }
 
