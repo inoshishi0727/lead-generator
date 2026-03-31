@@ -278,7 +278,7 @@ export function MessageCard({ message }: Props) {
             )}
           </div>
         )}
-        {/* Send button for approved messages */}
+        {/* Send + Unapprove buttons for approved messages */}
         {message.status === "approved" && isAdmin && (
           <div className="flex items-center gap-2 pt-1">
             <Button
@@ -294,6 +294,15 @@ export function MessageCard({ message }: Props) {
                 <Send className="mr-1 h-3.5 w-3.5" />
               )}
               Send
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => updateMutation.mutate({ id: message.id, status: "draft" })}
+              disabled={updateMutation.isPending}
+            >
+              <X className="mr-1 h-3.5 w-3.5" />
+              Unapprove
             </Button>
           </div>
         )}
