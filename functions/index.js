@@ -368,6 +368,7 @@ export const generateDrafts = functions
           context_notes: enrichment.context_notes || null,
           menu_fit: enrichment.menu_fit || null,
           recipient_email: leadDoc.email || leadDoc.contact_email || null,
+          website: leadDoc.website || null,
           workspace_id: leadDoc.workspace_id || "",
         });
 
@@ -533,6 +534,7 @@ export const regenerateAllDrafts = functions
           context_notes: enrichment.context_notes || null,
           menu_fit: enrichment.menu_fit || null,
           recipient_email: leadDoc.email || leadDoc.contact_email || null,
+          website: leadDoc.website || null,
           workspace_id: leadDoc.workspace_id || "",
         });
 
@@ -902,21 +904,18 @@ export const sendApproved = functions
 
         const lead = leadSnap.data();
         const toEmail = lead.contact_email || lead.email;
-        // TEST MODE: also send to rob
-        const testCc = toEmail === "chantal@absolutionlabs.com" ? "rob@absolutionlabs.com" : null;
         if (!toEmail) {
           console.error("No email for lead", msg.lead_id, lead.business_name);
           failed++;
           continue;
         }
 
-        const emailMsg = {
-          to: testCc ? [toEmail, testCc] : toEmail,
+        await sgMail.send({
+          to: toEmail,
           from: { email: SENDER_EMAIL, name: SENDER_NAME },
           subject: msg.subject || "Asterley Bros",
           text: msg.content,
-        };
-        await sgMail.send(emailMsg);
+        });
 
         const now = new Date().toISOString();
         await db.collection("outreach_messages").doc(msg.id).update({

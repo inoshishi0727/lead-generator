@@ -151,14 +151,16 @@ export function MessageCard({ message }: Props) {
         </div>
 
         {/* Context row */}
-        {(message.contact_name || message.context_notes || message.recipient_email) && (
+        {(message.contact_name || message.context_notes || message.recipient_email || message.website) && (
           <div className="text-xs text-muted-foreground space-y-0.5">
             {message.recipient_email && (
               <p>
                 To: <span className="font-medium text-foreground">{message.recipient_email}</span>
-                {message.recipient_email !== "rob@absolutionlabs.com" && (
-                  <span className="font-medium text-foreground">, rob@absolutionlabs.com</span>
-                )}
+              </p>
+            )}
+            {message.website && (
+              <p>
+                Venue: <a href={message.website} target="_blank" rel="noopener noreferrer" className="font-medium text-blue-600 hover:underline dark:text-blue-400">{message.website.replace(/^https?:\/\/(www\.)?/, "").replace(/\/$/, "")}</a>
               </p>
             )}
             {message.contact_name && (

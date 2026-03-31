@@ -130,6 +130,7 @@ export async function getOutreachMessages(filters?: {
       context_notes: data.context_notes || null,
       menu_fit: data.menu_fit || null,
       recipient_email: data.recipient_email || null,
+      website: data.website || null,
     };
   });
 

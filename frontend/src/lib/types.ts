@@ -97,6 +97,7 @@ export interface OutreachMessage {
   context_notes: string | null;
   menu_fit: string | null;
   recipient_email: string | null;
+  website: string | null;
 }
 
 // --- Analytics ---
