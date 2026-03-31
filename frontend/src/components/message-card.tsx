@@ -297,6 +297,20 @@ export function MessageCard({ message }: Props) {
             </Button>
           </div>
         )}
+        {/* Reset to draft button for sent messages */}
+        {message.status === "sent" && isAdmin && (
+          <div className="flex items-center gap-2 pt-1">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => updateMutation.mutate({ id: message.id, status: "draft", restore_original_email: true })}
+              disabled={updateMutation.isPending}
+            >
+              <RefreshCw className="mr-1 h-3.5 w-3.5" />
+              Back to Draft
+            </Button>
+          </div>
+        )}
       </CardContent>
     </Card>
   );

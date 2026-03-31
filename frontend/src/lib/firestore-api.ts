@@ -153,3 +153,25 @@ export async function updateOutreachMessage(
   const ref = doc(db, "outreach_messages", messageId);
   await updateDoc(ref, updates);
 }
+
+export async function restoreOriginalEmail(messageId: string): Promise<void> {
+  const ref = doc(db, "outreach_messages", messageId);
+  const snap = await getDoc(ref);
+  if (!snap.exists()) return;
+
+  const data = snap.data();
+  const originalEmail = data._original_recipient_email;
+  if (!originalEmail) return;
+
+  // Restore email on the message
+  await updateDoc(ref, { recipient_email: originalEmail });
+
+  // Restore email on the lead too
+  if (data.lead_id) {
+    const leadRef = doc(db, "leads", data.lead_id);
+    const leadSnap = await getDoc(leadRef);
+    if (leadSnap.exists() && leadSnap.data()._original_email) {
+      await updateDoc(leadRef, { email: leadSnap.data()._original_email });
+    }
+  }
+}

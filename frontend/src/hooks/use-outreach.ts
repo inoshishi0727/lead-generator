@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { httpsCallable } from "firebase/functions";
 import { functions } from "@/lib/firebase";
 import { api } from "@/lib/api";
-import { getOutreachMessages, updateOutreachMessage } from "@/lib/firestore-api";
+import { getOutreachMessages, updateOutreachMessage, restoreOriginalEmail } from "@/lib/firestore-api";
 import { addJob } from "@/lib/job-store";
 import type { OutreachMessage } from "@/lib/types";
 
@@ -83,15 +83,20 @@ export function useUpdateMessage() {
   return useMutation({
     mutationFn: async ({
       id,
+      restore_original_email,
       ...body
     }: {
       id: string;
       status?: string;
       content?: string;
       subject?: string;
+      restore_original_email?: boolean;
     }) => {
       if (hasBackend) {
         return api.patch<OutreachMessage>(`/api/outreach/messages/${id}`, body);
+      }
+      if (restore_original_email) {
+        await restoreOriginalEmail(id);
       }
       await updateOutreachMessage(id, body);
       return { id, ...body } as unknown as OutreachMessage;
