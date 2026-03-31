@@ -4,6 +4,12 @@ import { usePathname } from "next/navigation";
 import { Loader2 } from "lucide-react";
 import { AuthProvider, useAuth } from "@/lib/auth-context";
 import { Navbar } from "@/components/navbar";
+import { TourProvider } from "@/components/tour-provider";
+import { AppTour } from "@/components/app-tour";
+import { GettingStarted } from "@/components/getting-started";
+
+// Routes accessible without logging in
+const PUBLIC_ROUTES = ["/login", "/help"];
 
 function AuthGate({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
@@ -17,12 +23,17 @@ function AuthGate({ children }: { children: React.ReactNode }) {
     );
   }
 
-  // Login page doesn't need navbar or auth gate
+  // Login page — always standalone
   if (pathname === "/login") {
     return <>{children}</>;
   }
 
-  // Not logged in — auth context handles redirect to /login
+  // Public pages when NOT logged in — show standalone (no navbar)
+  if (!user && PUBLIC_ROUTES.includes(pathname)) {
+    return <>{children}</>;
+  }
+
+  // Not logged in and not a public page — redirect to login
   if (!user) {
     return (
       <div className="flex min-h-screen items-center justify-center">
@@ -31,12 +42,14 @@ function AuthGate({ children }: { children: React.ReactNode }) {
     );
   }
 
-  // Logged in — show navbar + content
+  // Logged in — show navbar + onboarding + tour + content
   return (
-    <>
+    <TourProvider>
       <Navbar />
+      <GettingStarted />
+      <AppTour />
       {children}
-    </>
+    </TourProvider>
   );
 }
 

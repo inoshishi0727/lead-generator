@@ -83,7 +83,7 @@ export default function LeadsPage() {
         </div>
       )}
 
-      <div className="flex flex-wrap gap-3">
+      <div data-tour="leads-filters" className="flex flex-wrap gap-3">
         <select
           value={source}
           onChange={(e) => setSource(e.target.value)}
@@ -134,7 +134,9 @@ export default function LeadsPage() {
         </label>
       </div>
 
-      <LeadsTable leads={leads} isLoading={isLoading} />
+      <div data-tour="leads-table">
+        <LeadsTable leads={leads} isLoading={isLoading} />
+      </div>
     </div>
   );
 }

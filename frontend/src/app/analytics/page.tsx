@@ -43,7 +43,9 @@ export default function AnalyticsPage() {
         <StatCard icon={BarChart3} label="Avg Score" value={avgScore} />
       </div>
 
-      <FunnelChart />
+      <div data-tour="funnel-chart">
+        <FunnelChart />
+      </div>
 
       <div className="grid gap-6 lg:grid-cols-2">
         <CategoryBreakdown />

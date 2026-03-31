@@ -70,7 +70,7 @@ export default function DashboardPage() {
       </div>
 
       {/* Key Metrics */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div data-tour="metrics" className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <MetricCard
           label="Total Leads"
           value={totalLeads}
@@ -173,7 +173,7 @@ export default function DashboardPage() {
 
       {/* Scrape Controls (admin only) */}
       {isAdmin && (
-        <div className="grid gap-6 lg:grid-cols-2">
+        <div data-tour="scrape-controls" className="grid gap-6 lg:grid-cols-2">
           <ScrapeControl
             onStart={(queries, limit, headless) =>
               startScrape({ queries, limit, headless })

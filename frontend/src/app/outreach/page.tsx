@@ -79,7 +79,7 @@ export default function OutreachPage() {
     <div className="mx-auto max-w-4xl space-y-6 p-4">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold tracking-tight">Outreach</h1>
-        <div className="flex gap-2">
+        <div data-tour="outreach-actions" className="flex gap-2">
           <Button
             onClick={handleGenerate}
             disabled={generateMutation.isPending}
@@ -240,26 +240,28 @@ export default function OutreachPage() {
       )}
 
       {/* Messages list */}
-      {isLoading ? (
-        <div className="space-y-4">
-          <Skeleton className="h-48 w-full" />
-          <Skeleton className="h-48 w-full" />
-          <Skeleton className="h-48 w-full" />
-        </div>
-      ) : allMessages.length === 0 ? (
-        <div className="rounded-xl border-2 border-dashed border-muted-foreground/20 p-12 text-center">
-          <FileText className="mx-auto mb-3 h-10 w-10 text-muted-foreground/40" />
-          <p className="text-sm text-muted-foreground">
-            No messages yet. Generate drafts for your scored leads to get started.
-          </p>
-        </div>
-      ) : (
-        <div className="space-y-4">
-          {allMessages.map((msg) => (
-            <MessageCard key={msg.id} message={msg} />
-          ))}
-        </div>
-      )}
+      <div data-tour="outreach-messages">
+        {isLoading ? (
+          <div className="space-y-4">
+            <Skeleton className="h-48 w-full" />
+            <Skeleton className="h-48 w-full" />
+            <Skeleton className="h-48 w-full" />
+          </div>
+        ) : allMessages.length === 0 ? (
+          <div className="rounded-xl border-2 border-dashed border-muted-foreground/20 p-12 text-center">
+            <FileText className="mx-auto mb-3 h-10 w-10 text-muted-foreground/40" />
+            <p className="text-sm text-muted-foreground">
+              No messages yet. Generate drafts for your scored leads to get started.
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {allMessages.map((msg) => (
+              <MessageCard key={msg.id} message={msg} />
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

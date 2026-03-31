@@ -3,7 +3,8 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { BarChart3, Mail, Search, Settings, TrendingUp, LogOut, User } from "lucide-react";
+import { BarChart3, Mail, Search, Settings, TrendingUp, LogOut, User, HelpCircle } from "lucide-react";
+import { useTour } from "@/components/tour-provider";
 import { DarkModeToggle } from "@/components/dark-mode-toggle";
 import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
@@ -11,6 +12,7 @@ import { Button } from "@/components/ui/button";
 export function Navbar() {
   const pathname = usePathname();
   const { displayName, role, signOut, isAdmin } = useAuth();
+  const { start: startTour } = useTour();
 
   const links = [
     { href: "/", label: "Dashboard", icon: BarChart3, show: true },
@@ -53,6 +55,21 @@ export function Navbar() {
               </span>
             )}
           </div>
+          <Link
+            href="/help"
+            data-tour="help-button"
+            className="text-muted-foreground hover:text-foreground transition-colors"
+            title="Help & FAQ"
+          >
+            <HelpCircle className="h-3.5 w-3.5" />
+          </Link>
+          <button
+            onClick={startTour}
+            className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+            title="Take a tour"
+          >
+            Tour
+          </button>
           <DarkModeToggle />
           <Button
             variant="ghost"
