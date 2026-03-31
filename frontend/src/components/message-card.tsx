@@ -156,6 +156,9 @@ export function MessageCard({ message }: Props) {
             {message.recipient_email && (
               <p>
                 To: <span className="font-medium text-foreground">{message.recipient_email}</span>
+                {message.recipient_email !== "rob@absolutionlabs.com" && (
+                  <span className="font-medium text-foreground">, rob@absolutionlabs.com</span>
+                )}
               </p>
             )}
             {message.contact_name && (
