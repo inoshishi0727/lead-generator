@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -8,6 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ScrapeControl } from "@/components/scrape-control";
 import { ScrapeStatus } from "@/components/scrape-status";
 import { OutreachPlan } from "@/components/outreach-plan";
+import { LeadDetailDialog } from "@/components/lead-detail-dialog";
 import { useScrape } from "@/hooks/use-scrape";
 import { useLeads } from "@/hooks/use-leads";
 import { useMessages } from "@/hooks/use-outreach";
@@ -19,12 +21,14 @@ import {
   ChevronRight,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
+import type { Lead } from "@/lib/types";
 
 export default function DashboardPage() {
   const { isAdmin } = useAuth();
   const { startScrape, isStarting, status } = useScrape();
   const { data: leads, isLoading: leadsLoading } = useLeads();
   const { data: messages } = useMessages();
+  const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
 
   const isRunning =
     status?.status === "pending" || status?.status === "running";
@@ -131,7 +135,8 @@ export default function DashboardPage() {
               {recentLeads.map((lead) => (
                 <div
                   key={lead.id}
-                  className="flex items-center gap-3 rounded-md px-2 py-2 transition-colors hover:bg-muted/30"
+                  className="flex items-center gap-3 rounded-md px-2 py-2 transition-colors hover:bg-muted/30 cursor-pointer"
+                  onClick={() => setSelectedLead(lead)}
                 >
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium truncate">
@@ -169,7 +174,12 @@ export default function DashboardPage() {
       </Card>
 
       {/* Outreach Plan */}
-      <OutreachPlan />
+      <OutreachPlan
+        onLeadClick={(leadId) => {
+          const lead = allLeads.find((l) => l.id === leadId) ?? null;
+          if (lead) setSelectedLead(lead);
+        }}
+      />
 
       {/* Scrape Controls (admin only) */}
       {isAdmin && (
@@ -184,6 +194,10 @@ export default function DashboardPage() {
           {status && <ScrapeStatus status={status} />}
         </div>
       )}
+      <LeadDetailDialog
+        lead={selectedLead}
+        onClose={() => setSelectedLead(null)}
+      />
     </div>
   );
 }

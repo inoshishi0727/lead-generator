@@ -40,32 +40,16 @@ class BaseScraper(abc.ABC):
     def __init__(self, config: AppConfig | None = None) -> None:
         self.config = config or load_config()
         self._browser = None
+        self._browser_engine = "camoufox"
         self._context = None
 
-    def _get_proxy_config(self) -> dict | None:
-        """Build proxy config from environment variables if available."""
-        host = os.environ.get("PROXY_HOST")
-        port = os.environ.get("PROXY_PORT")
-        if not host or not port:
-            return None
-
-        proxy = {"server": f"http://{host}:{port}"}
-        username = os.environ.get("PROXY_USERNAME")
-        password = os.environ.get("PROXY_PASSWORD")
-        if username:
-            proxy["username"] = username
-        if password:
-            proxy["password"] = password
-
-        log.info("proxy_configured", host=host, port=port)
-        return proxy
-
     async def _launch_browser(self, headless: bool = True) -> Any:
-        """Launch a Camoufox browser instance with optional proxy."""
-        from camoufox.async_api import AsyncCamoufox
+        """Launch a stealth browser with proxy. Camoufox first, CloakBrowser fallback."""
+        from src.scrapers.browser import close_browser, get_proxy_config, launch_browser
 
-        proxy = self._get_proxy_config()
-        self._browser = await AsyncCamoufox(headless=headless).__aenter__()
+        self._browser, self._browser_engine = await launch_browser(headless=headless)
+
+        proxy = get_proxy_config()
         context_kwargs = {"viewport": {"width": 1280, "height": 720}}
         if proxy:
             context_kwargs["proxy"] = proxy
@@ -74,15 +58,17 @@ class BaseScraper(abc.ABC):
         # Initialize session personality for humanized behavior
         initialize_session_personality(speed="normal", focus="normal", fatigue="low")
 
-        log.info("browser_launched", scraper=self.__class__.__name__, headless=headless, proxy=bool(proxy))
+        log.info("browser_ready", scraper=self.__class__.__name__, engine=self._browser_engine, proxy=bool(proxy))
         return self._context
 
     async def _close_browser(self) -> None:
         """Close the browser instance."""
+        from src.scrapers.browser import close_browser
+
         if self._context:
             await self._context.close()
         if self._browser:
-            await self._browser.__aexit__(None, None, None)
+            await close_browser(self._browser, getattr(self, "_browser_engine", "camoufox"))
         log.info("browser_closed", scraper=self.__class__.__name__)
 
     @retry(

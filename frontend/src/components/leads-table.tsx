@@ -12,7 +12,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Download, ExternalLink, Mail, Check, X, AlertTriangle, ThumbsUp, ThumbsDown } from "lucide-react";
+import { Download, Check, X, AlertTriangle, ThumbsUp, ThumbsDown } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { LeadDetailDialog } from "@/components/lead-detail-dialog";
 import { api } from "@/lib/api";
@@ -23,28 +23,6 @@ interface Props {
   leads: Lead[];
   isLoading: boolean;
 }
-
-function domainOnly(url: string): string {
-  try {
-    return new URL(url).hostname.replace(/^www\./, "");
-  } catch {
-    return url;
-  }
-}
-
-const STAGE_COLORS: Record<string, string> = {
-  scraped: "bg-blue-500/20 text-blue-400",
-  needs_email: "bg-yellow-500/20 text-yellow-400",
-  scored: "bg-green-500/20 text-green-400",
-  draft_generated: "bg-purple-500/20 text-purple-400",
-  approved: "bg-emerald-500/20 text-emerald-400",
-  sent: "bg-cyan-500/20 text-cyan-400",
-};
-
-const SOURCE_LABELS: Record<string, string> = {
-  google_maps: "Google Maps",
-  instagram: "Instagram",
-};
 
 function needsRescrape(lead: Lead): boolean {
   if (!lead.drinks_programme || lead.drinks_programme === "null") return true;
@@ -101,18 +79,19 @@ export function LeadsTable({ leads, isLoading }: Props) {
           No leads yet. Run a scrape from the Dashboard.
         </p>
       ) : (
-        <Card className="overflow-hidden shadow-md">
-          <Table>
+        <Card className="shadow-md">
+          <div className="max-h-[70vh] overflow-auto">
+          <Table className="w-full table-fixed">
             <TableHeader>
               <TableRow>
-                <TableHead></TableHead>
-                <TableHead>Business</TableHead>
-                <TableHead>Category</TableHead>
-                <TableHead>Fit</TableHead>
-                <TableHead>Email</TableHead>
-                <TableHead>Area</TableHead>
-                <TableHead className="text-right">Score</TableHead>
-                <TableHead className="text-center">Actions</TableHead>
+                <TableHead className="w-8"></TableHead>
+                <TableHead className="w-[22%]">Business</TableHead>
+                <TableHead className="w-[14%]">Category</TableHead>
+                <TableHead className="w-[7%]">Fit</TableHead>
+                <TableHead className="w-[22%]">Email</TableHead>
+                <TableHead className="w-[14%]">Area</TableHead>
+                <TableHead className="w-[6%] text-right">Score</TableHead>
+                <TableHead className="w-[8%] text-center">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -135,11 +114,11 @@ export function LeadsTable({ leads, isLoading }: Props) {
                     ) : null}
                   </TableCell>
                   {/* Business name */}
-                  <TableCell className="font-medium text-primary">
-                    <div className="flex items-center gap-1.5">
-                      {lead.business_name}
+                  <TableCell className="font-medium text-primary truncate">
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <span className="truncate">{lead.business_name}</span>
                       {needsRescrape(lead) && (
-                        <Badge variant="destructive" className="text-[8px] h-4 px-1">
+                        <Badge variant="destructive" className="text-[8px] h-4 px-1 shrink-0">
                           re-scrape
                         </Badge>
                       )}
@@ -168,9 +147,9 @@ export function LeadsTable({ leads, isLoading }: Props) {
                     ) : "\u2014"}
                   </TableCell>
                   {/* Email */}
-                  <TableCell>
+                  <TableCell className="truncate">
                     {lead.email ? (
-                      <span className="text-xs text-primary truncate max-w-[180px] block">
+                      <span className="text-xs text-primary">
                         {lead.email}
                       </span>
                     ) : (
@@ -178,7 +157,7 @@ export function LeadsTable({ leads, isLoading }: Props) {
                     )}
                   </TableCell>
                   {/* Area */}
-                  <TableCell className="text-xs text-muted-foreground">
+                  <TableCell className="text-xs text-muted-foreground truncate">
                     {lead.location_area ?? "\u2014"}
                   </TableCell>
                   {/* Score */}
@@ -216,6 +195,7 @@ export function LeadsTable({ leads, isLoading }: Props) {
               ))}
             </TableBody>
           </Table>
+          </div>
         </Card>
       )}
 

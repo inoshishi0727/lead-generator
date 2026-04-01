@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { LeadsTable } from "@/components/leads-table";
 import { useLeads, useEnrichLeads } from "@/hooks/use-leads";
 import { Input } from "@/components/ui/input";
@@ -29,6 +29,9 @@ export default function LeadsPage() {
   const [source, setSource] = useState("");
   const [stage, setStage] = useState("");
   const [search, setSearch] = useState("");
+  const [category, setCategory] = useState("");
+  const [fit, setFit] = useState("");
+  const [area, setArea] = useState("");
   const [emailOnly, setEmailOnly] = useState(true);
   const enrichMutation = useEnrichLeads();
 
@@ -38,12 +41,58 @@ export default function LeadsPage() {
     search: search || undefined,
   });
 
-  const leads = emailOnly
-    ? (rawLeads ?? []).filter((l) => l.email)
-    : (rawLeads ?? []);
+  const allLeads = rawLeads ?? [];
+
+  // Each dropdown's counts respect all OTHER active filters
+  const FIT_ORDER = ["strong", "moderate", "weak", "unknown"];
+
+  const categoryOptions = useMemo(() => {
+    let pool = emailOnly ? allLeads.filter((l) => l.email) : allLeads;
+    if (fit) pool = pool.filter((l) => l.menu_fit === fit);
+    if (area) pool = pool.filter((l) => l.location_area === area);
+    const counts = new Map<string, number>();
+    pool.forEach((l) => {
+      const c = l.venue_category || l.category;
+      if (c) counts.set(c, (counts.get(c) ?? 0) + 1);
+    });
+    return Array.from(counts.entries()).sort(([, a], [, b]) => b - a);
+  }, [allLeads, emailOnly, fit, area]);
+
+  const fitOptions = useMemo(() => {
+    let pool = emailOnly ? allLeads.filter((l) => l.email) : allLeads;
+    if (category) pool = pool.filter((l) => (l.venue_category || l.category) === category);
+    if (area) pool = pool.filter((l) => l.location_area === area);
+    const counts = new Map<string, number>();
+    pool.forEach((l) => {
+      if (l.menu_fit) counts.set(l.menu_fit, (counts.get(l.menu_fit) ?? 0) + 1);
+    });
+    return Array.from(counts.entries()).sort(
+      ([a], [b]) => (FIT_ORDER.indexOf(a) === -1 ? 99 : FIT_ORDER.indexOf(a)) - (FIT_ORDER.indexOf(b) === -1 ? 99 : FIT_ORDER.indexOf(b))
+    );
+  }, [allLeads, emailOnly, category, area]);
+
+  const areaOptions = useMemo(() => {
+    let pool = emailOnly ? allLeads.filter((l) => l.email) : allLeads;
+    if (category) pool = pool.filter((l) => (l.venue_category || l.category) === category);
+    if (fit) pool = pool.filter((l) => l.menu_fit === fit);
+    const counts = new Map<string, number>();
+    pool.forEach((l) => {
+      if (l.location_area) counts.set(l.location_area, (counts.get(l.location_area) ?? 0) + 1);
+    });
+    return Array.from(counts.entries()).sort(([a], [b]) => a.localeCompare(b));
+  }, [allLeads, emailOnly, category, fit]);
+
+  const leads = useMemo(() => {
+    let filtered = allLeads;
+    if (emailOnly) filtered = filtered.filter((l) => l.email);
+    if (category) filtered = filtered.filter((l) => (l.venue_category || l.category) === category);
+    if (fit) filtered = filtered.filter((l) => l.menu_fit === fit);
+    if (area) filtered = filtered.filter((l) => l.location_area === area);
+    return filtered;
+  }, [allLeads, emailOnly, category, fit, area]);
 
   const total = leads.length;
-  const totalRaw = rawLeads?.length ?? 0;
+  const totalRaw = allLeads.length;
 
   return (
     <div className="space-y-6">
@@ -104,6 +153,45 @@ export default function LeadsPage() {
           {STAGE_OPTIONS.map((opt) => (
             <option key={opt.value} value={opt.value}>
               {opt.label}
+            </option>
+          ))}
+        </select>
+
+        <select
+          value={category}
+          onChange={(e) => setCategory(e.target.value)}
+          className="rounded-md border border-input bg-background px-3 py-2 text-sm capitalize"
+        >
+          <option value="">All Categories</option>
+          {categoryOptions.map(([c, count]) => (
+            <option key={c} value={c} className="capitalize">
+              {c.replace(/_/g, " ")} ({count})
+            </option>
+          ))}
+        </select>
+
+        <select
+          value={fit}
+          onChange={(e) => setFit(e.target.value)}
+          className="rounded-md border border-input bg-background px-3 py-2 text-sm capitalize"
+        >
+          <option value="">All Fits</option>
+          {fitOptions.map(([f, count]) => (
+            <option key={f} value={f} className="capitalize">
+              {f} ({count})
+            </option>
+          ))}
+        </select>
+
+        <select
+          value={area}
+          onChange={(e) => setArea(e.target.value)}
+          className="rounded-md border border-input bg-background px-3 py-2 text-sm"
+        >
+          <option value="">All Areas</option>
+          {areaOptions.map(([a, count]) => (
+            <option key={a} value={a}>
+              {a} ({count})
             </option>
           ))}
         </select>
