@@ -114,6 +114,11 @@ export function LeadsTable({ leads, isLoading }: Props) {
                   {/* Business name */}
                   <TableCell className="font-medium text-primary truncate">
                     <span className="truncate">{lead.business_name}</span>
+                    {lead.source === "manual" && lead.enrichment_status !== "success" && (
+                      <Badge variant="outline" className="ml-2 text-[9px] border-blue-500/30 text-blue-400">
+                        Pending enrichment
+                      </Badge>
+                    )}
                   </TableCell>
                   {/* Category */}
                   <TableCell>

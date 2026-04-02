@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import { getLeads } from "@/lib/firestore-api";
+import { getLeads, createLead } from "@/lib/firestore-api";
 import type { Lead } from "@/lib/types";
 
 const useFirestore = !process.env.NEXT_PUBLIC_API_URL;
@@ -23,6 +23,20 @@ export function useLeads(filters?: LeadFilters) {
     queryKey: ["leads", filters],
     queryFn: () =>
       useFirestore ? getLeads(filters) : api.get<Lead[]>(path),
+  });
+}
+
+export function useCreateLead() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: {
+      business_name: string;
+      website?: string | null;
+      instagram_handle?: string | null;
+    }) => createLead(data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["leads"] });
+    },
   });
 }
 

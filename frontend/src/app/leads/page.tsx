@@ -3,19 +3,22 @@
 import { useState, useMemo } from "react";
 import { LeadsTable } from "@/components/leads-table";
 import { useLeads, useEnrichLeads } from "@/hooks/use-leads";
+import { QuickAddLeadDialog } from "@/components/quick-add-lead-dialog";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/lib/auth-context";
-import { Search, Sparkles, Loader2 } from "lucide-react";
+import { Search, Sparkles, Loader2, Plus } from "lucide-react";
 
 const SOURCE_OPTIONS = [
   { value: "", label: "All Sources" },
   { value: "google_maps", label: "Google Maps" },
   { value: "instagram", label: "Instagram" },
+  { value: "manual", label: "Manual" },
 ];
 
 const STAGE_OPTIONS = [
   { value: "", label: "All Stages" },
+  { value: "pending_enrichment", label: "Pending Enrichment" },
   { value: "scraped", label: "Scraped" },
   { value: "needs_email", label: "Needs Email" },
   { value: "scored", label: "Scored" },
@@ -33,15 +36,20 @@ export default function LeadsPage() {
   const [fit, setFit] = useState("");
   const [postcode, setPostcode] = useState("");
   const [emailOnly, setEmailOnly] = useState(true);
+  const [showQuickAdd, setShowQuickAdd] = useState(false);
   const enrichMutation = useEnrichLeads();
 
   // Extract outward code (district) from a UK postcode, e.g. "SE26 5HS" -> "SE26"
   const getDistrict = (pc: string | null | undefined) =>
     pc ? pc.trim().split(/\s+/)[0]?.toUpperCase() : null;
 
+  // "pending_enrichment" is a virtual stage filtered client-side, not a real Firestore value
+  const firestoreStage = stage === "pending_enrichment" ? undefined : stage;
+  const firestoreSource = source === "manual" ? undefined : source;
+
   const { data: rawLeads, isLoading } = useLeads({
-    source: source || undefined,
-    stage: stage || undefined,
+    source: firestoreSource || undefined,
+    stage: firestoreStage || undefined,
     search: search || undefined,
   });
 
@@ -89,12 +97,15 @@ export default function LeadsPage() {
 
   const leads = useMemo(() => {
     let filtered = allLeads;
+    if (source === "manual") filtered = filtered.filter((l) => l.source === "manual");
+    if (stage === "pending_enrichment")
+      filtered = filtered.filter((l) => l.enrichment_status !== "success");
     if (emailOnly) filtered = filtered.filter((l) => l.email);
     if (category) filtered = filtered.filter((l) => (l.venue_category || l.category) === category);
     if (fit) filtered = filtered.filter((l) => l.menu_fit === fit);
     if (postcode) filtered = filtered.filter((l) => getDistrict(l.location_postcode) === postcode);
     return filtered;
-  }, [allLeads, emailOnly, category, fit, postcode]);
+  }, [allLeads, source, stage, emailOnly, category, fit, postcode]);
 
   const total = leads.length;
   const totalRaw = allLeads.length;
@@ -109,19 +120,29 @@ export default function LeadsPage() {
           </p>
         </div>
         {isAdmin && (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => enrichMutation.mutate({})}
-            disabled={enrichMutation.isPending}
-          >
-            {enrichMutation.isPending ? (
-              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Sparkles className="mr-1.5 h-3.5 w-3.5" />
-            )}
-            Enrich All
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowQuickAdd(true)}
+            >
+              <Plus className="mr-1.5 h-3.5 w-3.5" />
+              Quick Add
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => enrichMutation.mutate({})}
+              disabled={enrichMutation.isPending}
+            >
+              {enrichMutation.isPending ? (
+                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Sparkles className="mr-1.5 h-3.5 w-3.5" />
+              )}
+              Enrich All
+            </Button>
+          </div>
         )}
       </div>
 
@@ -230,6 +251,11 @@ export default function LeadsPage() {
       <div data-tour="leads-table">
         <LeadsTable leads={leads} isLoading={isLoading} />
       </div>
+
+      <QuickAddLeadDialog
+        open={showQuickAdd}
+        onClose={() => setShowQuickAdd(false)}
+      />
     </div>
   );
 }

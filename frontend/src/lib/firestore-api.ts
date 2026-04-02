@@ -283,6 +283,39 @@ export async function getInboundReplies(filters?: {
   return results;
 }
 
+// --- Create a manual lead ---
+
+export async function createLead(data: {
+  business_name: string;
+  website?: string | null;
+  instagram_handle?: string | null;
+}): Promise<string> {
+  const id = crypto.randomUUID();
+  const now = new Date().toISOString();
+  const ref = collection(db, "leads");
+  const docRef = await addDoc(ref, {
+    id,
+    business_name: data.business_name.trim(),
+    website: data.website || null,
+    instagram_handle: data.instagram_handle || null,
+    source: "manual",
+    stage: "scraped",
+    scraped_at: now,
+    updated_at: now,
+    email: null,
+    email_found: false,
+    phone: null,
+    address: null,
+    category: null,
+    rating: null,
+    review_count: null,
+    score: null,
+    enrichment: {},
+    dedup_key: `manual|${data.business_name.trim().toLowerCase()}|`,
+  });
+  return docRef.id;
+}
+
 export async function restoreOriginalEmail(messageId: string): Promise<void> {
   const ref = doc(db, "outreach_messages", messageId);
   const snap = await getDoc(ref);
