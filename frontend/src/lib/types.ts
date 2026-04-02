@@ -64,6 +64,12 @@ export interface Lead {
   client_status: string | null;
   rejection_reason: string | null;
   batch_id: string | null;
+  // Reply tracking
+  human_takeover: boolean;
+  human_takeover_at: string | null;
+  outcome: LeadOutcome | null;
+  outcome_updated_at: string | null;
+  reply_count: number;
 }
 
 export interface LeadDetail extends Lead {
@@ -98,6 +104,32 @@ export interface OutreachMessage {
   menu_fit: string | null;
   recipient_email: string | null;
   website: string | null;
+  original_content?: string;
+  original_subject?: string;
+  was_edited?: boolean;
+  edited_at?: string | null;
+  rejection_reason?: string | null;
+  has_reply?: boolean;
+  reply_count?: number;
+  sent_at?: string | null;
+}
+
+// --- Reply Tracking ---
+
+export type LeadOutcome = "ongoing" | "converted" | "lost" | "not_interested" | "snoozed";
+
+export interface InboundReply {
+  id: string;
+  lead_id: string | null;
+  message_id: string | null;
+  from_email: string;
+  from_name: string | null;
+  subject: string | null;
+  body: string;
+  source: "email_forward" | "manual";
+  matched: boolean;
+  created_at: string;
+  forwarded_by: string | null;
 }
 
 // --- Analytics ---

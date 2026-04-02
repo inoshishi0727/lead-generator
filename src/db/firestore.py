@@ -407,3 +407,19 @@ def log_activity(
         log.debug("activity_logged", event_type=event_type)
     except Exception as exc:
         log.warning("log_activity_failed", error=str(exc))
+
+
+def save_edit_feedback(feedback: dict) -> bool:
+    """Save an edit feedback record with diff to the edit_feedback collection."""
+    db = get_firestore_client()
+    if db is None:
+        return False
+
+    try:
+        doc_ref = db.collection("edit_feedback").document()
+        doc_ref.set(feedback)
+        log.info("edit_feedback_saved", message_id=feedback.get("message_id"))
+        return True
+    except Exception as exc:
+        log.warning("save_edit_feedback_failed", error=str(exc))
+        return False

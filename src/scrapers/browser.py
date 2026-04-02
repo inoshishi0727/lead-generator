@@ -33,11 +33,23 @@ async def launch_browser(headless: bool = False) -> tuple[Any, str]:
     """Launch a stealth browser. Tries Camoufox first, falls back to CloakBrowser.
 
     Returns (browser_instance, engine_name).
+    Browser windows are moved off-screen so they don't steal focus.
     """
     # Try Camoufox
     try:
         from camoufox.async_api import AsyncCamoufox
-        browser = await AsyncCamoufox(headless=headless).__aenter__()
+        browser = await AsyncCamoufox(
+            headless=headless,
+            locale=["en-GB"],
+            firefox_user_prefs={
+                "browser.tabs.loadDivertedInBackground": True,
+                "browser.tabs.loadInBackground": True,
+                "dom.disable_window_flip": True,
+                "intl.accept_languages": "en-GB,en",
+            },
+        ).__aenter__()
+        # Move window off-screen so it doesn't steal focus
+        await _move_offscreen(browser)
         log.info("browser_launched", engine="camoufox", headless=headless)
         return browser, "camoufox"
     except Exception as exc:
@@ -46,8 +58,27 @@ async def launch_browser(headless: bool = False) -> tuple[Any, str]:
     # Fallback to CloakBrowser
     from cloakbrowser import launch_async
     browser = await launch_async(headless=headless)
+    await _move_offscreen(browser)
     log.info("browser_launched", engine="cloakbrowser", headless=headless)
     return browser, "cloakbrowser"
+
+
+async def _move_offscreen(browser: Any) -> None:
+    """Move all browser windows off-screen to prevent focus stealing."""
+    try:
+        for context in browser.contexts:
+            for page in context.pages:
+                await move_page_offscreen(page)
+    except Exception:
+        pass
+
+
+async def move_page_offscreen(page: Any) -> None:
+    """Move a single page's window off-screen."""
+    try:
+        await page.evaluate("() => window.moveTo(-10000, -10000)")
+    except Exception:
+        pass
 
 
 async def close_browser(browser: Any, engine: str) -> None:

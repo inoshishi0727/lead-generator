@@ -1,4 +1,4 @@
-Write a short cold email from Rob, founder of Asterley Bros (English Vermouth, Amaro, Aperitivo, based in SE26 London), to a potential stockist.
+Write a cold outreach email from Rob, founder of Asterley Bros (English Vermouth, Amaro, Aperitivo, based in SE26 London), to a potential stockist.
 
 VENUE: {business_name}
 TYPE: {venue_category}
@@ -12,85 +12,103 @@ STEP: {step_number}
 
 {step_instructions}
 
-PRODUCTS (pick ONE, mention ONE serve):
-- Schofield's: English Dry Vermouth. Makes the ultimate Martini (and a banging White Negroni).
-- Estate: English Sweet Vermouth. For Negronis and Manhattans.
+{category_rules}
+
+PRODUCTS (pick 1-2, mention specific serves):
+- Schofield's: English Dry Vermouth. Created with bartenders Joe and Daniel Schofield. Makes the ultimate Martini (and a banging White Negroni). Crisp, herbaceous, distinctly British.
+- Estate: English Sweet Vermouth. For Negronis and Manhattans. British grapes.
 - Rosé: Rosé Vermouth. For Spritzes and Americanos.
-- Asterley Original: British Aperitivo, 12%. Makes a cracking Spritz.
-- Dispense: Modern British Amaro, 24 botanicals. Digestivo. Spiced Ginger Spritz for summer.
+- Asterley Original: British Aperitivo, 12%. Makes a cracking Spritz. Brilliant alternative to Campari.
+- Dispense: Modern British Amaro, 24 botanicals, Pinot Noir base. Digestivo. Spiced Ginger Spritz for summer. Makes an incredible Negroni.
 - Britannica: London Fernet. Hanky Panky.
+
+EMAIL STRUCTURE (follow this order):
+
+1. GREETING
+2. IDENTITY + HOOK (1-2 sentences: who we are, why we're reaching out, warm and direct)
+3. EARLY CTA on its own line ("Can I drop in with some samples?" / "I'd love you to try..." — standalone, blank line above and below)
+4. PRODUCT DETAIL (2-3 sentences: specific products, serves, why they're relevant to this venue)
+5. VENUE OBSERVATION (1-2 sentences: genuine, specific. Woven naturally in the middle, NOT as the opening)
+6. CLOSING CTA ("When's a good time to catch you?" / "When's good for you?" — suggest quieter times: weekday afternoons, before the rush. NEVER weekends. Rarely past 6pm.)
+7. SIGN-OFF (just "Cheers," or "All the best," — nothing after it, the HTML signature handles name/contact)
 
 Rob's real emails sound like this. Match this voice EXACTLY:
 
-EMAIL A:
-Subject: Quick one about Vermouth
+EMAIL A (cocktail bar, confirmed contact):
+Subject: English Vermouth for the Spring menu
 
-Hi team,
+Hi Tom,
 
-I'm Rob from Asterley Bros, we make English Vermouth and Amaro in SE26. Our Schofield's Dry Vermouth makes a proper Martini. Created it with Joe and Daniel Schofield.
+We're Asterley Bros, makers of English Vermouth and Amaro in SE26. I'd love you to try our Schofield's Dry Vermouth in your Martini programme and see what you think.
 
-Can I send some samples over for the team?
+Can I swing by one afternoon with some samples?
 
-When's good?
+Schofield's was created with bartenders Joe and Daniel Schofield. Crisp, herbaceous, distinctly British. Designed for the ultimate Martini (and a banging White Negroni too!). Quite different from the classic styles, and I think it could work really well in your Spring menu.
 
-Cheers,
+Saw the TimeOut piece recently and it looked great. Congrats! The whole stirred-down classics direction is exactly the kind of programme our bottles are made for.
 
-Rob
-Asterley Bros
-asterleybros.com
+I'd love to pop in, try one of your Martinis, and leave you with some bottles to play with. No pitch, just a tasting.
 
-EMAIL B (has interesting drink on menu):
-Subject: Spritz for summer
-
-Hi team,
-
-Rob here, Asterley Bros, SE26. I saw your Rhubarb Sour on the menu, sounds great. Would love to try that.
-
-We make Asterley Original, a British Aperitivo. Makes a cracking Spritz. Can I send some samples?
-
-When's a good time?
+When's a good time to catch you?
 
 Cheers,
 
-Rob
-Asterley Bros
-asterleybros.com
+EMAIL B (wine bar, owner with Italian heritage, nearby):
+Subject: English Aperitivo for the aperitivo menu?
 
-EMAIL C (known contact, nearby):
-Subject: Vermouth from down the road
+Hi Francesca,
 
-Hi Frederic,
+We're Asterley Bros, makers of English Vermouth and Amaro practically round the corner from you in SE26. I think our bottles would be a really natural fit for your aperitivo programme, especially with Spritz season kicking off.
 
-Rob from Asterley Bros. We're in SE26, practically neighbours. Our Schofield's Dry Vermouth makes a brilliant Martini.
+Can I pop in one afternoon and bring some to try?
 
-Happy to drop some samples in next time I'm passing. Are you at the shop most days?
+Our Asterley Original is a gorgeous British Aperitivo that's a brilliant alternative to Campari in spritzes. And Estate is our English Sweet Vermouth that could be really interesting on your vermouth tap. My wife is Sicilian and I inherited a family Amaro recipe, which is basically how all of this started.
 
-All the best,
+Just saw you've launched the Sunday aperitivo hour and it looks brilliant. Much better to taste everything in person than go on about it over email!
 
-Rob
-Asterley Bros
-asterleybros.com
+When's good to catch you on a quieter day?
+
+Cheers,
+
+EMAIL C (gastropub, confirmed contact, nearby):
+Subject: Local spirits for the new cocktail list
+
+Hi Mike,
+
+We're Asterley Bros, makers of English Vermouth and Amaro just down the road in SE26. Given your Borough Market sourcing and the British focus, I think our range could be a really natural fit for the new cocktail programme.
+
+Happy to pop in one afternoon and bring some bottles along?
+
+Our Dispense Amaro makes a brilliant simple highball with ginger ale: sessionable, a bit different, and really easy for the team to make. Great one for a Spring menu. And if you're doing Negronis on the expanded list, our Estate Sweet Vermouth makes a gorgeous one.
+
+Saw on Instagram you've expanded from four to twelve cocktails. That's a proper commitment and it's great to see!
+
+When's a good time to catch you during the week?
+
+Cheers,
 
 RULES:
-- 60-90 words. Not less than 60, not more than 90.
-- ONE product. ONE serve. A second product can go in brackets max.
-- If DRINKS ON MENU has a genuinely unusual named cocktail (not Negroni/Martini/Spritz/G&T/Espresso Martini/Old Fashioned), mention it: "I saw your [name] on the menu, sounds great." Otherwise say NOTHING about the venue. No "I noticed," "I saw your site," "I was checking out." Just pitch.
-- Use first name if contact confidence is "verified" or "likely." Otherwise "Hi team."
-- Title case product names: Schofield's, Dispense, Estate, Rosé, Asterley Original.
+- 120-160 words. Not less than 120, not more than 160.
+- 1-2 products with specific serves. A second product is encouraged if relevant.
+- TWO CTAs total: one soft/early (standalone line), one direct at the closing.
+- Venue observations go in the MIDDLE, not the opening. Reference things discovered online with honest framing. Never pretend you've visited.
+- Use first name if contact confidence is "verified" or "likely." Otherwise "Hi team" or "Hi there."
+- Title case product names: Schofield's, Dispense, Estate, Rosé, Asterley Original, Britannica.
 - No em dashes or en dashes.
-- London venues: suggest popping in. Outside London: suggest sending samples.
-- Say "samples" never "bottles."
-- Say "the bar" not "your bar."
+- London venues: suggest popping in during quieter times. Outside London: suggest sending samples.
+- Say "samples" or "bottles" — both fine.
 - Drop location suffixes from venue names (e.g. "Simmons | Kings Cross" becomes "Simmons").
-- Sign off: Cheers/All the best/Best regards depending on tone. Then Rob, Asterley Bros, asterleybros.com.
-- Do NOT compare to Italian or French styles.
-- Do NOT compliment the venue concept, vibe, atmosphere, or approach.
+- Sign off with ONLY "Cheers," or "All the best," or "Best regards," depending on tone. Do NOT add a name, company, or URL after the sign-off — the HTML signature handles that.
+- Do NOT compare to Italian or French styles. Say "classic styles" instead.
+- Do NOT compliment the venue concept, vibe, atmosphere, or approach in generic terms. Be specific or say nothing.
 - Do NOT use: "genuinely," "distinct," "unique," "versatile," "vibrant," "exceptional," "ambitious," "interesting addition," "great fit," "I noticed," "I've been admiring," "I'm familiar with," "which look ideal," "really impressed," "your focus on," "your commitment."
+- Shorter paragraphs, more line breaks. Skimmable on a phone.
+- "No pitch, just a tasting" is a great closer when suggesting a visit.
 
 SUBJECT LINE RULES:
-- Every email must have a DIFFERENT subject line. Never repeat "Spritz for summer" or any other subject across emails.
+- Every email must have a DIFFERENT subject line. Never repeat subjects across emails.
 - Keep it short (3-7 words), specific, and intriguing. Not generic.
-- Good examples: "Quick one about Vermouth," "Amaro from down the road," "Martini Vermouth from SE26," "English Aperitivo for spring."
-- Bad examples: "Spritz for summer" (too generic, everyone says this), "English Vermouth and Amaro" (boring list).
+- Good examples: "Quick one about Vermouth," "Amaro from down the road," "Martini Vermouth from SE26," "English Aperitivo for spring," "Your neighbours in SE26!"
+- Bad examples: "Spritz for summer" (too generic), "English Vermouth and Amaro" (boring list).
 
 Output ONLY "Subject:" then the email. Nothing else.

@@ -11,10 +11,18 @@ import {
   Loader2,
   Clock,
   Send,
+  ChevronDown,
+  AlarmClock,
+  Building2,
+  MessageSquareMore,
+  Reply,
 } from "lucide-react";
+import { EditMessageDialog } from "@/components/edit-message-dialog";
+import { LogReplyDialog } from "@/components/log-reply-dialog";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Menu, MenuTrigger, MenuContent, MenuItem } from "@/components/ui/menu";
 import type { OutreachMessage } from "@/lib/types";
 import {
   useUpdateMessage,
@@ -37,6 +45,11 @@ const statusColors: Record<string, string> = {
   sent: "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400",
 };
 
+const rejectionColors: Record<string, string> = {
+  current_account: "bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400",
+  in_discussion: "bg-sky-100 text-sky-800 dark:bg-sky-900/30 dark:text-sky-400",
+};
+
 function formatDate(dateStr: string | null): string {
   if (!dateStr) return "";
   try {
@@ -53,10 +66,19 @@ function formatDate(dateStr: string | null): string {
   }
 }
 
+const REJECTION_LABELS: Record<string, string> = {
+  snoozed: "Snoozed",
+  current_account: "Current Account",
+  in_discussion: "In Discussion",
+};
+
+function rejectionLabel(reason: string): string {
+  return REJECTION_LABELS[reason] ?? "rejected";
+}
+
 export function MessageCard({ message }: Props) {
-  const [editing, setEditing] = useState(false);
-  const [editContent, setEditContent] = useState(message.content);
-  const [editSubject, setEditSubject] = useState(message.subject ?? "");
+  const [editDialogOpen, setEditDialogOpen] = useState(false);
+  const [logReplyOpen, setLogReplyOpen] = useState(false);
 
   const { isAdmin } = useAuth();
   const updateMutation = useUpdateMessage();
@@ -68,34 +90,30 @@ export function MessageCard({ message }: Props) {
   const isRegenerating = regenerateMutation.isPending || generatingLeadId === message.lead_id;
 
   function handleApprove() {
-    const updates: { id: string; status: string; content?: string; subject?: string } = {
-      id: message.id,
-      status: "approved",
-    };
-    if (editing) {
-      updates.content = editContent;
-      if (message.channel === "email") updates.subject = editSubject;
-    }
-    updateMutation.mutate(updates);
-    setEditing(false);
+    updateMutation.mutate({ id: message.id, status: "approved" });
   }
 
-  function handleReject() {
-    updateMutation.mutate({ id: message.id, status: "rejected" });
+  function handleRejectWithReason(reason: string) {
+    updateMutation.mutate({
+      id: message.id,
+      status: "rejected",
+      rejection_reason: reason,
+      lead_id: message.lead_id,
+    });
   }
 
   function handleRegenerate() {
     regenerateMutation.mutate(message.id);
   }
 
-  function handleSaveEdit() {
+  function handleDialogSave(content: string, subject?: string) {
     const updates: { id: string; content: string; subject?: string } = {
       id: message.id,
-      content: editContent,
+      content,
     };
-    if (message.channel === "email") updates.subject = editSubject;
+    if (subject !== undefined) updates.subject = subject;
     updateMutation.mutate(updates);
-    setEditing(false);
+    setEditDialogOpen(false);
   }
 
   const isPending =
@@ -111,13 +129,19 @@ export function MessageCard({ message }: Props) {
           </span>
           <Badge
             variant="outline"
-            className={statusColors[message.status] ?? ""}
+            className={
+              (message.status === "rejected" && message.rejection_reason
+                ? rejectionColors[message.rejection_reason]
+                : undefined) ?? statusColors[message.status] ?? ""
+            }
           >
             {isRegenerating ? (
               <span className="flex items-center gap-1">
                 <Loader2 className="h-3 w-3 animate-spin" />
                 Regenerating
               </span>
+            ) : message.status === "rejected" && message.rejection_reason ? (
+              rejectionLabel(message.rejection_reason)
             ) : (
               message.status
             )}
@@ -139,6 +163,18 @@ export function MessageCard({ message }: Props) {
           {message.tone_tier && (
             <Badge variant="outline" className="capitalize text-xs">
               {message.tone_tier.replace(/_/g, " ")}
+            </Badge>
+          )}
+          {message.was_edited && (
+            <Badge variant="outline" className="gap-1 text-xs border-blue-500/30 text-blue-500">
+              <Pencil className="h-2.5 w-2.5" />
+              Edited
+            </Badge>
+          )}
+          {message.has_reply && (
+            <Badge variant="outline" className="gap-1 text-xs border-green-500/30 text-green-600">
+              <Reply className="h-2.5 w-2.5" />
+              {message.reply_count || 1} {(message.reply_count || 1) === 1 ? "reply" : "replies"}
             </Badge>
           )}
           {/* Date/time */}
@@ -187,17 +223,9 @@ export function MessageCard({ message }: Props) {
         {message.channel === "email" && (
           <div>
             <p className="text-xs text-muted-foreground mb-0.5">Subject</p>
-            {editing ? (
-              <input
-                className="w-full rounded border border-input bg-background px-2 py-1 text-sm"
-                value={editSubject}
-                onChange={(e) => setEditSubject(e.target.value)}
-              />
-            ) : (
-              <p className="text-sm font-medium">
-                {message.subject || "(no subject)"}
-              </p>
-            )}
+            <p className="text-sm font-medium">
+              {message.subject || "(no subject)"}
+            </p>
           </div>
         )}
 
@@ -209,12 +237,6 @@ export function MessageCard({ message }: Props) {
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
               <span className="ml-2 text-sm text-muted-foreground">Regenerating draft...</span>
             </div>
-          ) : editing ? (
-            <textarea
-              className="w-full min-h-[160px] rounded border border-input bg-background px-2 py-1.5 text-sm leading-relaxed"
-              value={editContent}
-              onChange={(e) => setEditContent(e.target.value)}
-            />
           ) : (
             <div className="whitespace-pre-wrap text-sm leading-relaxed rounded bg-muted/30 p-3">
               {message.content}
@@ -238,15 +260,36 @@ export function MessageCard({ message }: Props) {
               </Button>
             )}
             {isAdmin && (
-              <Button
-                size="sm"
-                variant="destructive"
-                onClick={handleReject}
-                disabled={isPending}
-              >
-                <X className="mr-1 h-3.5 w-3.5" />
-                Reject
-              </Button>
+              <Menu>
+                <MenuTrigger
+                  disabled={isPending}
+                  render={
+                    <Button
+                      size="sm"
+                      variant="destructive"
+                      disabled={isPending}
+                    >
+                      <X className="mr-1 h-3.5 w-3.5" />
+                      Reject
+                      <ChevronDown className="ml-0.5 h-3 w-3" />
+                    </Button>
+                  }
+                />
+                <MenuContent side="bottom" align="start" sideOffset={4}>
+                  <MenuItem onClick={() => handleRejectWithReason("snoozed")}>
+                    <AlarmClock className="h-3.5 w-3.5" />
+                    Snooze until next week
+                  </MenuItem>
+                  <MenuItem onClick={() => handleRejectWithReason("current_account")}>
+                    <Building2 className="h-3.5 w-3.5" />
+                    Current account
+                  </MenuItem>
+                  <MenuItem onClick={() => handleRejectWithReason("in_discussion")}>
+                    <MessageSquareMore className="h-3.5 w-3.5" />
+                    In discussion (60 days)
+                  </MenuItem>
+                </MenuContent>
+              </Menu>
             )}
             <Button
               size="sm"
@@ -261,26 +304,15 @@ export function MessageCard({ message }: Props) {
               )}
               Regenerate
             </Button>
-            {!editing ? (
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => setEditing(true)}
-                disabled={isPending}
-              >
-                <Pencil className="mr-1 h-3.5 w-3.5" />
-                Edit
-              </Button>
-            ) : (
-              <Button
-                size="sm"
-                variant="secondary"
-                onClick={handleSaveEdit}
-                disabled={isPending}
-              >
-                Save Edit
-              </Button>
-            )}
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setEditDialogOpen(true)}
+              disabled={isPending}
+            >
+              <Pencil className="mr-1 h-3.5 w-3.5" />
+              Edit
+            </Button>
           </div>
         )}
         {/* Send + Unapprove buttons for approved messages */}
@@ -311,9 +343,33 @@ export function MessageCard({ message }: Props) {
             </Button>
           </div>
         )}
-        {/* Reset to draft button for sent messages */}
+        {/* Back to draft button for rejected messages */}
+        {message.status === "rejected" && isAdmin && (
+          <div className="flex items-center gap-2 pt-1">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => updateMutation.mutate({ id: message.id, status: "draft" })}
+              disabled={updateMutation.isPending}
+            >
+              <RefreshCw className="mr-1 h-3.5 w-3.5" />
+              Back to Draft
+            </Button>
+          </div>
+        )}
+        {/* Log Reply + Reset for sent messages */}
         {message.status === "sent" && isAdmin && (
           <div className="flex items-center gap-2 pt-1">
+            <Button
+              size="sm"
+              variant="outline"
+              className="border-green-500 text-green-600 hover:bg-green-50 dark:hover:bg-green-950/20"
+              onClick={() => setLogReplyOpen(true)}
+              disabled={isPending}
+            >
+              <Reply className="mr-1 h-3.5 w-3.5" />
+              Log Reply
+            </Button>
             <Button
               size="sm"
               variant="outline"
@@ -326,6 +382,21 @@ export function MessageCard({ message }: Props) {
           </div>
         )}
       </CardContent>
+
+      {editDialogOpen && (
+        <EditMessageDialog
+          message={message}
+          onSave={handleDialogSave}
+          onClose={() => setEditDialogOpen(false)}
+        />
+      )}
+
+      {logReplyOpen && (
+        <LogReplyDialog
+          message={message}
+          onClose={() => setLogReplyOpen(false)}
+        />
+      )}
     </Card>
   );
 }

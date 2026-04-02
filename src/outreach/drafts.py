@@ -1,12 +1,12 @@
-"""Gemini 2.0 Flash draft generation for outreach messages."""
+"""Anthropic Claude draft generation for outreach messages."""
 
 from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
 
+import anthropic
 import structlog
-from google import genai
 
 from src.config.loader import AppConfig, load_config
 from src.db.models import Lead, OutreachChannel, OutreachMessage
@@ -50,6 +50,131 @@ STEP_INSTRUCTIONS: dict[int, str] = {
         "CTA: 'Just reply to this email and I'll get samples sent.' or 'Just let me know.' "
         "Same thread, subject: 'Re: [original subject from step 1]' "
         "Previous email subject was: {previous_subject}"
+    ),
+}
+
+# Category-specific rules from the SDR Venue Category Taxonomy
+CATEGORY_RULES: dict[str, str] = {
+    "cocktail_bar": (
+        "CATEGORY: Cocktail Bar. Lead with DISPENSE and SCHOFIELD'S. "
+        "Tone: Bartender-to-bartender. Technical respect. Punchy, warm. "
+        "CTA: Suggest dropping in for a drink and leaving samples. "
+        "Greeting: 'Hi team' or first name. Sign-off: 'Cheers,'"
+    ),
+    "wine_bar": (
+        "CATEGORY: Wine Bar. Lead with ESTATE, ROSÉ, ASTERLEY ORIGINAL. "
+        "Tone: Sommelier-aware. Talk about grape base, low ABV, aperitivo culture. "
+        "CTA: Suggest popping in and bringing bottles to taste. "
+        "Greeting: 'Hi team' or first name. Sign-off: 'Cheers,' or 'All the best,'"
+    ),
+    "italian_restaurant": (
+        "CATEGORY: Italian Restaurant / Aperitivo Bar. Lead with DISPENSE, ASTERLEY ORIGINAL, ESTATE. "
+        "Tone: Respect the Italian tradition. Position as British counterpart, not replacement. "
+        "Mention 'My wife is Sicilian and I inherited a family Amaro recipe' if natural. "
+        "CTA: Suggest coming in for a meal and leaving samples. "
+        "Greeting: 'Hi team' or first name. Sign-off: 'Cheers,'"
+    ),
+    "gastropub": (
+        "CATEGORY: Gastropub. Lead with DISPENSE (highball with ginger ale) and ASTERLEY ORIGINAL. "
+        "Tone: Casual, local, 'down the road' energy. Lead with simple serves. "
+        "CTA: Suggest dropping in for a pint and bringing bottles. "
+        "Greeting: 'Hi team' or first name. Sign-off: 'Cheers,'"
+    ),
+    "hotel_bar": (
+        "CATEGORY: Hotel Bar. Lead with SCHOFIELD'S, DISPENSE, can mention full range. "
+        "Tone: Slightly more polished. Mention programme fit, not just a single serve. "
+        "CTA: Suggest coming in for a drink and discussing next menu rotation. "
+        "Greeting: 'Hi team' or first name. Sign-off: 'Cheers,' or 'All the best,'"
+    ),
+    "bottle_shop": (
+        "CATEGORY: Bottle Shop. Lead with full range, DISPENSE as hero. "
+        "Tone: Local story, shelf appeal, customer curiosity. "
+        "CTA: Suggest popping in, dropping off bottles, or Meet the Maker event. "
+        "Greeting: 'Hi team' or first name. Sign-off: 'Cheers,'"
+    ),
+    "deli_farm_shop": (
+        "CATEGORY: Deli / Farm Shop. Lead with full range, ASTERLEY ORIGINAL as entry point. "
+        "Tone: Provenance, 'made in London', artisan credentials, gifting angle. "
+        "CTA: Suggest dropping off samples and discussing gifting/shelf placement. "
+        "Greeting: 'Hi team' or first name. Sign-off: 'Cheers,' or 'All the best,'"
+    ),
+    "events_catering": (
+        "CATEGORY: Events & Contract Catering. Lead with ASTERLEY ORIGINAL (Spritz) and DISPENSE (Negroni). "
+        "Tone: Professional. Talk about programme fit, margin, ease of serve. Mention BiB supply. "
+        "CTA: Suggest a meeting or call to discuss supply. "
+        "Greeting: 'Hi team'. Sign-off: 'All the best,'"
+    ),
+    "rtd": (
+        "CATEGORY: RTD / White Label. Lead with bulk range and bespoke formulation capability. "
+        "Tone: B2B production language. Volume, spec, consistency, partnership. "
+        "CTA: Suggest a meeting to discuss capability and send samples. "
+        "Greeting: 'Hi team' or founders by name. Sign-off: 'All the best,' or 'Best regards,'"
+    ),
+    "restaurant_groups": (
+        "CATEGORY: Restaurant & Bar Groups. Lead with DISPENSE, SCHOFIELD'S, full range. "
+        "Tone: More formal. Lead with range breadth, supply reliability, story. Mention wholesaler availability. "
+        "CTA: Suggest a meeting with buyer/procurement team. "
+        "Greeting: 'Hi team' or buyer name. Sign-off: 'All the best,'"
+    ),
+    "festival_operators": (
+        "CATEGORY: Festival Bar Operators. Lead with ASTERLEY ORIGINAL (Spritz) and DISPENSE (highball). "
+        "Tone: Volume, simplicity, margin, weather-proof serves. Mention BiB supply. "
+        "CTA: Suggest a meeting or call to discuss supply before festival season. "
+        "Greeting: 'Hi team'. Sign-off: 'Cheers,'"
+    ),
+    "cookery_schools": (
+        "CATEGORY: Cookery Schools & Experiences. Lead with DISPENSE, SCHOFIELD'S, full range. "
+        "Tone: Educational. Story, technique, versatility. Suggest dedicated class collaboration. "
+        "CTA: Suggest dropping in with bottles and discussing collaboration. "
+        "Greeting: 'Hi team'. Sign-off: 'Cheers,'"
+    ),
+    "corporate_gifting": (
+        "CATEGORY: Corporate Gifting. Lead with full range, ASTERLEY ORIGINAL as most giftable. "
+        "Tone: Gifting language. Shelf appeal, story, British provenance. Mention trade pricing. "
+        "CTA: Suggest sending samples and discussing catalogue inclusion. "
+        "Greeting: 'Hi team'. Sign-off: 'All the best,'"
+    ),
+    "membership_clubs": (
+        "CATEGORY: Membership Clubs & Co-Working. Lead with DISPENSE, SCHOFIELD'S, ASTERLEY ORIGINAL. "
+        "Tone: Slightly elevated. Story-led, unique, conversation-starting. "
+        "CTA: Suggest coming in for a drink and bringing samples. "
+        "Greeting: 'Hi team'. Sign-off: 'Cheers,' or 'All the best,'"
+    ),
+    "airlines_trains": (
+        "CATEGORY: Airlines, Trains & Lounges. Lead with SCHOFIELD'S (Martini) and ASTERLEY ORIGINAL (Spritz). "
+        "Tone: Most formal. British provenance, premium positioning, volume. Mention BiB for lounges. "
+        "CTA: Suggest a meeting to discuss listing. "
+        "Greeting: 'Dear team'. Sign-off: 'Best regards,'"
+    ),
+    "subscription_boxes": (
+        "CATEGORY: Subscription Box Curators. Lead with full range, DISPENSE as hero. "
+        "Tone: Discovery language. Story, uniqueness, subscriber appeal. "
+        "CTA: Suggest sending samples and discussing featuring. "
+        "Greeting: 'Hi team'. Sign-off: 'Cheers,'"
+    ),
+    "film_tv_theatre": (
+        "CATEGORY: Film, TV & Theatre Production. Lead with full range as props/brands. "
+        "Tone: Creative, casual. Visual appeal, 'real brand' credibility. "
+        "CTA: Suggest sending bottles for reference library or prop supply. "
+        "Greeting: 'Hi team'. Sign-off: 'Cheers,'"
+    ),
+    "yacht_charter": (
+        "CATEGORY: Yacht & Private Charter. Lead with full range, premium positioning. "
+        "Tone: Luxury language. British craft, premium quality, unique. "
+        "CTA: Suggest sending samples to provisioning team. "
+        "Greeting: 'Dear team'. Sign-off: 'Best regards,'"
+    ),
+    "luxury_food_retail": (
+        "CATEGORY: Luxury Food Retail. Lead with full range. "
+        "Tone: Most polished. Award-winning, provenance, range breadth, gifting. "
+        "CTA: Suggest a meeting with the spirits/wine buyer. "
+        "Greeting: 'Dear team'. Sign-off: 'Best regards,'"
+    ),
+    "grocery": (
+        "CATEGORY: Grocery. Lead with ASTERLEY ORIGINAL and SCHOFIELD'S. "
+        "Tone: Commercial. Rate of sale, margin, range fit, promotional support. "
+        "CTA: Suggest a meeting with the buyer/category manager. "
+        "Greeting: 'Dear team'. Sign-off: 'Best regards,'"
     ),
 }
 
@@ -114,13 +239,17 @@ The message should:
 5. Be under 80 words"""
 
 
+def _get_category_rules(venue_category: str) -> str:
+    """Get category-specific guidance for the prompt."""
+    return CATEGORY_RULES.get(venue_category, "")
+
+
 class DraftGenerator:
-    """Generates personalised outreach drafts using Gemini."""
+    """Generates personalised outreach drafts using Anthropic Claude."""
 
     def __init__(self, config: AppConfig | None = None) -> None:
         self.config = config or load_config()
-        self.gemini_config = self.config.outreach.gemini
-        self._client = genai.Client()
+        self._client = anthropic.Anthropic()
 
     def _build_prompt(
         self,
@@ -136,6 +265,12 @@ class DraftGenerator:
         step_tmpl = STEP_INSTRUCTIONS.get(step, STEP_INSTRUCTIONS[1])
         step_instructions = step_tmpl.format(previous_subject=previous_subject or "N/A")
 
+        # Get category-specific rules
+        venue_cat = ""
+        if lead.enrichment and lead.enrichment.venue_category:
+            venue_cat = lead.enrichment.venue_category.value
+        category_rules = _get_category_rules(venue_cat)
+
         context = {
             "business_name": lead.business_name,
             "category": lead.category or "venue",
@@ -144,7 +279,7 @@ class DraftGenerator:
             "rating": lead.rating or "N/A",
             "review_count": lead.review_count or "N/A",
             "instagram_handle": lead.instagram_handle or lead.business_name,
-            "venue_category": "",
+            "venue_category": venue_cat,
             "business_summary": "",
             "context_notes": "",
             "why_asterley_fits": "",
@@ -158,11 +293,11 @@ class DraftGenerator:
             "current_season": _get_current_season(),
             "step_number": step,
             "step_instructions": step_instructions,
+            "category_rules": category_rules,
         }
 
         if lead.enrichment:
             e = lead.enrichment
-            context["venue_category"] = e.venue_category.value if e.venue_category else ""
             context["business_summary"] = e.business_summary or ""
             context["context_notes"] = e.context_notes or ""
             context["why_asterley_fits"] = e.why_asterley_fits or ""
@@ -184,18 +319,16 @@ class DraftGenerator:
         step: int = 1,
         previous_subject: str | None = None,
     ) -> OutreachMessage:
-        """Generate a single outreach draft."""
+        """Generate a single outreach draft using Claude."""
         prompt = self._build_prompt(lead, channel, step=step, previous_subject=previous_subject)
 
-        response = self._client.models.generate_content(
-            model=self.gemini_config.model,
-            contents=prompt,
-            config={
-                "temperature": self.gemini_config.temperature,
-            },
+        response = self._client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=1024,
+            messages=[{"role": "user", "content": prompt}],
         )
 
-        content = response.text
+        content = response.content[0].text
         subject = None
 
         # Extract subject line for emails

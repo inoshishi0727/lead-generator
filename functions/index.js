@@ -1,10 +1,11 @@
 import functions from "firebase-functions/v1";
 import { initializeApp } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
-import { getFirestore } from "firebase-admin/firestore";
+import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { GoogleGenAI } from "@google/genai";
 import Anthropic from "@anthropic-ai/sdk";
 import sgMail from "@sendgrid/mail";
+import Busboy from "busboy";
 
 const HttpsError = functions.https.HttpsError;
 
@@ -104,7 +105,7 @@ Structure:
 4. [blank line] 2-3 sentences: Product detail. Specific product, specific serve, why it's relevant. This is the substance.
 5. 1-2 sentences: Venue/brand observation IF genuinely interesting. Woven in naturally, NOT front-loaded flattery.
 6. 1 sentence: Closing CTA. "When's a good time to catch you?" / "When's good?"
-7. [blank line] Sign-off, Rob, Asterley Bros, asterleybros.com
+7. [blank line] Sign-off only ("Cheers," or "All the best,"). Do NOT add name, company, or URL — the HTML signature handles that.
 
 Two CTAs: soft early ("Can I send samples?") + direct close ("When's good?").`,
 
@@ -175,25 +176,74 @@ DO NOT:
 - Say "house Negroni spirit." Say "use it in their House Negroni."
 - Lead with BiB in the first email. The first email is about the product and the serve.
 
-BENCHMARK EMAIL (this is the gold standard — match this voice, energy, and warmth):
+EMAIL STRUCTURE (follow this order exactly):
+
+1. GREETING
+2. IDENTITY + HOOK (1-2 sentences: who we are, why we're reaching out. Warm, direct, genuine.)
+3. EARLY CTA on its own standalone line, with a blank line above and below. ("Can I drop in with some samples?" / "Can I swing by one afternoon with some samples?" / "I'd love you to try...")
+4. PRODUCT DETAIL (2-3 sentences: specific products, serves, why they're relevant to this venue and season. Scannable.)
+5. VENUE OBSERVATION (1-2 sentences: genuine, specific, woven naturally in the middle. NOT front-loaded as the opening.)
+6. CLOSING CTA ("When's a good time to catch you?" / "When's good for you?" — suggest quieter times: weekday afternoons, before the rush. NEVER weekends. Rarely past 6pm.)
+7. SIGN-OFF (just "Cheers," or "All the best," — nothing after it, the HTML email signature handles name and contact details)
+
+WORD COUNT: 120-160 words. Not less than 120, not more than 160.
+TWO CTAs total: one soft/early (standalone line), one direct at the closing.
+Shorter paragraphs, more line breaks. Must be skimmable on a phone.
+
+BENCHMARK EMAILS (match this voice, energy, structure, and warmth):
+
+EMAIL A (cocktail bar, confirmed contact):
+Subject: English Vermouth for the Spring menu
 
 Hi Tom,
 
-Saw the TimeOut piece recently and it looked great! Congrats!
+We're Asterley Bros, makers of English Vermouth and Amaro in SE26. I'd love you to try our Schofield's Dry Vermouth in your Martini programme and see what you think.
 
-I was hoping to drop in and say hello next week if you were around?
+Can I swing by one afternoon with some samples?
 
-Quick intro: I'm Rob from Asterley Bros, makers of English Vermouth and Amaro based in SE26. We make a delicious English Dry Vermouth called Schofield's (created with bartenders Joe and Daniel Schofield) that is designed to make the ultimate Martini (and a banging White Negroni too!). Crisp and herbaceous with a distinctly British character. Quite different from other classic Vermouth styles, and I thought it might work well in any upcoming Spring menus you were working on.
+Schofield's was created with bartenders Joe and Daniel Schofield. Crisp, herbaceous, distinctly British. Designed for the ultimate Martini (and a banging White Negroni too!). Quite different from the classic styles, and I think it could work really well in your Spring menu.
 
-I'd love to swing by, try one of your stirred-down classics, and leave you with some samples to play with. No pitch, just a tasting.
+Saw the TimeOut piece recently and it looked great. Congrats! The whole stirred-down classics direction is exactly the kind of programme our bottles are made for.
+
+I'd love to pop in, try one of your Martinis, and leave you with some samples to play with. No pitch, just a tasting.
 
 When's a good time to catch you?
 
 Cheers,
 
-Rob
-Asterley Bros
-asterleybros.com
+EMAIL B (gastropub, confirmed contact, nearby):
+Subject: Local spirits for the new cocktail list
+
+Hi Mike,
+
+We're Asterley Bros, makers of English Vermouth and Amaro just down the road in SE26. Given your Borough Market sourcing and the British focus, I think our range could be a really natural fit for the new cocktail programme.
+
+Happy to pop in one afternoon and bring some samples along?
+
+Our Dispense Amaro makes a brilliant simple highball with ginger ale: sessionable, a bit different, and really easy for the team to make. Great one for a Spring menu. And if you're doing Negronis on the expanded list, our Estate Sweet Vermouth makes a gorgeous one.
+
+Saw on Instagram you've expanded from four to twelve cocktails. That's a proper commitment and it's great to see!
+
+When's a good time to catch you during the week?
+
+Cheers,
+
+EMAIL C (wine bar, owner, nearby):
+Subject: English Aperitivo for the aperitivo menu?
+
+Hi Francesca,
+
+We're Asterley Bros, makers of English Vermouth and Amaro practically round the corner from you in SE26. I think our bottles would be a really natural fit for your aperitivo programme, especially with Spritz season kicking off.
+
+Can I pop in one afternoon and bring some to try?
+
+Our Asterley Original is a gorgeous British Aperitivo that's a brilliant alternative to Campari in spritzes. And Estate is our English Sweet Vermouth that could be really interesting on your vermouth tap.
+
+Just saw you've launched the Sunday aperitivo hour and it looks brilliant. Much better to taste everything in person than go on about it over email!
+
+When's good to catch you on a quieter day?
+
+Cheers,
 
 Output ONLY "Subject:" on the first line, then the full email body. Nothing else.`;
 
@@ -268,12 +318,70 @@ ${stepInstr}
 Write the email now. Subject line first (short, specific, intriguing, 3-7 words), then the full email.`;
 }
 
+/**
+ * Fetch recent edit feedback from Firestore to inject as training examples.
+ * Returns up to 3 most recent edits, optionally filtered by venue_category/tone_tier.
+ */
+async function getEditFeedback(venueCat, toneTier, limit = 3) {
+  try {
+    // Try to find edits matching the same venue category first
+    let snap = await db.collection("edit_feedback")
+      .where("channel", "==", "email")
+      .orderBy("created_at", "desc")
+      .limit(20)
+      .get();
+
+    if (snap.empty) return "";
+
+    const docs = snap.docs.map((d) => d.data());
+
+    // Prefer matching venue_category, then tone_tier, then any
+    const matched = docs.filter((d) => d.venue_category === venueCat);
+    const toneMatched = docs.filter((d) => d.tone_tier === toneTier);
+    const examples = matched.length >= 2 ? matched : toneMatched.length >= 2 ? toneMatched : docs;
+
+    const selected = examples.slice(0, limit);
+    if (selected.length === 0) return "";
+
+    let block = `\nHUMAN EDIT EXAMPLES (learn from these corrections — the human edited Claude's draft to improve it):\n`;
+    for (let i = 0; i < selected.length; i++) {
+      const fb = selected[i];
+      block += `\nExample ${i + 1}:`;
+      if (fb.original_subject && fb.edited_subject && fb.original_subject !== fb.edited_subject) {
+        block += `\nOriginal subject: ${fb.original_subject}`;
+        block += `\nCorrected subject: ${fb.edited_subject}`;
+      }
+      block += `\nOriginal:\n${fb.original_content}`;
+      block += `\nCorrected:\n${fb.edited_content}\n`;
+    }
+    return block;
+  } catch (err) {
+    console.warn("Failed to fetch edit feedback:", err.message);
+    return "";
+  }
+}
+
 function hasEnrichment(doc) {
   const e = doc.enrichment || {};
   return !!(
     e.venue_category &&
     (e.context_notes || e.drinks_programme || e.business_summary)
   );
+}
+
+function isSnoozedOrExcluded(doc) {
+  if (doc.human_takeover === true) return true;
+  if (doc.client_status === "current_account") return true;
+  if (doc.stage === "declined") return true;
+  const snoozedUntil = doc.snoozed_until;
+  if (snoozedUntil) {
+    try {
+      return new Date(snoozedUntil) > new Date();
+    } catch {
+      return false;
+    }
+  }
+  return false;
 }
 
 // ---- Cloud Functions ----
@@ -313,7 +421,11 @@ export const generateDrafts = functions
       const leadsWithDrafts = new Set(msgsSnap.docs.map((d) => d.data().lead_id));
 
       docs = allDocs.filter(
-        (d) => d.email && hasEnrichment(d) && !leadsWithDrafts.has(d.id)
+        (d) =>
+          d.email &&
+          hasEnrichment(d) &&
+          !leadsWithDrafts.has(d.id) &&
+          !isSnoozedOrExcluded(d)
       );
     }
 
@@ -326,12 +438,20 @@ export const generateDrafts = functions
     for (const leadDoc of docs) {
       try {
         const enrichment = leadDoc.enrichment || {};
+        const venueCat = enrichment.venue_category || leadDoc.category || "cocktail_bar";
+        const toneTier = enrichment.tone_tier || "bartender_casual";
         const prompt = buildPrompt(leadDoc, enrichment);
+
+        // Inject edit feedback so Claude learns from past human corrections
+        const feedbackBlock = await getEditFeedback(venueCat, toneTier);
+        const systemPrompt = feedbackBlock
+          ? EMAIL_SYSTEM_PROMPT + feedbackBlock
+          : EMAIL_SYSTEM_PROMPT;
 
         const response = await anthropic.messages.create({
           model: CLAUDE_MODEL,
           max_tokens: 1024,
-          system: EMAIL_SYSTEM_PROMPT,
+          system: systemPrompt,
           messages: [{ role: "user", content: prompt }],
         });
 
@@ -370,6 +490,9 @@ export const generateDrafts = functions
           recipient_email: leadDoc.email || leadDoc.contact_email || null,
           website: leadDoc.website || null,
           workspace_id: leadDoc.workspace_id || "",
+          original_content: content,
+          original_subject: subject,
+          was_edited: false,
         });
 
         await db.collection("leads").doc(leadDoc.id).update({
@@ -416,12 +539,19 @@ export const regenerateDraft = functions
 
     const leadDoc = leadSnap.data();
     const enrichment = leadDoc.enrichment || {};
+    const venueCat = enrichment.venue_category || leadDoc.category || "cocktail_bar";
+    const toneTier = enrichment.tone_tier || "bartender_casual";
     const prompt = buildPrompt(leadDoc, enrichment);
+
+    const feedbackBlock = await getEditFeedback(venueCat, toneTier);
+    const systemPrompt = feedbackBlock
+      ? EMAIL_SYSTEM_PROMPT + feedbackBlock
+      : EMAIL_SYSTEM_PROMPT;
 
     const response = await anthropic.messages.create({
       model: CLAUDE_MODEL,
       max_tokens: 1024,
-      system: EMAIL_SYSTEM_PROMPT,
+      system: systemPrompt,
       messages: [{ role: "user", content: prompt }],
     });
 
@@ -444,6 +574,10 @@ export const regenerateDraft = functions
       content,
       status: "draft",
       created_at: new Date().toISOString(),
+      original_content: content,
+      original_subject: subject,
+      was_edited: false,
+      edited_at: null,
     });
 
     return { message_id, subject, content };
@@ -484,7 +618,7 @@ export const regenerateAllDrafts = functions
     const leadsSnap = await db.collection("leads").get();
     const docs = leadsSnap.docs
       .map((d) => ({ id: d.id, ...d.data() }))
-      .filter((d) => d.email && hasEnrichment(d));
+      .filter((d) => d.email && hasEnrichment(d) && !isSnoozedOrExcluded(d));
 
     let generated = 0;
     let failed = 0;
@@ -492,12 +626,19 @@ export const regenerateAllDrafts = functions
     for (const leadDoc of docs) {
       try {
         const enrichment = leadDoc.enrichment || {};
+        const venueCat = enrichment.venue_category || leadDoc.category || "cocktail_bar";
+        const toneTier = enrichment.tone_tier || "bartender_casual";
         const prompt = buildPrompt(leadDoc, enrichment);
+
+        const feedbackBlock = await getEditFeedback(venueCat, toneTier);
+        const systemPrompt = feedbackBlock
+          ? EMAIL_SYSTEM_PROMPT + feedbackBlock
+          : EMAIL_SYSTEM_PROMPT;
 
         const response = await anthropic.messages.create({
           model: CLAUDE_MODEL,
           max_tokens: 1024,
-          system: EMAIL_SYSTEM_PROMPT,
+          system: systemPrompt,
           messages: [{ role: "user", content: prompt }],
         });
 
@@ -536,6 +677,9 @@ export const regenerateAllDrafts = functions
           recipient_email: leadDoc.email || leadDoc.contact_email || null,
           website: leadDoc.website || null,
           workspace_id: leadDoc.workspace_id || "",
+          original_content: content,
+          original_subject: subject,
+          was_edited: false,
         });
 
         await db.collection("leads").doc(leadDoc.id).update({
@@ -815,6 +959,38 @@ const SENDER_EMAIL = "rob@asterleybros.com";
 const SENDER_NAME = "Rob from Asterley Bros";
 const DAILY_CAP = 150;
 
+// HTML email signature — appended at send time, not stored in message content.
+// Duplicated in src/outreach/email_sender.py and frontend/src/app/api/outreach/send/route.ts.
+const EMAIL_SIGNATURE_HTML = `\
+<table cellpadding="0" cellspacing="0" border="0" style="font-family: Arial, sans-serif; font-size: 13px; color: #333;">
+  <tr>
+    <td style="padding-top: 12px; border-top: 1px solid #ddd;">
+      <strong>Robert Berry</strong>&nbsp;&nbsp;|&nbsp;&nbsp;Co-founder<br>
+      <a href="tel:+447817478196" style="color: #333; text-decoration: none;">+44 7817 478196</a><br>
+      <a href="https://www.asterleybros.com" style="color: #b5651d; text-decoration: none;">www.asterleybros.com</a>
+    </td>
+  </tr>
+  <tr>
+    <td style="padding-top: 10px;">
+      <img src="https://cdn.shopify.com/s/files/1/0447/7521/1172/files/Awards_Only_SML.png?v=1774997201"
+           alt="Asterley Bros Awards" width="300" style="display: block;" />
+    </td>
+  </tr>
+</table>`;
+
+function escapeHtml(text) {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function buildHtmlEmail(content) {
+  const escaped = escapeHtml(content);
+  return `<div style="font-family: Arial, sans-serif; font-size: 14px; color: #333; line-height: 1.5;"><div style="white-space: pre-wrap;">${escaped}</div><br>${EMAIL_SIGNATURE_HTML}</div>`;
+}
+
 function isOptimalWindow() {
   const now = new Date();
   const london = new Date(now.toLocaleString("en-US", { timeZone: "Europe/London" }));
@@ -913,8 +1089,10 @@ export const sendApproved = functions
         await sgMail.send({
           to: toEmail,
           from: { email: SENDER_EMAIL, name: SENDER_NAME },
+          replyTo: { email: "replies@asterleybros.com", name: "Asterley Bros Replies" },
           subject: msg.subject || "Asterley Bros",
           text: msg.content,
+          html: buildHtmlEmail(msg.content),
         });
 
         const now = new Date().toISOString();
@@ -977,4 +1155,289 @@ export const deleteUser = functions
     await db.collection("users").doc(uid).delete();
 
     return { status: "deleted", uid };
+  });
+
+// ---- Reply Tracking Helpers ----
+
+function parseMultipart(req) {
+  return new Promise((resolve, reject) => {
+    const fields = {};
+    const busboy = Busboy({ headers: req.headers });
+    busboy.on("field", (name, val) => { fields[name] = val; });
+    busboy.on("finish", () => resolve(fields));
+    busboy.on("error", reject);
+    busboy.end(req.rawBody);
+  });
+}
+
+function extractEmailAddress(str) {
+  const match = str.match(/<([^>]+)>/) || str.match(/[\w.-]+@[\w.-]+\.\w+/);
+  return match ? (match[1] || match[0]).toLowerCase() : str.toLowerCase().trim();
+}
+
+function extractName(str) {
+  const match = str.match(/^"?([^"<]+)"?\s*</);
+  return match ? match[1].trim() : null;
+}
+
+function extractOriginalSender(body) {
+  const patterns = [
+    /From:\s*[^<]*<([^>]+)>/i,
+    /From:\s*([\w.-]+@[\w.-]+\.\w+)/i,
+  ];
+  for (const p of patterns) {
+    const m = body.match(p);
+    if (m) return m[1].toLowerCase();
+  }
+  return null;
+}
+
+// ---- Inbound Email Webhook (SendGrid Inbound Parse) ----
+
+export const processInboundEmail = functions
+  .runWith({ timeoutSeconds: 30, memory: "256MB" })
+  .https.onRequest(async (req, res) => {
+    if (req.method !== "POST") {
+      res.status(405).send("Method not allowed");
+      return;
+    }
+
+    try {
+      const fields = await parseMultipart(req);
+
+      const fromEmail = extractEmailAddress(fields.from || "");
+      const subject = fields.subject || "";
+      const body = fields.text || fields.html || "";
+
+      // The forwarder is rob — the original sender is in the body
+      const originalSender = extractOriginalSender(body) || fromEmail;
+
+      // Match to a lead by email or contact_email
+      let matchedLead = null;
+      let matchedMessage = null;
+
+      const leadsByEmail = await db.collection("leads")
+        .where("email", "==", originalSender).limit(1).get();
+
+      if (!leadsByEmail.empty) {
+        matchedLead = { id: leadsByEmail.docs[0].id, ...leadsByEmail.docs[0].data() };
+      } else {
+        const leadsByContact = await db.collection("leads")
+          .where("contact_email", "==", originalSender).limit(1).get();
+        if (!leadsByContact.empty) {
+          matchedLead = { id: leadsByContact.docs[0].id, ...leadsByContact.docs[0].data() };
+        }
+      }
+
+      // Find the most recent sent message for this lead
+      if (matchedLead) {
+        const msgSnap = await db.collection("outreach_messages")
+          .where("lead_id", "==", matchedLead.id)
+          .where("status", "==", "sent")
+          .limit(1)
+          .get();
+        if (!msgSnap.empty) {
+          matchedMessage = { id: msgSnap.docs[0].id, ...msgSnap.docs[0].data() };
+        }
+      }
+
+      // Create inbound_replies doc
+      const replyId = crypto.randomUUID();
+      await db.collection("inbound_replies").doc(replyId).set({
+        id: replyId,
+        lead_id: matchedLead?.id || null,
+        message_id: matchedMessage?.id || null,
+        from_email: originalSender,
+        from_name: extractName(fields.from || ""),
+        subject,
+        body,
+        source: "email_forward",
+        matched: !!matchedLead,
+        created_at: new Date().toISOString(),
+        forwarded_by: fromEmail,
+      });
+
+      // Update lead if matched
+      if (matchedLead) {
+        await db.collection("leads").doc(matchedLead.id).update({
+          stage: "responded",
+          human_takeover: true,
+          human_takeover_at: new Date().toISOString(),
+          reply_count: FieldValue.increment(1),
+          outcome: matchedLead.outcome || "ongoing",
+        });
+      }
+
+      // Update message if matched
+      if (matchedMessage) {
+        await db.collection("outreach_messages").doc(matchedMessage.id).update({
+          has_reply: true,
+          reply_count: FieldValue.increment(1),
+        });
+      }
+
+      // Activity log
+      await db.collection("activity_log").add({
+        type: "inbound_reply",
+        lead_id: matchedLead?.id || null,
+        reply_id: replyId,
+        matched: !!matchedLead,
+        from_email: originalSender,
+        created_at: new Date().toISOString(),
+      });
+
+      console.log("Inbound reply processed", { replyId, matched: !!matchedLead, originalSender });
+      res.status(200).json({ status: "ok", matched: !!matchedLead, reply_id: replyId });
+    } catch (err) {
+      console.error("processInboundEmail error:", err.message);
+      // Always return 200 to prevent SendGrid retries
+      res.status(200).json({ status: "error", error: err.message });
+    }
+  });
+
+// ---- Log Reply Manually ----
+
+export const logReply = functions
+  .runWith({ timeoutSeconds: 30, memory: "256MB" })
+  .https.onCall(async (data, context) => {
+    if (!context.auth) throw new HttpsError("unauthenticated", "Must be signed in.");
+
+    const { lead_id, message_id, notes } = data;
+    if (!lead_id) throw new HttpsError("invalid-argument", "lead_id required.");
+
+    const leadSnap = await db.collection("leads").doc(lead_id).get();
+    if (!leadSnap.exists) throw new HttpsError("not-found", "Lead not found.");
+    const lead = leadSnap.data();
+
+    const replyId = crypto.randomUUID();
+    await db.collection("inbound_replies").doc(replyId).set({
+      id: replyId,
+      lead_id,
+      message_id: message_id || null,
+      from_email: lead.email || lead.contact_email || "unknown",
+      from_name: lead.contact_name || lead.business_name || null,
+      subject: null,
+      body: notes || "Reply logged manually",
+      source: "manual",
+      matched: true,
+      created_at: new Date().toISOString(),
+      forwarded_by: null,
+      logged_by: context.auth.uid,
+    });
+
+    await db.collection("leads").doc(lead_id).update({
+      stage: "responded",
+      human_takeover: true,
+      human_takeover_at: new Date().toISOString(),
+      reply_count: FieldValue.increment(1),
+      outcome: lead.outcome || "ongoing",
+    });
+
+    if (message_id) {
+      const msgSnap = await db.collection("outreach_messages").doc(message_id).get();
+      if (msgSnap.exists) {
+        await db.collection("outreach_messages").doc(message_id).update({
+          has_reply: true,
+          reply_count: FieldValue.increment(1),
+        });
+      }
+    }
+
+    await db.collection("activity_log").add({
+      type: "manual_reply_logged",
+      lead_id,
+      reply_id: replyId,
+      logged_by: context.auth.uid,
+      created_at: new Date().toISOString(),
+    });
+
+    return { reply_id: replyId, status: "ok" };
+  });
+
+// ---- Update Lead Outcome ----
+
+export const updateLeadOutcome = functions
+  .runWith({ timeoutSeconds: 30, memory: "256MB" })
+  .https.onCall(async (data, context) => {
+    if (!context.auth) throw new HttpsError("unauthenticated", "Must be signed in.");
+
+    const { lead_id, outcome } = data;
+    if (!lead_id || !outcome) throw new HttpsError("invalid-argument", "lead_id and outcome required.");
+
+    const validOutcomes = ["ongoing", "converted", "lost", "not_interested", "snoozed"];
+    if (!validOutcomes.includes(outcome)) {
+      throw new HttpsError("invalid-argument", `Invalid outcome. Must be one of: ${validOutcomes.join(", ")}`);
+    }
+
+    const leadSnap = await db.collection("leads").doc(lead_id).get();
+    if (!leadSnap.exists) throw new HttpsError("not-found", "Lead not found.");
+
+    const updates = {
+      outcome,
+      outcome_updated_at: new Date().toISOString(),
+    };
+
+    if (outcome === "converted") updates.stage = "converted";
+    else if (outcome === "lost" || outcome === "not_interested") updates.stage = "declined";
+
+    await db.collection("leads").doc(lead_id).update(updates);
+
+    await db.collection("activity_log").add({
+      type: "outcome_updated",
+      lead_id,
+      outcome,
+      updated_by: context.auth.uid,
+      created_at: new Date().toISOString(),
+    });
+
+    return { status: "ok", outcome };
+  });
+
+// ---- Assign Unmatched Reply to Lead ----
+
+export const assignReplyToLead = functions
+  .runWith({ timeoutSeconds: 30, memory: "256MB" })
+  .https.onCall(async (data, context) => {
+    if (!context.auth) throw new HttpsError("unauthenticated", "Must be signed in.");
+
+    const { reply_id, lead_id } = data;
+    if (!reply_id || !lead_id) throw new HttpsError("invalid-argument", "reply_id and lead_id required.");
+
+    const replySnap = await db.collection("inbound_replies").doc(reply_id).get();
+    if (!replySnap.exists) throw new HttpsError("not-found", "Reply not found.");
+
+    const leadSnap = await db.collection("leads").doc(lead_id).get();
+    if (!leadSnap.exists) throw new HttpsError("not-found", "Lead not found.");
+    const lead = leadSnap.data();
+
+    // Find most recent sent message for the lead
+    const msgSnap = await db.collection("outreach_messages")
+      .where("lead_id", "==", lead_id)
+      .where("status", "==", "sent")
+      .limit(1)
+      .get();
+    const matchedMessageId = msgSnap.empty ? null : msgSnap.docs[0].id;
+
+    await db.collection("inbound_replies").doc(reply_id).update({
+      lead_id,
+      message_id: matchedMessageId,
+      matched: true,
+    });
+
+    await db.collection("leads").doc(lead_id).update({
+      stage: "responded",
+      human_takeover: true,
+      human_takeover_at: new Date().toISOString(),
+      reply_count: FieldValue.increment(1),
+      outcome: lead.outcome || "ongoing",
+    });
+
+    if (matchedMessageId) {
+      await db.collection("outreach_messages").doc(matchedMessageId).update({
+        has_reply: true,
+        reply_count: FieldValue.increment(1),
+      });
+    }
+
+    return { status: "ok" };
   });

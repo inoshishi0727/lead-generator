@@ -176,6 +176,10 @@ class OutreachMessage(BaseModel):
     attempt_number: int = 1
     created_at: datetime = Field(default_factory=datetime.now)
     sent_at: Optional[datetime] = None
+    original_content: Optional[str] = None
+    original_subject: Optional[str] = None
+    was_edited: bool = False
+    edited_at: Optional[datetime] = None
 
 
 class ScrapeRun(BaseModel):

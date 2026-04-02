@@ -184,6 +184,9 @@ def _run_draft_generation(run_id: str, lead_ids: list[str] | None) -> None:
                     "contact_name": contact.get("name"),
                     "context_notes": enrichment.get("context_notes"),
                     "menu_fit": enrichment.get("menu_fit"),
+                    "original_content": message.content,
+                    "original_subject": message.subject,
+                    "was_edited": False,
                 }
                 save_outreach_message(msg_data)
 
@@ -320,6 +323,32 @@ async def update_message(message_id: str, req: UpdateMessageRequest) -> Outreach
         elif req.status == "rejected" and msg.get("lead_id"):
             update_lead(msg["lead_id"], {"stage": "draft_generated"})
 
+    # Track edit feedback when content is modified
+    if req.content is not None and (msg.get("original_content") or msg.get("content")):
+        original = msg.get("original_content") or msg.get("content")
+        if original != req.content:
+            from datetime import datetime as dt
+
+            updates["was_edited"] = True
+            updates["edited_at"] = dt.now().isoformat()
+
+            from src.db.firestore import save_edit_feedback
+
+            save_edit_feedback({
+                "message_id": message_id,
+                "lead_id": msg.get("lead_id"),
+                "channel": msg.get("channel"),
+                "venue_category": msg.get("venue_category"),
+                "tone_tier": msg.get("tone_tier"),
+                "step_number": msg.get("step_number"),
+                "lead_products": msg.get("lead_products", []),
+                "original_content": original,
+                "edited_content": req.content,
+                "original_subject": msg.get("original_subject"),
+                "edited_subject": req.subject,
+                "created_at": dt.now().isoformat(),
+            })
+
     if updates:
         update_outreach_message(message_id, updates)
         msg.update(updates)
@@ -383,6 +412,10 @@ async def regenerate_message(message_id: str) -> OutreachMessageResponse:
         "subject": new_message.subject,
         "status": "draft",
         "created_at": datetime.now().isoformat(),
+        "original_content": new_message.content,
+        "original_subject": new_message.subject,
+        "was_edited": False,
+        "edited_at": None,
     }
     update_outreach_message(message_id, updates)
     msg.update(updates)
@@ -508,6 +541,9 @@ def _run_regenerate_all(run_id: str) -> None:
                     "contact_name": contact.get("name"),
                     "context_notes": enrichment.get("context_notes"),
                     "menu_fit": enrichment.get("menu_fit"),
+                    "original_content": message.content,
+                    "original_subject": message.subject,
+                    "was_edited": False,
                 }
                 save_outreach_message(msg_data)
                 update_lead(str(lead.id), {"stage": "draft_generated"})
@@ -803,6 +839,9 @@ def _run_followup_generation(run_id: str) -> None:
                     "contact_name": contact.get("name"),
                     "context_notes": enrichment.get("context_notes"),
                     "menu_fit": enrichment.get("menu_fit"),
+                    "original_content": message.content,
+                    "original_subject": message.subject,
+                    "was_edited": False,
                 }
                 save_outreach_message(msg_data)
 

@@ -6,6 +6,38 @@ const SENDER_EMAIL = "rob@asterleybros.com";
 const SENDER_NAME = "Rob from Asterley Bros";
 const DAILY_CAP = 150;
 
+// HTML email signature — appended at send time, not stored in message content.
+// Duplicated in src/outreach/email_sender.py and functions/index.js.
+const EMAIL_SIGNATURE_HTML = `\
+<table cellpadding="0" cellspacing="0" border="0" style="font-family: Arial, sans-serif; font-size: 13px; color: #333;">
+  <tr>
+    <td style="padding-top: 12px; border-top: 1px solid #ddd;">
+      <strong>Robert Berry</strong>&nbsp;&nbsp;|&nbsp;&nbsp;Co-founder<br>
+      <a href="tel:+447817478196" style="color: #333; text-decoration: none;">+44 7817 478196</a><br>
+      <a href="https://www.asterleybros.com" style="color: #b5651d; text-decoration: none;">www.asterleybros.com</a>
+    </td>
+  </tr>
+  <tr>
+    <td style="padding-top: 10px;">
+      <img src="https://cdn.shopify.com/s/files/1/0447/7521/1172/files/Awards_Only_SML.png?v=1774997201"
+           alt="Asterley Bros Awards" width="300" style="display: block;" />
+    </td>
+  </tr>
+</table>`;
+
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function buildHtmlEmail(content: string): string {
+  const escaped = escapeHtml(content);
+  return `<div style="font-family: Arial, sans-serif; font-size: 14px; color: #333; line-height: 1.5;"><div style="white-space: pre-wrap;">${escaped}</div><br>${EMAIL_SIGNATURE_HTML}</div>`;
+}
+
 function isOptimalWindow(): boolean {
   const now = new Date();
   const london = new Date(
@@ -110,6 +142,7 @@ export async function POST(req: NextRequest) {
           from: { email: SENDER_EMAIL, name: SENDER_NAME },
           subject: (msg.subject as string) || "Asterley Bros",
           text: msg.content as string,
+          html: buildHtmlEmail(msg.content as string),
         });
 
         const now = new Date().toISOString();

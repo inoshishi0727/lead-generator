@@ -46,18 +46,61 @@ class GoogleMapsScraper(BaseScraper):
         config: AppConfig | None = None,
         on_progress: callable | None = None,
         shared_dedup: SharedDedupSet | None = None,
+        skip_gmaps_types: set[str] | None = None,
     ) -> None:
         super().__init__(config)
         self.gmaps_config = self.config.scraping.google_maps
         self.collected_leads: list[Lead] = []
         self._on_progress = on_progress or (lambda **kw: None)
         self._shared_dedup = shared_dedup
+        self._skip_gmaps_types = skip_gmaps_types or set()
 
-    def _build_search_url(self, query: str) -> str:
-        """Build a Google Maps search URL with English locale."""
-        base = "https://www.google.com/maps/search/"
+    def _maps_home_url(self) -> str:
+        """Google Maps homepage URL with locale."""
         params = urlencode({"hl": self.gmaps_config.locale})
-        return f"{base}{query.replace(' ', '+')}?{params}"
+        return f"https://www.google.com/maps?{params}"
+
+    async def _human_search(self, page, query: str) -> None:
+        """Navigate to Google Maps and type the search query like a human."""
+        # Go to Maps homepage
+        await self._navigate_with_retry(page, self._maps_home_url())
+
+        # Dismiss consent — may need multiple attempts
+        await self._dismiss_consent(page)
+        await human_pause("navigation")
+        await self._dismiss_consent(page)
+
+        # Find the search box — try multiple selectors
+        search_box = None
+        selectors = ["#searchboxinput", "input[name='q']", "[aria-label='Search Google Maps']"]
+        for sel in selectors:
+            try:
+                search_box = await page.wait_for_selector(sel, state="visible", timeout=8000)
+                if search_box:
+                    log.debug("search_box_found", selector=sel)
+                    break
+            except Exception:
+                continue
+
+        if not search_box:
+            # Last resort: take a screenshot for debugging then raise
+            try:
+                await page.screenshot(path="data/debug_searchbox_fail.png")
+            except Exception:
+                pass
+            raise ScraperError("Could not find Google Maps search box")
+
+        await search_box.click()
+        await quick_pause()
+
+        # Type the query with human-like delays
+        for char in query:
+            await page.keyboard.type(char, delay=50 + (hash(char) % 80))
+        await human_pause("after_click")
+
+        # Press Enter to search
+        await page.keyboard.press("Enter")
+        await human_pause("navigation")
 
     # ------------------------------------------------------------------
     # Google consent dialog
@@ -263,6 +306,13 @@ class GoogleMapsScraper(BaseScraper):
 
                 detail = await self._extract_detail(page)
 
+                # Skip if Google Maps category matches a type we already have enough of
+                gmaps_cat = (detail.get("category") or "").lower()
+                if gmaps_cat and self._skip_gmaps_types:
+                    if any(skip.lower() in gmaps_cat for skip in self._skip_gmaps_types):
+                        log.info("skipping_full_category", name=card["name"], gmaps_category=gmaps_cat)
+                        continue
+
                 # Email extraction: try website if available
                 email = None
                 website = detail.get("website")
@@ -412,11 +462,8 @@ class GoogleMapsScraper(BaseScraper):
           3. If no emails found → paginate for more cards in smaller batches.
           4. If still no emails → mark remaining as NEEDS_EMAIL and stop.
         """
-        url = self._build_search_url(query)
-        await self._navigate_with_retry(page, url)
-
-        # Dismiss Google cookie consent dialog if present
-        await self._dismiss_consent(page)
+        # Navigate to Maps and type search like a human
+        await self._human_search(page, query)
 
         # Wait for results — try article items first, fall back to listing links
         try:

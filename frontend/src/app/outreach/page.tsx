@@ -8,6 +8,7 @@ import {
   Send,
   RefreshCw,
   AlertTriangle,
+  Reply,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -24,16 +25,43 @@ import {
   useGenerateFollowups,
 } from "@/hooks/use-outreach";
 
-const STATUS_FILTERS = ["all", "draft", "approved", "rejected", "sent"] as const;
+const STATUS_FILTERS = ["all", "draft", "approved", "rejected", "sent", "replied"] as const;
+
+const CATEGORY_OPTIONS = [
+  { value: "", label: "All Categories" },
+  { value: "cocktail_bar", label: "Cocktail Bar" },
+  { value: "wine_bar", label: "Wine Bar" },
+  { value: "italian_restaurant", label: "Italian Restaurant" },
+  { value: "gastropub", label: "Gastropub" },
+  { value: "hotel_bar", label: "Hotel Bar" },
+  { value: "bottle_shop", label: "Bottle Shop" },
+  { value: "deli_farm_shop", label: "Deli / Farm Shop" },
+  { value: "events_catering", label: "Events & Catering" },
+  { value: "rtd", label: "RTD / White Label" },
+  { value: "restaurant_groups", label: "Restaurant Groups" },
+  { value: "festival_operators", label: "Festival Operators" },
+  { value: "cookery_schools", label: "Cookery Schools" },
+  { value: "corporate_gifting", label: "Corporate Gifting" },
+  { value: "membership_clubs", label: "Membership Clubs" },
+  { value: "airlines_trains", label: "Airlines & Trains" },
+  { value: "subscription_boxes", label: "Subscription Boxes" },
+  { value: "film_tv_theatre", label: "Film, TV & Theatre" },
+  { value: "yacht_charter", label: "Yacht & Charter" },
+  { value: "luxury_food_retail", label: "Luxury Food Retail" },
+  { value: "grocery", label: "Grocery" },
+];
 
 export default function OutreachPage() {
   const { isAdmin } = useAuth();
   const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [categoryFilter, setCategoryFilter] = useState<string>("");
   const [showSendWarning, setShowSendWarning] = useState(false);
 
-  const { data: messages, isLoading } = useMessages(
-    statusFilter === "all" ? undefined : { status: statusFilter }
-  );
+  // "replied" is a client-side filter (has_reply), not a Firestore status
+  const firestoreFilter = statusFilter === "all" || statusFilter === "replied"
+    ? undefined
+    : { status: statusFilter };
+  const { data: messages, isLoading } = useMessages(firestoreFilter);
 
   const generateMutation = useGenerateDrafts();
   const regenerateAllMutation = useRegenerateAll();
@@ -41,10 +69,17 @@ export default function OutreachPage() {
   const sendMutation = useSendApproved();
   const followupsMutation = useGenerateFollowups();
 
-  const allMessages = messages ?? [];
+  const filteredByStatus = statusFilter === "replied"
+    ? (messages ?? []).filter((m) => m.has_reply)
+    : (messages ?? []);
+  const filteredByCategory = filteredByStatus.filter(
+    (m) => !categoryFilter || m.venue_category === categoryFilter
+  );
+  const allMessages = filteredByCategory;
   const draftCount = allMessages.filter((m) => m.status === "draft").length;
   const approvedCount = allMessages.filter((m) => m.status === "approved").length;
   const sentCount = allMessages.filter((m) => m.status === "sent").length;
+  const repliedCount = (messages ?? []).filter((m) => m.has_reply).length;
   const draftIds = allMessages
     .filter((m) => m.status === "draft")
     .map((m) => m.id);
@@ -178,7 +213,7 @@ export default function OutreachPage() {
       )}
 
       {/* Stats */}
-      <div className="grid grid-cols-4 gap-4">
+      <div className="grid grid-cols-5 gap-4">
         <StatCard
           icon={FileText}
           label="Total Messages"
@@ -199,23 +234,41 @@ export default function OutreachPage() {
           label="Sent"
           value={sentCount}
         />
+        <StatCard
+          icon={Reply}
+          label="Replied"
+          value={repliedCount}
+        />
       </div>
 
-      {/* Status filter */}
-      <div className="flex gap-1.5">
-        {STATUS_FILTERS.map((s) => (
-          <button
-            key={s}
-            onClick={() => setStatusFilter(s)}
-            className={`rounded-full px-3 py-1 text-xs font-medium capitalize transition-colors ${
-              statusFilter === s
-                ? "bg-primary text-primary-foreground"
-                : "bg-muted text-muted-foreground hover:bg-accent"
-            }`}
-          >
-            {s}
-          </button>
-        ))}
+      {/* Filters */}
+      <div className="flex items-center gap-3">
+        <div className="flex gap-1.5">
+          {STATUS_FILTERS.map((s) => (
+            <button
+              key={s}
+              onClick={() => setStatusFilter(s)}
+              className={`rounded-full px-3 py-1 text-xs font-medium capitalize transition-colors ${
+                statusFilter === s
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-muted text-muted-foreground hover:bg-accent"
+              }`}
+            >
+              {s}
+            </button>
+          ))}
+        </div>
+        <select
+          value={categoryFilter}
+          onChange={(e) => setCategoryFilter(e.target.value)}
+          className="rounded-md border border-input bg-background px-3 py-1.5 text-xs"
+        >
+          {CATEGORY_OPTIONS.map((opt) => (
+            <option key={opt.value} value={opt.value}>
+              {opt.label}
+            </option>
+          ))}
+        </select>
       </div>
 
       {/* Generation status */}

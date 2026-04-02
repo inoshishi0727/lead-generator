@@ -242,12 +242,23 @@ class OutreachMessageResponse(BaseModel):
     contact_name: Optional[str] = None
     context_notes: Optional[str] = None
     menu_fit: Optional[str] = None
+    original_content: Optional[str] = None
+    original_subject: Optional[str] = None
+    was_edited: bool = False
+    edited_at: Optional[datetime] = None
 
 
 class UpdateMessageRequest(BaseModel):
     status: Optional[str] = None  # approved | rejected
     content: Optional[str] = None
     subject: Optional[str] = None
+
+
+class EditFeedbackResponse(BaseModel):
+    original_content: Optional[str] = None
+    original_subject: Optional[str] = None
+    was_edited: bool = False
+    edited_at: Optional[datetime] = None
 
 
 class BatchApproveRequest(BaseModel):

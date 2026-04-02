@@ -2,9 +2,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { httpsCallable } from "firebase/functions";
 import { functions } from "@/lib/firebase";
 import { api } from "@/lib/api";
-import { getOutreachMessages, updateOutreachMessage, restoreOriginalEmail } from "@/lib/firestore-api";
+import { getOutreachMessages, updateOutreachMessage, restoreOriginalEmail, getInboundReplies } from "@/lib/firestore-api";
 import { addJob } from "@/lib/job-store";
-import type { OutreachMessage } from "@/lib/types";
+import type { OutreachMessage, InboundReply } from "@/lib/types";
 
 const hasBackend = !!process.env.NEXT_PUBLIC_API_URL;
 
@@ -14,7 +14,7 @@ export interface MessageFilters {
   lead_id?: string;
 }
 
-export function useMessages(filters?: MessageFilters, limit: number = 50) {
+export function useMessages(filters?: MessageFilters, limit: number = 200) {
   const params = new URLSearchParams();
   if (filters?.status) params.set("status", filters.status);
   if (filters?.channel) params.set("channel", filters.channel);
@@ -91,6 +91,8 @@ export function useUpdateMessage() {
       content?: string;
       subject?: string;
       restore_original_email?: boolean;
+      rejection_reason?: string;
+      lead_id?: string;
     }) => {
       if (hasBackend) {
         return api.patch<OutreachMessage>(`/api/outreach/messages/${id}`, body);
@@ -216,5 +218,68 @@ export function useGenerateFollowups() {
       addJob("followups", data.run_id);
       qc.invalidateQueries({ queryKey: ["outreach"] });
     },
+  });
+}
+
+// ---- Reply Tracking Hooks ----
+
+export function useLogReply() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (params: { lead_id: string; message_id?: string; notes?: string }) => {
+      const fn = httpsCallable<
+        { lead_id: string; message_id?: string; notes?: string },
+        { reply_id: string; status: string }
+      >(functions, "logReply");
+      const result = await fn(params);
+      return result.data;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["outreach"] });
+      qc.invalidateQueries({ queryKey: ["inbound-replies"] });
+    },
+  });
+}
+
+export function useUpdateLeadOutcome() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (params: { lead_id: string; outcome: string }) => {
+      const fn = httpsCallable<
+        { lead_id: string; outcome: string },
+        { status: string; outcome: string }
+      >(functions, "updateLeadOutcome");
+      const result = await fn(params);
+      return result.data;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["outreach"] });
+      qc.invalidateQueries({ queryKey: ["leads"] });
+    },
+  });
+}
+
+export function useAssignReply() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (params: { reply_id: string; lead_id: string }) => {
+      const fn = httpsCallable<
+        { reply_id: string; lead_id: string },
+        { status: string }
+      >(functions, "assignReplyToLead");
+      const result = await fn(params);
+      return result.data;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["inbound-replies"] });
+      qc.invalidateQueries({ queryKey: ["outreach"] });
+    },
+  });
+}
+
+export function useInboundReplies(filters?: { lead_id?: string; matched?: boolean }) {
+  return useQuery({
+    queryKey: ["inbound-replies", filters],
+    queryFn: () => getInboundReplies(filters),
   });
 }

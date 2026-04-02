@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import html as html_mod
 import os
 
 import resend
@@ -12,6 +13,37 @@ from src.config.loader import AppConfig, load_config
 from src.db.models import MessageStatus, OutreachMessage
 
 log = structlog.get_logger()
+
+# HTML email signature — appended at send time, not stored in message content.
+# Duplicated in frontend/src/app/api/outreach/send/route.ts and functions/index.js.
+EMAIL_SIGNATURE_HTML = """\
+<table cellpadding="0" cellspacing="0" border="0" style="font-family: Arial, sans-serif; font-size: 13px; color: #333;">
+  <tr>
+    <td style="padding-top: 12px; border-top: 1px solid #ddd;">
+      <strong>Robert Berry</strong>&nbsp;&nbsp;|&nbsp;&nbsp;Co-founder<br>
+      <a href="tel:+447817478196" style="color: #333; text-decoration: none;">+44 7817 478196</a><br>
+      <a href="https://www.asterleybros.com" style="color: #b5651d; text-decoration: none;">www.asterleybros.com</a>
+    </td>
+  </tr>
+  <tr>
+    <td style="padding-top: 10px;">
+      <img src="https://cdn.shopify.com/s/files/1/0447/7521/1172/files/Awards_Only_SML.png?v=1774997201"
+           alt="Asterley Bros Awards" width="300" style="display: block;" />
+    </td>
+  </tr>
+</table>"""
+
+
+def _build_html_email(content: str) -> str:
+    """Wrap plain-text message body in HTML and append the signature."""
+    escaped = html_mod.escape(content)
+    return (
+        '<div style="font-family: Arial, sans-serif; font-size: 14px; color: #333; line-height: 1.5;">'
+        f'<div style="white-space: pre-wrap;">{escaped}</div>'
+        "<br>"
+        f"{EMAIL_SIGNATURE_HTML}"
+        "</div>"
+    )
 
 
 class EmailSender:
@@ -36,6 +68,7 @@ class EmailSender:
                 to=[to_email],
                 subject=message.subject or "Asterley Bros — Craft Spirits",
                 text=message.content,
+                html=_build_html_email(message.content),
             )
             result = resend.Emails.send(params)
             message.status = MessageStatus.SENT

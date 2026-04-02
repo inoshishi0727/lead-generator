@@ -12,9 +12,10 @@ import {
   orderBy,
   limit as fbLimit,
   updateDoc,
+  addDoc,
 } from "firebase/firestore";
 import { db } from "./firebase";
-import type { Lead, LeadDetail, OutreachMessage } from "./types";
+import type { Lead, LeadDetail, OutreachMessage, InboundReply } from "./types";
 
 // --- Leads ---
 
@@ -82,6 +83,11 @@ export async function getLeads(filters?: {
       client_status: data.client_status || null,
       rejection_reason: data.rejection_reason || null,
       batch_id: data.batch_id || null,
+      human_takeover: data.human_takeover || false,
+      human_takeover_at: data.human_takeover_at || null,
+      outcome: data.outcome || null,
+      outcome_updated_at: data.outcome_updated_at || null,
+      reply_count: data.reply_count || 0,
     };
   });
 
@@ -131,6 +137,14 @@ export async function getOutreachMessages(filters?: {
       menu_fit: data.menu_fit || null,
       recipient_email: data.recipient_email || null,
       website: data.website || null,
+      original_content: data.original_content || undefined,
+      original_subject: data.original_subject || undefined,
+      was_edited: data.was_edited || false,
+      edited_at: data.edited_at || null,
+      rejection_reason: data.rejection_reason || null,
+      has_reply: data.has_reply || false,
+      reply_count: data.reply_count || 0,
+      sent_at: data.sent_at || null,
     };
   });
 
@@ -141,18 +155,132 @@ export async function getOutreachMessages(filters?: {
     return db_ > da ? 1 : db_ < da ? -1 : 0;
   });
 
-  const lim = filters?.limit ?? 50;
+  const lim = filters?.limit ?? 200;
   return results.slice(0, lim);
+}
+
+// --- Update lead fields ---
+
+export async function updateLeadFields(
+  leadId: string,
+  updates: Record<string, unknown>
+): Promise<void> {
+  const ref = doc(db, "leads", leadId);
+  await updateDoc(ref, updates);
 }
 
 // --- Update message status (approve/reject) ---
 
 export async function updateOutreachMessage(
   messageId: string,
-  updates: { status?: string; content?: string; subject?: string }
+  updates: {
+    status?: string;
+    content?: string;
+    subject?: string;
+    rejection_reason?: string;
+    lead_id?: string;
+  }
 ): Promise<void> {
   const ref = doc(db, "outreach_messages", messageId);
-  await updateDoc(ref, updates);
+
+  // Capture edit feedback as a diff when content is modified
+  if (updates.content) {
+    const snap = await getDoc(ref);
+    if (snap.exists()) {
+      const data = snap.data();
+      const original = data.original_content || data.content;
+      if (original && original !== updates.content) {
+        const feedbackRef = collection(db, "edit_feedback");
+        await addDoc(feedbackRef, {
+          message_id: messageId,
+          lead_id: data.lead_id || null,
+          channel: data.channel || null,
+          venue_category: data.venue_category || null,
+          tone_tier: data.tone_tier || null,
+          step_number: data.step_number || null,
+          lead_products: data.lead_products || [],
+          original_content: original,
+          edited_content: updates.content,
+          original_subject: data.original_subject || null,
+          edited_subject: updates.subject || null,
+          created_at: new Date().toISOString(),
+        });
+
+        (updates as Record<string, unknown>).was_edited = true;
+        (updates as Record<string, unknown>).edited_at = new Date().toISOString();
+      }
+    }
+  }
+
+  // Handle rejection variants — update lead based on rejection_reason
+  if (updates.status === "rejected" && updates.rejection_reason && updates.lead_id) {
+    const reason = updates.rejection_reason;
+    const leadRef = doc(db, "leads", updates.lead_id);
+
+    if (reason === "snoozed") {
+      const now = new Date();
+      const daysUntilMonday = (8 - now.getDay()) % 7 || 7;
+      const nextMonday = new Date(now);
+      nextMonday.setDate(now.getDate() + daysUntilMonday);
+      nextMonday.setHours(9, 0, 0, 0);
+      await updateDoc(leadRef, {
+        client_status: "snoozed",
+        snoozed_until: nextMonday.toISOString(),
+      });
+    } else if (reason === "current_account") {
+      await updateDoc(leadRef, {
+        client_status: "current_account",
+        stage: "declined",
+      });
+    } else if (reason === "in_discussion") {
+      const snoozeUntil = new Date();
+      snoozeUntil.setDate(snoozeUntil.getDate() + 60);
+      await updateDoc(leadRef, {
+        client_status: "in_discussion",
+        snoozed_until: snoozeUntil.toISOString(),
+      });
+    }
+  }
+
+  // Strip lead_id (not a message field) but keep rejection_reason on the message doc
+  const { lead_id: _leadId, ...messageUpdates } = updates;
+  await updateDoc(ref, messageUpdates as Record<string, unknown>);
+}
+
+// --- Inbound Replies ---
+
+export async function getInboundReplies(filters?: {
+  lead_id?: string;
+  matched?: boolean;
+}): Promise<InboundReply[]> {
+  const ref = collection(db, "inbound_replies");
+  const constraints: any[] = [];
+
+  if (filters?.lead_id) constraints.push(where("lead_id", "==", filters.lead_id));
+  if (filters?.matched !== undefined) constraints.push(where("matched", "==", filters.matched));
+
+  const q = constraints.length > 0 ? query(ref, ...constraints) : ref;
+  const snap = await getDocs(q);
+
+  const results: InboundReply[] = snap.docs.map((d) => {
+    const data = d.data();
+    return {
+      id: data.id || d.id,
+      lead_id: data.lead_id || null,
+      message_id: data.message_id || null,
+      from_email: data.from_email || "",
+      from_name: data.from_name || null,
+      subject: data.subject || null,
+      body: data.body || "",
+      source: data.source || "manual",
+      matched: data.matched || false,
+      created_at: data.created_at || "",
+      forwarded_by: data.forwarded_by || null,
+    };
+  });
+
+  results.sort((a, b) => (b.created_at > a.created_at ? 1 : -1));
+  return results;
 }
 
 export async function restoreOriginalEmail(messageId: string): Promise<void> {

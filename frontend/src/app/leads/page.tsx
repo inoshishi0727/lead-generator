@@ -31,9 +31,13 @@ export default function LeadsPage() {
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("");
   const [fit, setFit] = useState("");
-  const [area, setArea] = useState("");
+  const [postcode, setPostcode] = useState("");
   const [emailOnly, setEmailOnly] = useState(true);
   const enrichMutation = useEnrichLeads();
+
+  // Extract outward code (district) from a UK postcode, e.g. "SE26 5HS" -> "SE26"
+  const getDistrict = (pc: string | null | undefined) =>
+    pc ? pc.trim().split(/\s+/)[0]?.toUpperCase() : null;
 
   const { data: rawLeads, isLoading } = useLeads({
     source: source || undefined,
@@ -49,19 +53,19 @@ export default function LeadsPage() {
   const categoryOptions = useMemo(() => {
     let pool = emailOnly ? allLeads.filter((l) => l.email) : allLeads;
     if (fit) pool = pool.filter((l) => l.menu_fit === fit);
-    if (area) pool = pool.filter((l) => l.location_area === area);
+    if (postcode) pool = pool.filter((l) => getDistrict(l.location_postcode) === postcode);
     const counts = new Map<string, number>();
     pool.forEach((l) => {
       const c = l.venue_category || l.category;
       if (c) counts.set(c, (counts.get(c) ?? 0) + 1);
     });
     return Array.from(counts.entries()).sort(([, a], [, b]) => b - a);
-  }, [allLeads, emailOnly, fit, area]);
+  }, [allLeads, emailOnly, fit, postcode]);
 
   const fitOptions = useMemo(() => {
     let pool = emailOnly ? allLeads.filter((l) => l.email) : allLeads;
     if (category) pool = pool.filter((l) => (l.venue_category || l.category) === category);
-    if (area) pool = pool.filter((l) => l.location_area === area);
+    if (postcode) pool = pool.filter((l) => getDistrict(l.location_postcode) === postcode);
     const counts = new Map<string, number>();
     pool.forEach((l) => {
       if (l.menu_fit) counts.set(l.menu_fit, (counts.get(l.menu_fit) ?? 0) + 1);
@@ -69,15 +73,16 @@ export default function LeadsPage() {
     return Array.from(counts.entries()).sort(
       ([a], [b]) => (FIT_ORDER.indexOf(a) === -1 ? 99 : FIT_ORDER.indexOf(a)) - (FIT_ORDER.indexOf(b) === -1 ? 99 : FIT_ORDER.indexOf(b))
     );
-  }, [allLeads, emailOnly, category, area]);
+  }, [allLeads, emailOnly, category, postcode]);
 
-  const areaOptions = useMemo(() => {
+  const postcodeOptions = useMemo(() => {
     let pool = emailOnly ? allLeads.filter((l) => l.email) : allLeads;
     if (category) pool = pool.filter((l) => (l.venue_category || l.category) === category);
     if (fit) pool = pool.filter((l) => l.menu_fit === fit);
     const counts = new Map<string, number>();
     pool.forEach((l) => {
-      if (l.location_area) counts.set(l.location_area, (counts.get(l.location_area) ?? 0) + 1);
+      const d = getDistrict(l.location_postcode);
+      if (d) counts.set(d, (counts.get(d) ?? 0) + 1);
     });
     return Array.from(counts.entries()).sort(([a], [b]) => a.localeCompare(b));
   }, [allLeads, emailOnly, category, fit]);
@@ -87,9 +92,9 @@ export default function LeadsPage() {
     if (emailOnly) filtered = filtered.filter((l) => l.email);
     if (category) filtered = filtered.filter((l) => (l.venue_category || l.category) === category);
     if (fit) filtered = filtered.filter((l) => l.menu_fit === fit);
-    if (area) filtered = filtered.filter((l) => l.location_area === area);
+    if (postcode) filtered = filtered.filter((l) => getDistrict(l.location_postcode) === postcode);
     return filtered;
-  }, [allLeads, emailOnly, category, fit, area]);
+  }, [allLeads, emailOnly, category, fit, postcode]);
 
   const total = leads.length;
   const totalRaw = allLeads.length;
@@ -184,14 +189,14 @@ export default function LeadsPage() {
         </select>
 
         <select
-          value={area}
-          onChange={(e) => setArea(e.target.value)}
+          value={postcode}
+          onChange={(e) => setPostcode(e.target.value)}
           className="rounded-md border border-input bg-background px-3 py-2 text-sm"
         >
-          <option value="">All Areas</option>
-          {areaOptions.map(([a, count]) => (
-            <option key={a} value={a}>
-              {a} ({count})
+          <option value="">All Postcodes</option>
+          {postcodeOptions.map(([pc, count]) => (
+            <option key={pc} value={pc}>
+              {pc} ({count})
             </option>
           ))}
         </select>

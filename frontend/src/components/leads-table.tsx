@@ -89,7 +89,7 @@ export function LeadsTable({ leads, isLoading }: Props) {
                 <TableHead className="w-[14%]">Category</TableHead>
                 <TableHead className="w-[7%]">Fit</TableHead>
                 <TableHead className="w-[22%]">Email</TableHead>
-                <TableHead className="w-[14%]">Area</TableHead>
+                <TableHead className="w-[14%]">Postcode</TableHead>
                 <TableHead className="w-[6%] text-right">Score</TableHead>
                 <TableHead className="w-[8%] text-center">Actions</TableHead>
               </TableRow>
@@ -105,9 +105,7 @@ export function LeadsTable({ leads, isLoading }: Props) {
                 >
                   {/* Flag column */}
                   <TableCell className="w-8 px-2">
-                    {needsRescrape(lead) ? (
-                      <AlertTriangle className="h-3.5 w-3.5 text-red-400" />
-                    ) : lead.client_status === "approved" ? (
+                    {lead.client_status === "approved" ? (
                       <Check className="h-3.5 w-3.5 text-emerald-400" />
                     ) : lead.client_status === "rejected" ? (
                       <X className="h-3.5 w-3.5 text-red-400" />
@@ -115,14 +113,7 @@ export function LeadsTable({ leads, isLoading }: Props) {
                   </TableCell>
                   {/* Business name */}
                   <TableCell className="font-medium text-primary truncate">
-                    <div className="flex items-center gap-1.5 min-w-0">
-                      <span className="truncate">{lead.business_name}</span>
-                      {needsRescrape(lead) && (
-                        <Badge variant="destructive" className="text-[8px] h-4 px-1 shrink-0">
-                          re-scrape
-                        </Badge>
-                      )}
-                    </div>
+                    <span className="truncate">{lead.business_name}</span>
                   </TableCell>
                   {/* Category */}
                   <TableCell>
@@ -156,9 +147,9 @@ export function LeadsTable({ leads, isLoading }: Props) {
                       <span className="text-xs text-red-400">No email</span>
                     )}
                   </TableCell>
-                  {/* Area */}
+                  {/* Postcode */}
                   <TableCell className="text-xs text-muted-foreground truncate">
-                    {lead.location_area ?? "\u2014"}
+                    {lead.location_postcode ?? "\u2014"}
                   </TableCell>
                   {/* Score */}
                   <TableCell className="text-right font-mono text-xs">

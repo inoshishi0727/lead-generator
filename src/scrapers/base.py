@@ -50,7 +50,13 @@ class BaseScraper(abc.ABC):
         self._browser, self._browser_engine = await launch_browser(headless=headless)
 
         proxy = get_proxy_config()
-        context_kwargs = {"viewport": {"width": 1280, "height": 720}}
+        context_kwargs = {
+            "viewport": {"width": 1280, "height": 720},
+            "locale": "en-GB",
+            "timezone_id": "Europe/London",
+            "geolocation": {"latitude": 51.5074, "longitude": -0.1278},
+            "permissions": ["geolocation"],
+        }
         if proxy:
             context_kwargs["proxy"] = proxy
         self._context = await self._browser.new_context(**context_kwargs)

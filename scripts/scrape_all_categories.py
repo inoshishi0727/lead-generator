@@ -57,60 +57,60 @@ CATEGORY_QUERIES: dict[str, list[str]] = {
         "craft spirits shop London",
     ],
     "deli_farm_shop": [
-        "deli and wine shop London",
-        "farm shop spirits London",
+        "deli shop London",
+        "farm shop London",
     ],
     "events_catering": [
-        "event bar hire London",
-        "wedding cocktail catering London",
+        "event catering hire London",
+        "wedding catering London",
     ],
     "rtd": [
-        "ready to drink cocktail brand UK",
-        "RTD cocktail manufacturer UK",
+        "ready to drink brand UK",
+        "RTD manufacturer UK",
     ],
     "restaurant_groups": [
         "restaurant group London",
-        "bar group London multiple venues",
+        "hospitality group London multiple venues",
     ],
     "festival_operators": [
-        "festival bar operator UK",
-        "outdoor event bar company UK",
+        "festival operator UK",
+        "outdoor event company UK",
     ],
     "cookery_schools": [
-        "cocktail masterclass London",
-        "cookery school London spirits",
+        "cookery school London",
+        "cooking class London",
     ],
     "corporate_gifting": [
-        "corporate gift hamper spirits UK",
-        "premium gift box company UK spirits",
+        "corporate gift hamper UK",
+        "premium gift box company UK",
     ],
     "membership_clubs": [
-        "private members club London bar",
-        "members club cocktail bar London",
+        "private members club London",
+        "members club London",
     ],
     "airlines_trains": [
-        "airline lounge bar London",
-        "first class lounge spirits London",
+        "airline lounge London",
+        "first class train lounge London",
     ],
     "subscription_boxes": [
-        "cocktail subscription box UK",
+        "subscription box UK food and drink",
         "spirits subscription box UK",
     ],
     "film_tv_theatre": [
-        "film production prop buyer London",
-        "theatre bar London West End",
+        "film production company London",
+        "theatre London West End",
     ],
     "yacht_charter": [
         "superyacht provisioning London",
-        "luxury yacht charter catering UK",
+        "luxury yacht charter UK",
     ],
     "luxury_food_retail": [
-        "luxury food hall London spirits",
+        "luxury food hall London",
         "premium food retail London",
     ],
     "grocery": [
-        "premium supermarket spirits London",
-        "organic grocery spirits UK",
+        "premium supermarket London",
+        "organic grocery London",
     ],
 }
 
@@ -196,7 +196,7 @@ async def re_enrich_leads(dry_run: bool = False) -> int:
                 k: v.model_dump(mode="json") for k, v in lead.score_breakdown.items()
             } if lead.score_breakdown else None
         if lead.stage:
-            updates["stage"] = lead.stage.value
+            updates["stage"] = lead.stage.value if hasattr(lead.stage, "value") else lead.stage
 
         if updates:
             update_lead(str(lead.id), updates)
