@@ -4,8 +4,7 @@ import { getAuth } from "firebase-admin/auth";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { GoogleGenAI } from "@google/genai";
 import Anthropic from "@anthropic-ai/sdk";
-import sgMail from "@sendgrid/mail";
-import Busboy from "busboy";
+import { Resend } from "resend";
 
 const HttpsError = functions.https.HttpsError;
 
@@ -953,7 +952,7 @@ export const getStrategy = functions
     return { insights: [], ratio_adjustments: [], query_suggestions: [], generated_at: new Date().toISOString() };
   });
 
-// ---- Send Approved Emails via SendGrid ----
+// ---- Send Approved Emails via Resend ----
 
 const SENDER_EMAIL = "rob@asterleybros.com";
 const SENDER_NAME = "Rob from Asterley Bros";
@@ -1001,8 +1000,10 @@ function isOptimalWindow() {
   return isBestDay && isBestTime;
 }
 
+const REPLY_DOMAIN = "replies.asterleybros.com";
+
 export const sendApproved = functions
-  .runWith({ timeoutSeconds: 540, memory: "512MB", secrets: ["SENDGRID_API_KEY"] })
+  .runWith({ timeoutSeconds: 540, memory: "512MB", secrets: ["RESEND_API_KEY"] })
   .https.onCall(async (data, context) => {
     if (!context.auth) throw new HttpsError("unauthenticated", "Must be signed in.");
 
@@ -1060,10 +1061,10 @@ export const sendApproved = functions
 
     const toSend = messages.slice(0, remaining);
 
-    // Init SendGrid
-    const apiKey = process.env.SENDGRID_API_KEY;
-    if (!apiKey) throw new HttpsError("failed-precondition", "SENDGRID_API_KEY not configured.");
-    sgMail.setApiKey(apiKey);
+    // Init Resend
+    const apiKey = process.env.RESEND_API_KEY;
+    if (!apiKey) throw new HttpsError("failed-precondition", "RESEND_API_KEY not configured.");
+    const resend = new Resend(apiKey);
 
     let sent = 0;
     let failed = 0;
@@ -1086,19 +1087,26 @@ export const sendApproved = functions
           continue;
         }
 
-        await sgMail.send({
+        // Encode lead_id in reply-to so inbound webhook can match replies
+        const replyToAddress = `reply+${msg.lead_id}@${REPLY_DOMAIN}`;
+
+        const { data: resendData, error } = await resend.emails.send({
+          from: `${SENDER_NAME} <${SENDER_EMAIL}>`,
           to: toEmail,
-          from: { email: SENDER_EMAIL, name: SENDER_NAME },
-          replyTo: { email: "replies@asterleybros.com", name: "Asterley Bros Replies" },
+          replyTo: replyToAddress,
           subject: msg.subject || "Asterley Bros",
           text: msg.content,
           html: buildHtmlEmail(msg.content),
         });
 
+        if (error) throw new Error(error.message);
+
         const now = new Date().toISOString();
         await db.collection("outreach_messages").doc(msg.id).update({
           status: "sent",
           sent_at: now,
+          reply_to_address: replyToAddress,
+          email_message_id: resendData?.id ?? null,
         });
 
         await db.collection("leads").doc(msg.lead_id).update({
@@ -1157,42 +1165,20 @@ export const deleteUser = functions
     return { status: "deleted", uid };
   });
 
-// ---- Reply Tracking Helpers ----
+// ---- Inbound Email Webhook (Resend) ----
 
-function parseMultipart(req) {
-  return new Promise((resolve, reject) => {
-    const fields = {};
-    const busboy = Busboy({ headers: req.headers });
-    busboy.on("field", (name, val) => { fields[name] = val; });
-    busboy.on("finish", () => resolve(fields));
-    busboy.on("error", reject);
-    busboy.end(req.rawBody);
-  });
-}
-
-function extractEmailAddress(str) {
-  const match = str.match(/<([^>]+)>/) || str.match(/[\w.-]+@[\w.-]+\.\w+/);
-  return match ? (match[1] || match[0]).toLowerCase() : str.toLowerCase().trim();
-}
-
-function extractName(str) {
-  const match = str.match(/^"?([^"<]+)"?\s*</);
-  return match ? match[1].trim() : null;
-}
-
-function extractOriginalSender(body) {
-  const patterns = [
-    /From:\s*[^<]*<([^>]+)>/i,
-    /From:\s*([\w.-]+@[\w.-]+\.\w+)/i,
-  ];
-  for (const p of patterns) {
-    const m = body.match(p);
-    if (m) return m[1].toLowerCase();
+/**
+ * Extract lead_id from a plus-addressed reply-to address.
+ * e.g. "reply+abc123@replies.asterleybros.com" → "abc123"
+ */
+function extractLeadIdFromTo(toAddresses) {
+  for (const addr of toAddresses) {
+    const email = typeof addr === "string" ? addr : addr?.email || addr?.address || "";
+    const match = email.match(/^reply\+([^@]+)@/i);
+    if (match) return match[1];
   }
   return null;
 }
-
-// ---- Inbound Email Webhook (SendGrid Inbound Parse) ----
 
 export const processInboundEmail = functions
   .runWith({ timeoutSeconds: 30, memory: "256MB" })
@@ -1203,29 +1189,61 @@ export const processInboundEmail = functions
     }
 
     try {
-      const fields = await parseMultipart(req);
+      // Resend sends inbound emails as JSON
+      const payload = req.body;
+      const eventData = payload.data || payload;
 
-      const fromEmail = extractEmailAddress(fields.from || "");
-      const subject = fields.subject || "";
-      const body = fields.text || fields.html || "";
+      const resendEmailId = eventData.email_id || eventData.id || null;
 
-      // The forwarder is rob — the original sender is in the body
-      const originalSender = extractOriginalSender(body) || fromEmail;
+      // Idempotency check
+      if (resendEmailId) {
+        const existing = await db.collection("webhook_events").doc(resendEmailId).get();
+        if (existing.exists) {
+          console.log("Duplicate webhook skipped:", resendEmailId);
+          res.status(200).json({ status: "skipped", reason: "duplicate" });
+          return;
+        }
+      }
 
-      // Match to a lead by email or contact_email
+      const fromEmail = (eventData.from?.email || eventData.from || "").toLowerCase().trim();
+      const fromName = eventData.from?.name || null;
+      const subject = eventData.subject || "";
+      const textBody = eventData.text || "";
+      const htmlBody = eventData.html || "";
+      const toAddresses = eventData.to || [];
+
+      // Extract lead_id from the plus-addressed reply-to
+      const leadIdFromAddress = extractLeadIdFromTo(
+        Array.isArray(toAddresses) ? toAddresses : [toAddresses]
+      );
+
+      // Primary matching: lead_id from plus-address
       let matchedLead = null;
       let matchedMessage = null;
+      let matchedBy = null;
 
-      const leadsByEmail = await db.collection("leads")
-        .where("email", "==", originalSender).limit(1).get();
+      if (leadIdFromAddress) {
+        const leadSnap = await db.collection("leads").doc(leadIdFromAddress).get();
+        if (leadSnap.exists) {
+          matchedLead = { id: leadSnap.id, ...leadSnap.data() };
+          matchedBy = "plus_address";
+        }
+      }
 
-      if (!leadsByEmail.empty) {
-        matchedLead = { id: leadsByEmail.docs[0].id, ...leadsByEmail.docs[0].data() };
-      } else {
-        const leadsByContact = await db.collection("leads")
-          .where("contact_email", "==", originalSender).limit(1).get();
-        if (!leadsByContact.empty) {
-          matchedLead = { id: leadsByContact.docs[0].id, ...leadsByContact.docs[0].data() };
+      // Fallback: match by sender email
+      if (!matchedLead) {
+        const leadsByEmail = await db.collection("leads")
+          .where("email", "==", fromEmail).limit(1).get();
+        if (!leadsByEmail.empty) {
+          matchedLead = { id: leadsByEmail.docs[0].id, ...leadsByEmail.docs[0].data() };
+          matchedBy = "email_lookup";
+        } else {
+          const leadsByContact = await db.collection("leads")
+            .where("contact_email", "==", fromEmail).limit(1).get();
+          if (!leadsByContact.empty) {
+            matchedLead = { id: leadsByContact.docs[0].id, ...leadsByContact.docs[0].data() };
+            matchedBy = "email_lookup";
+          }
         }
       }
 
@@ -1241,24 +1259,34 @@ export const processInboundEmail = functions
         }
       }
 
+      // Detect auto-replies
+      const headers = eventData.headers || {};
+      const autoSubmitted = headers["auto-submitted"] || headers["Auto-Submitted"] || "";
+      const isAutoReply = autoSubmitted !== "" && autoSubmitted !== "no";
+
       // Create inbound_replies doc
       const replyId = crypto.randomUUID();
       await db.collection("inbound_replies").doc(replyId).set({
         id: replyId,
         lead_id: matchedLead?.id || null,
         message_id: matchedMessage?.id || null,
-        from_email: originalSender,
-        from_name: extractName(fields.from || ""),
+        from_email: fromEmail,
+        from_name: fromName,
         subject,
-        body,
-        source: "email_forward",
+        body: textBody || htmlBody,
+        body_html: htmlBody,
+        source: "resend",
         matched: !!matchedLead,
+        matched_by: matchedBy,
+        is_auto_reply: isAutoReply,
+        resend_email_id: resendEmailId,
+        has_attachments: (eventData.attachments || []).length > 0,
+        attachment_count: (eventData.attachments || []).length,
         created_at: new Date().toISOString(),
-        forwarded_by: fromEmail,
       });
 
-      // Update lead if matched
-      if (matchedLead) {
+      // Update lead if matched (skip stage update for auto-replies)
+      if (matchedLead && !isAutoReply) {
         await db.collection("leads").doc(matchedLead.id).update({
           stage: "responded",
           human_takeover: true,
@@ -1276,21 +1304,40 @@ export const processInboundEmail = functions
         });
       }
 
+      // Log idempotency record
+      if (resendEmailId) {
+        await db.collection("webhook_events").doc(resendEmailId).set({
+          event_type: "inbound",
+          resend_email_id: resendEmailId,
+          processed_at: new Date().toISOString(),
+          status: "processed",
+          reply_id: replyId,
+        });
+      }
+
       // Activity log
       await db.collection("activity_log").add({
         type: "inbound_reply",
         lead_id: matchedLead?.id || null,
         reply_id: replyId,
         matched: !!matchedLead,
-        from_email: originalSender,
+        matched_by: matchedBy,
+        from_email: fromEmail,
+        is_auto_reply: isAutoReply,
         created_at: new Date().toISOString(),
       });
 
-      console.log("Inbound reply processed", { replyId, matched: !!matchedLead, originalSender });
+      console.log("Inbound reply processed", {
+        replyId,
+        matched: !!matchedLead,
+        matchedBy,
+        fromEmail,
+        isAutoReply,
+      });
       res.status(200).json({ status: "ok", matched: !!matchedLead, reply_id: replyId });
     } catch (err) {
       console.error("processInboundEmail error:", err.message);
-      // Always return 200 to prevent SendGrid retries
+      // Always return 200 to prevent retries on processing errors
       res.status(200).json({ status: "error", error: err.message });
     }
   });

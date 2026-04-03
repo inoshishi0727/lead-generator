@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebase-admin";
-import sgMail from "@sendgrid/mail";
+import { Resend } from "resend";
 
 const SENDER_EMAIL = "rob@asterleybros.com";
 const SENDER_NAME = "Rob from Asterley Bros";
+const REPLY_DOMAIN = "replies.asterleybros.com";
 const DAILY_CAP = 150;
 
 // HTML email signature — appended at send time, not stored in message content.
@@ -104,15 +105,15 @@ export async function POST(req: NextRequest) {
     })) as Record<string, any>[];
     const toSend = messages.slice(0, remaining);
 
-    // Init SendGrid
-    const apiKey = process.env.SENDGRID_API_KEY;
+    // Init Resend
+    const apiKey = process.env.RESEND_API_KEY;
     if (!apiKey) {
       return NextResponse.json(
-        { error: "SENDGRID_API_KEY not configured." },
+        { error: "RESEND_API_KEY not configured." },
         { status: 500 }
       );
     }
-    sgMail.setApiKey(apiKey);
+    const resend = new Resend(apiKey);
 
     let sent = 0;
     let failed = 0;
@@ -137,13 +138,21 @@ export async function POST(req: NextRequest) {
           continue;
         }
 
-        await sgMail.send({
+        // Encode lead_id in reply-to so inbound webhook can match replies
+        const replyToAddress = `reply+${msg.lead_id}@${REPLY_DOMAIN}`;
+
+        const { data: resendData, error } = await resend.emails.send({
+          from: `${SENDER_NAME} <${SENDER_EMAIL}>`,
           to: toEmail,
-          from: { email: SENDER_EMAIL, name: SENDER_NAME },
+          replyTo: replyToAddress,
           subject: (msg.subject as string) || "Asterley Bros",
           text: msg.content as string,
           html: buildHtmlEmail(msg.content as string),
         });
+
+        if (error) {
+          throw new Error(error.message);
+        }
 
         const now = new Date().toISOString();
         await adminDb
@@ -152,6 +161,8 @@ export async function POST(req: NextRequest) {
           .update({
             status: "sent",
             sent_at: now,
+            reply_to_address: replyToAddress,
+            email_message_id: resendData?.id ?? null,
           });
 
         await adminDb
