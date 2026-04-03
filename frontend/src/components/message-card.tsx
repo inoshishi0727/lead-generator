@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { EditMessageDialog } from "@/components/edit-message-dialog";
 import { LogReplyDialog } from "@/components/log-reply-dialog";
+import { RegenerateCompareDialog } from "@/components/regenerate-compare-dialog";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -79,6 +80,7 @@ function rejectionLabel(reason: string): string {
 export function MessageCard({ message }: Props) {
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [logReplyOpen, setLogReplyOpen] = useState(false);
+  const [flowingDraft, setFlowingDraft] = useState<{ subject: string | null; content: string } | null>(null);
 
   const { isAdmin } = useAuth();
   const updateMutation = useUpdateMessage();
@@ -102,8 +104,27 @@ export function MessageCard({ message }: Props) {
     });
   }
 
-  function handleRegenerate() {
-    regenerateMutation.mutate(message.id);
+  function handleRegenerate(style: "default" | "flowing" = "default") {
+    if (style === "flowing") {
+      regenerateMutation.mutate(
+        { id: message.id, style: "flowing", preview: true },
+        {
+          onSuccess: (data) => {
+            setFlowingDraft({ subject: data.subject ?? null, content: data.content });
+          },
+        }
+      );
+    } else {
+      regenerateMutation.mutate({ id: message.id, style: "default" });
+    }
+  }
+
+  function handlePickFlowing() {
+    if (!flowingDraft) return;
+    updateMutation.mutate(
+      { id: message.id, content: flowingDraft.content, subject: flowingDraft.subject ?? undefined },
+      { onSuccess: () => setFlowingDraft(null) }
+    );
   }
 
   function handleDialogSave(content: string, subject?: string) {
@@ -291,19 +312,32 @@ export function MessageCard({ message }: Props) {
                 </MenuContent>
               </Menu>
             )}
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={handleRegenerate}
-              disabled={isPending}
-            >
-              {isRegenerating ? (
-                <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <RefreshCw className="mr-1 h-3.5 w-3.5" />
-              )}
-              Regenerate
-            </Button>
+            <Menu>
+              <MenuTrigger
+                disabled={isPending}
+                render={
+                  <Button size="sm" variant="outline" disabled={isPending}>
+                    {isRegenerating ? (
+                      <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <RefreshCw className="mr-1 h-3.5 w-3.5" />
+                    )}
+                    Regenerate
+                    <ChevronDown className="ml-0.5 h-3 w-3" />
+                  </Button>
+                }
+              />
+              <MenuContent side="bottom" align="start" sideOffset={4}>
+                <MenuItem onClick={() => handleRegenerate("default")}>
+                  <RefreshCw className="h-3.5 w-3.5" />
+                  Standard prompt
+                </MenuItem>
+                <MenuItem onClick={() => handleRegenerate("flowing")}>
+                  <RefreshCw className="h-3.5 w-3.5" />
+                  Flowing style
+                </MenuItem>
+              </MenuContent>
+            </Menu>
             <Button
               size="sm"
               variant="ghost"
@@ -395,6 +429,16 @@ export function MessageCard({ message }: Props) {
         <LogReplyDialog
           message={message}
           onClose={() => setLogReplyOpen(false)}
+        />
+      )}
+
+      {flowingDraft && (
+        <RegenerateCompareDialog
+          message={message}
+          flowingDraft={flowingDraft}
+          onPickOriginal={() => setFlowingDraft(null)}
+          onPickFlowing={handlePickFlowing}
+          onClose={() => setFlowingDraft(null)}
         />
       )}
     </Card>

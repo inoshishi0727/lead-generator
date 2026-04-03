@@ -112,27 +112,36 @@ export function useUpdateMessage() {
 export function useRegenerateMessage() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (id: string) => {
+    mutationFn: async ({
+      id,
+      style,
+      preview,
+    }: {
+      id: string;
+      style?: "default" | "flowing";
+      preview?: boolean;
+    }) => {
       if (hasBackend) {
         return api.post<OutreachMessage>(
           `/api/outreach/messages/${id}/regenerate`,
-          {}
+          { style, preview }
         );
       }
-      // Get the message to find lead_id
       const msgs = await getOutreachMessages({ lead_id: undefined, limit: 500 });
       const msg = msgs.find((m) => m.id === id);
       if (!msg) throw new Error("Message not found");
 
       const fn = httpsCallable<
-        { message_id: string; lead_id: string },
+        { message_id: string; lead_id: string; style?: string; preview?: boolean },
         { message_id: string; subject: string; content: string }
       >(functions, "regenerateDraft");
-      const result = await fn({ message_id: id, lead_id: msg.lead_id });
-      return result.data;
+      const result = await fn({ message_id: id, lead_id: msg.lead_id, style, preview });
+      return { ...result.data, preview: preview ?? false };
     },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["outreach"] });
+    onSuccess: (data) => {
+      if (!("preview" in data) || !data.preview) {
+        qc.invalidateQueries({ queryKey: ["outreach"] });
+      }
     },
   });
 }

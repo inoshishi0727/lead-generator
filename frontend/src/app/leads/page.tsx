@@ -18,7 +18,7 @@ const SOURCE_OPTIONS = [
 
 const STAGE_OPTIONS = [
   { value: "", label: "All Stages" },
-  { value: "pending_enrichment", label: "Pending Enrichment" },
+  { value: "pending_enrichment", label: "Queued for Scrape" },
   { value: "scraped", label: "Scraped" },
   { value: "needs_email", label: "Needs Email" },
   { value: "scored", label: "Scored" },

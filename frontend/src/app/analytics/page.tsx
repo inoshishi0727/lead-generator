@@ -1,17 +1,21 @@
 "use client";
 
-import { Users, TrendingUp, Target, BarChart3 } from "lucide-react";
+import { Users, TrendingUp, Target, BarChart3, MessageSquare, Send } from "lucide-react";
 import { StatCard } from "@/components/stat-card";
 import { FunnelChart } from "@/components/funnel-chart";
 import { CategoryBreakdown } from "@/components/category-breakdown";
 import { RatioChart } from "@/components/ratio-chart";
 import { TrendsChart } from "@/components/trends-chart";
 import { AIRecommendations } from "@/components/ai-recommendations";
-import { useFunnel, useCategories } from "@/hooks/use-analytics";
+import { SubjectLineChart } from "@/components/subject-line-chart";
+import { ReplyRateTrendChart } from "@/components/reply-rate-trend-chart";
+import { OutreachBreakdownChart } from "@/components/outreach-breakdown-chart";
+import { useFunnel, useCategories, useReplyRateTrend } from "@/hooks/use-analytics";
 
 export default function AnalyticsPage() {
   const { data: funnelData } = useFunnel();
   const { data: categoryData } = useCategories();
+  const { data: replyTrendData } = useReplyRateTrend();
 
   const totalLeads = funnelData?.total_leads ?? 0;
   const stages = funnelData?.stages ?? [];
@@ -22,6 +26,11 @@ export default function AnalyticsPage() {
 
   const responseRate = sent > 0 ? Math.round((responded / sent) * 100) : 0;
   const conversionRate = totalLeads > 0 ? Math.round((converted / totalLeads) * 100) : 0;
+
+  const outreachSent = replyTrendData?.series.reduce((sum, s) => sum + s.sent, 0) ?? 0;
+  const outreachReplied = replyTrendData?.series.reduce((sum, s) => sum + s.replied, 0) ?? 0;
+  const overallReplyRate =
+    outreachSent > 0 ? Math.round((outreachReplied / outreachSent) * 100) : 0;
 
   const categories = categoryData?.categories ?? [];
   const avgScore =
@@ -43,6 +52,11 @@ export default function AnalyticsPage() {
         <StatCard icon={BarChart3} label="Avg Score" value={avgScore} />
       </div>
 
+      <div className="grid grid-cols-2 gap-4">
+        <StatCard icon={MessageSquare} label="Outreach Reply Rate (12wk)" value={`${overallReplyRate}%`} />
+        <StatCard icon={Send} label="Total Sent (12wk)" value={outreachSent} />
+      </div>
+
       <div data-tour="funnel-chart">
         <FunnelChart />
       </div>
@@ -53,6 +67,18 @@ export default function AnalyticsPage() {
       </div>
 
       <TrendsChart />
+
+      <div className="space-y-2">
+        <h2 className="px-0.5 text-sm font-semibold uppercase tracking-widest text-muted-foreground">
+          Outreach Performance
+        </h2>
+        <div className="grid gap-6 lg:grid-cols-2">
+          <ReplyRateTrendChart />
+          <OutreachBreakdownChart />
+        </div>
+      </div>
+
+      <SubjectLineChart />
 
       <AIRecommendations />
     </div>

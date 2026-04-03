@@ -112,6 +112,10 @@ export interface OutreachMessage {
   has_reply?: boolean;
   reply_count?: number;
   sent_at?: string | null;
+  postmark_message_id?: string;
+  email_message_id?: string;
+  reply_to_address?: string;
+  variant?: "A" | "B" | null;
 }
 
 // --- Reply Tracking ---
@@ -169,6 +173,20 @@ export interface TrendPoint {
   converted: number;
 }
 
+export interface ReplyRateTrendPoint {
+  week: string;
+  sent: number;
+  replied: number;
+  reply_rate: number;
+}
+
+export interface ReplyRateByDimensionPoint {
+  label: string;
+  sent: number;
+  replied: number;
+  reply_rate: number;
+}
+
 // --- AI Recommendations ---
 
 export interface StrategyInsight {
@@ -191,6 +209,13 @@ export interface StrategyResponse {
   ratio_adjustments: RatioAdjustment[];
   query_suggestions: string[];
   generated_at: string | null;
+}
+
+export interface SubjectLineStat {
+  subject: string;
+  sent: number;
+  replied: number;
+  reply_rate: number;
 }
 
 export interface LeadRecommendation {

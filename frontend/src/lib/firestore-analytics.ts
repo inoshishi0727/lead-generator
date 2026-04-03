@@ -2,7 +2,7 @@
  * Client-side analytics computed directly from Firestore data.
  * No backend needed.
  */
-import { collection, getDocs } from "firebase/firestore";
+import { collection, getDocs, query, where } from "firebase/firestore";
 import { db } from "./firebase";
 import type {
   FunnelData,
@@ -10,6 +10,9 @@ import type {
   CategoryStat,
   RatioComparison,
   TrendPoint,
+  SubjectLineStat,
+  ReplyRateTrendPoint,
+  ReplyRateByDimensionPoint,
 } from "./types";
 
 const STAGE_ORDER = [
@@ -168,4 +171,145 @@ export async function getTrends(period: string = "week", lookback: number = 12):
   }));
 
   return { series };
+}
+
+async function getAllSentOutreachMessages(): Promise<any[]> {
+  const snap = await getDocs(
+    query(collection(db, "outreach_messages"), where("status", "==", "sent"))
+  );
+  return snap.docs.map((d) => d.data());
+}
+
+export async function getReplyRateTrend(lookback: number = 12): Promise<{ series: ReplyRateTrendPoint[] }> {
+  const msgs = await getAllSentOutreachMessages();
+  if (!msgs.length) return { series: [] };
+
+  const now = new Date();
+  // Roll back to most recent Monday
+  const dayOfWeek = now.getDay(); // 0=Sun
+  const mondayOffset = (dayOfWeek + 6) % 7;
+  const thisMondayMs = now.getTime() - mondayOffset * 24 * 60 * 60 * 1000;
+  const weekMs = 7 * 24 * 60 * 60 * 1000;
+
+  const buckets: Record<string, { sent: number; replied: number }> = {};
+  const bucketKeys: string[] = [];
+
+  for (let i = 0; i < lookback; i++) {
+    const bucketStart = new Date(thisMondayMs - (lookback - 1 - i) * weekMs);
+    const key = bucketStart.toISOString().split("T")[0];
+    bucketKeys.push(key);
+    buckets[key] = { sent: 0, replied: 0 };
+  }
+
+  for (const msg of msgs) {
+    const sentAt = msg.sent_at;
+    if (!sentAt) continue;
+    const dateStr = typeof sentAt === "string" ? sentAt.split("T")[0] : "";
+    if (!dateStr || isNaN(Date.parse(dateStr))) continue;
+
+    let assigned: string | null = null;
+    for (const bk of bucketKeys) {
+      if (dateStr >= bk) assigned = bk;
+    }
+
+    if (assigned && buckets[assigned]) {
+      buckets[assigned].sent++;
+      if (msg.has_reply || (msg.reply_count && msg.reply_count > 0)) {
+        buckets[assigned].replied++;
+      }
+    }
+  }
+
+  const series: ReplyRateTrendPoint[] = bucketKeys.map((week) => ({
+    week,
+    sent: buckets[week].sent,
+    replied: buckets[week].replied,
+    reply_rate:
+      buckets[week].sent > 0
+        ? Math.round((buckets[week].replied / buckets[week].sent) * 1000) / 10
+        : 0,
+  }));
+
+  return { series };
+}
+
+export async function getReplyRateByDimension(
+  dimension: "tone_tier" | "step_number" | "variant"
+): Promise<{ points: ReplyRateByDimensionPoint[] }> {
+  const msgs = await getAllSentOutreachMessages();
+  if (!msgs.length) return { points: [] };
+
+  const grouped: Record<string, { sent: number; replied: number }> = {};
+
+  for (const msg of msgs) {
+    let rawValue: string;
+    if (dimension === "tone_tier") {
+      rawValue = msg.tone_tier ?? "unknown";
+    } else if (dimension === "step_number") {
+      rawValue = String(msg.step_number ?? 1);
+    } else {
+      rawValue = msg.variant ?? "A";
+    }
+
+    if (!grouped[rawValue]) grouped[rawValue] = { sent: 0, replied: 0 };
+    grouped[rawValue].sent++;
+    if (msg.has_reply || (msg.reply_count && msg.reply_count > 0)) {
+      grouped[rawValue].replied++;
+    }
+  }
+
+  const points: ReplyRateByDimensionPoint[] = Object.entries(grouped).map(([raw, counts]) => {
+    let label: string;
+    if (dimension === "step_number") {
+      label = `Step ${raw}`;
+    } else if (dimension === "variant") {
+      label = `Variant ${raw}`;
+    } else {
+      label = raw.charAt(0).toUpperCase() + raw.slice(1).replace(/_/g, " ");
+    }
+    return {
+      label,
+      sent: counts.sent,
+      replied: counts.replied,
+      reply_rate:
+        counts.sent > 0
+          ? Math.round((counts.replied / counts.sent) * 1000) / 10
+          : 0,
+    };
+  });
+
+  points.sort((a, b) => b.reply_rate - a.reply_rate);
+  return { points };
+}
+
+export async function getSubjectLineStats(): Promise<{ subjects: SubjectLineStat[] }> {
+  const snap = await getDocs(collection(db, "outreach_messages"));
+  const msgs = snap.docs.map((d) => d.data());
+
+  // Only count sent messages (includes those that got replies)
+  const sentMsgs = msgs.filter((m) => ["sent", "replied"].includes(m.status) || m.sent_at);
+
+  const bySubject: Record<string, { sent: number; replied: number; subject: string }> = {};
+
+  for (const msg of sentMsgs) {
+    const subject = msg.subject || "(no subject)";
+    if (!bySubject[subject]) {
+      bySubject[subject] = { sent: 0, replied: 0, subject };
+    }
+    bySubject[subject].sent++;
+    if (msg.has_reply || (msg.reply_count && msg.reply_count > 0)) {
+      bySubject[subject].replied++;
+    }
+  }
+
+  const subjects: SubjectLineStat[] = Object.values(bySubject)
+    .map((s) => ({
+      subject: s.subject,
+      sent: s.sent,
+      replied: s.replied,
+      reply_rate: s.sent > 0 ? Math.round((s.replied / s.sent) * 1000) / 10 : 0,
+    }))
+    .sort((a, b) => b.reply_rate - a.reply_rate || b.sent - a.sent);
+
+  return { subjects };
 }
