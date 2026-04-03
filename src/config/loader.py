@@ -21,6 +21,72 @@ class GoogleMapsConfig(BaseModel):
     max_parallel_browsers: int = 3
 
 
+class GoogleSearchConfig(BaseModel):
+    search_queries: list[str] = []
+    results_per_query: int = 20
+    max_parallel_browsers: int = 2
+    headless: bool = True
+    skip_domains: list[str] = [
+        "youtube.com",
+        "wikipedia.org",
+        "reddit.com",
+        "tripadvisor.com",
+        "yelp.com",
+        "facebook.com",
+        "instagram.com",
+        "twitter.com",
+        "linkedin.com",
+        "pinterest.com",
+        "tiktok.com",
+        "amazon.co.uk",
+        "amazon.com",
+        "ebay.co.uk",
+    ]
+
+
+class BingSearchConfig(BaseModel):
+    search_queries: list[str] = []
+    results_per_query: int = 20
+    max_parallel_browsers: int = 2
+    headless: bool = True
+    skip_domains: list[str] = [
+        "youtube.com",
+        "wikipedia.org",
+        "reddit.com",
+        "tripadvisor.com",
+        "yelp.com",
+        "facebook.com",
+        "instagram.com",
+        "twitter.com",
+        "linkedin.com",
+        "pinterest.com",
+        "tiktok.com",
+        "amazon.co.uk",
+        "amazon.com",
+        "ebay.co.uk",
+    ]
+
+
+class DirectoryConfig(BaseModel):
+    category_urls: list[str] = []
+    max_results_per_category: int = 50
+    max_parallel_browsers: int = 2
+    headless: bool = True
+
+
+class IndustrySiteEntry(BaseModel):
+    name: str
+    base_url: str
+    listing_paths: list[str] = []
+    max_results: int = 30
+
+
+class IndustrySiteConfig(BaseModel):
+    sites: list[IndustrySiteEntry] = []
+    max_parallel_browsers: int = 1
+    headless: bool = True
+
+
 class InstagramConfig(BaseModel):
     target_count: int = 40
     hashtags: list[str] = []
@@ -48,6 +114,10 @@ class EnrichmentConfig(BaseModel):
 
 class ScrapingConfig(BaseModel):
     google_maps: GoogleMapsConfig = GoogleMapsConfig()
+    google_search: GoogleSearchConfig = GoogleSearchConfig()
+    bing_search: BingSearchConfig = BingSearchConfig()
+    directory: DirectoryConfig = DirectoryConfig()
+    industry_sites: IndustrySiteConfig = IndustrySiteConfig()
     instagram: InstagramConfig = InstagramConfig()
     email_extraction: EmailExtractionConfig = EmailExtractionConfig()
     enrichment: EnrichmentConfig = EnrichmentConfig()
@@ -102,6 +172,10 @@ class PipelineConfig(BaseModel):
 
 class RateLimitsConfig(BaseModel):
     google_maps_rpm: int = 10
+    google_search_rpm: int = 8
+    bing_search_rpm: int = 12
+    directory_rpm: int = 10
+    industry_sites_rpm: int = 8
     instagram_rpm: int = 5
     gemini_rpm: int = 30
     resend_rpm: int = 10

@@ -10,16 +10,122 @@ scraping:
     target_count: 60
     max_parallel_browsers: 3
     search_queries:
+      # Core bar/drinks categories
       - "cocktail bars London"
       - "wine bars London"
       - "restaurants with bar London"
       - "boutique hotels London bar"
+      # Retail
       - "independent bottle shops London"
       - "deli and wine shop London"
+      - "farm shops London"
+      - "luxury food shops London"
+      - "independent grocery shops London"
+      # Dining
+      - "Italian restaurants London"
+      - "gastropubs London"
+      # Events & hospitality
+      - "events catering companies London"
+      - "festival food vendors London"
+      - "restaurant groups London"
+      # Membership & education
+      - "private members clubs London"
+      - "cookery schools London"
+      # Corporate
+      - "corporate gift hampers London"
     scroll_pause_seconds: 2
     max_stale_rounds: 3
     locale: "en"
     headless: false
+
+  google_search:
+    results_per_query: 20
+    max_parallel_browsers: 2
+    headless: false
+    search_queries:
+      - "UK spirits subscription box companies"
+      - "airline beverage suppliers UK"
+      - "train catering suppliers UK spirits"
+      - "yacht charter catering UK drinks"
+      - "film TV production catering London drinks"
+      - "RTD ready to drink spirits brands UK"
+    skip_domains:
+      - "youtube.com"
+      - "wikipedia.org"
+      - "reddit.com"
+      - "tripadvisor.com"
+      - "yelp.com"
+      - "facebook.com"
+      - "instagram.com"
+      - "twitter.com"
+      - "linkedin.com"
+      - "pinterest.com"
+      - "tiktok.com"
+      - "amazon.co.uk"
+      - "amazon.com"
+      - "ebay.co.uk"
+
+  bing_search:
+    results_per_query: 20
+    max_parallel_browsers: 2
+    headless: false
+    search_queries:
+      - "UK spirits subscription box companies"
+      - "airline beverage suppliers UK"
+      - "train catering suppliers UK spirits"
+      - "yacht charter catering UK drinks"
+      - "film TV production catering London drinks"
+      - "RTD ready to drink spirits brands UK"
+    skip_domains:
+      - "youtube.com"
+      - "wikipedia.org"
+      - "reddit.com"
+      - "tripadvisor.com"
+      - "yelp.com"
+      - "facebook.com"
+      - "instagram.com"
+      - "twitter.com"
+      - "linkedin.com"
+      - "pinterest.com"
+      - "tiktok.com"
+      - "amazon.co.uk"
+      - "amazon.com"
+      - "ebay.co.uk"
+
+  directory:
+    max_results_per_category: 50
+    max_parallel_browsers: 2
+    headless: false
+    category_urls:
+      # Yell.com — UK business directory
+      - "https://www.yell.com/s/cocktail+bars-london.html"
+      - "https://www.yell.com/s/wine+bars-london.html"
+      - "https://www.yell.com/s/italian+restaurants-london.html"
+      - "https://www.yell.com/s/gastropubs-london.html"
+      - "https://www.yell.com/s/off+licences-london.html"
+      - "https://www.yell.com/s/delicatessens-london.html"
+      # Trustpilot — business reviews
+      - "https://www.trustpilot.com/categories/food_beverage_tobacco"
+
+  industry_sites:
+    max_parallel_browsers: 1
+    headless: false
+    sites:
+      - name: "spirits_business"
+        base_url: "https://www.thespiritsbusiness.com"
+        listing_paths:
+          - "/supplier-directory/"
+        max_results: 30
+      - name: "diffords_guide"
+        base_url: "https://www.diffordsguide.com"
+        listing_paths:
+          - "/bars/"
+        max_results: 30
+      - name: "drinks_international"
+        base_url: "https://www.drinksint.com"
+        listing_paths:
+          - "/suppliers/"
+        max_results: 30
 
   email_extraction:
     gemini_enabled: true
@@ -110,6 +216,10 @@ lead_ratios:
 
 rate_limits:
   google_maps_rpm: 10
+  google_search_rpm: 8
+  bing_search_rpm: 12
+  directory_rpm: 10
+  industry_sites_rpm: 8
   instagram_rpm: 5
   gemini_rpm: 30
   resend_rpm: 10

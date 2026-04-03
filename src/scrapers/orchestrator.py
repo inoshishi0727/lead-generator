@@ -8,10 +8,14 @@ from pathlib import Path
 import structlog
 
 from src.config.loader import AppConfig, load_config
-from src.db.dedup import SharedDedupSet
+from src.db.dedup import SharedDedupSet, get_all_dedup_keys
 from src.db.exclusions import ExclusionSet, load_exclusion_set
 from src.db.models import Lead
+from src.scrapers.bing import BingSearchScraper
+from src.scrapers.directory import DirectoryScraper
 from src.scrapers.gmaps import GoogleMapsScraper
+from src.scrapers.gsearch import GoogleSearchScraper
+from src.scrapers.industry import IndustrySiteScraper
 from src.scrapers.instagram import InstagramScraper
 
 log = structlog.get_logger()
@@ -127,6 +131,234 @@ class ParallelScrapeOrchestrator:
         )
         return all_leads
 
+    async def scrape_gsearch(self) -> list[Lead]:
+        """Run Google Search scrapers in parallel, one per search query."""
+        queries = self.config.scraping.google_search.search_queries
+        max_parallel = self.config.scraping.google_search.max_parallel_browsers
+
+        if not queries:
+            log.info("no_gsearch_queries_configured")
+            return []
+
+        # Pre-load dedup set from Firestore + local JSON
+        shared_dedup = SharedDedupSet()
+        await shared_dedup.load_from_db("google_search")
+
+        semaphore = asyncio.Semaphore(max_parallel)
+
+        async def _worker(query: str) -> list[Lead]:
+            async with semaphore:
+                log.info("gsearch_worker_start", query=query)
+                worker_config = self.config.model_copy(deep=True)
+                worker_config.scraping.google_search.search_queries = [query]
+
+                scraper = GoogleSearchScraper(
+                    config=worker_config,
+                    on_progress=self._on_progress,
+                    shared_dedup=shared_dedup,
+                )
+                try:
+                    leads = await scraper.run()
+                    log.info(
+                        "gsearch_worker_done",
+                        query=query,
+                        leads=len(leads),
+                    )
+                    return leads
+                except Exception as exc:
+                    log.error(
+                        "gsearch_worker_failed",
+                        query=query,
+                        error=str(exc),
+                    )
+                    raise
+
+        tasks = [_worker(q) for q in queries]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        all_leads: list[Lead] = []
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                log.error(
+                    "gsearch_query_failed",
+                    query=queries[i],
+                    error=str(result),
+                )
+            else:
+                all_leads.extend(result)
+
+        # Filter out existing stockists
+        all_leads = self._filter_excluded(all_leads)
+
+        log.info(
+            "gsearch_parallel_done",
+            queries=len(queries),
+            total_leads=len(all_leads),
+            workers=min(len(queries), max_parallel),
+        )
+        return all_leads
+
+    async def scrape_bing(self) -> list[Lead]:
+        """Run Bing Search scrapers in parallel, one per search query."""
+        queries = self.config.scraping.bing_search.search_queries
+        max_parallel = self.config.scraping.bing_search.max_parallel_browsers
+
+        if not queries:
+            log.info("no_bing_queries_configured")
+            return []
+
+        shared_dedup = SharedDedupSet()
+        await shared_dedup.load_from_db("bing_search")
+
+        semaphore = asyncio.Semaphore(max_parallel)
+
+        async def _worker(query: str) -> list[Lead]:
+            async with semaphore:
+                log.info("bing_worker_start", query=query)
+                worker_config = self.config.model_copy(deep=True)
+                worker_config.scraping.bing_search.search_queries = [query]
+
+                scraper = BingSearchScraper(
+                    config=worker_config,
+                    on_progress=self._on_progress,
+                    shared_dedup=shared_dedup,
+                )
+                try:
+                    leads = await scraper.run()
+                    log.info("bing_worker_done", query=query, leads=len(leads))
+                    return leads
+                except Exception as exc:
+                    log.error("bing_worker_failed", query=query, error=str(exc))
+                    raise
+
+        tasks = [_worker(q) for q in queries]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        all_leads: list[Lead] = []
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                log.error("bing_query_failed", query=queries[i], error=str(result))
+            else:
+                all_leads.extend(result)
+
+        all_leads = self._filter_excluded(all_leads)
+
+        log.info(
+            "bing_parallel_done",
+            queries=len(queries),
+            total_leads=len(all_leads),
+            workers=min(len(queries), max_parallel),
+        )
+        return all_leads
+
+    async def scrape_directories(self) -> list[Lead]:
+        """Run directory scrapers in parallel, one per category URL."""
+        category_urls = self.config.scraping.directory.category_urls
+        max_parallel = self.config.scraping.directory.max_parallel_browsers
+
+        if not category_urls:
+            log.info("no_directory_urls_configured")
+            return []
+
+        shared_dedup = SharedDedupSet()
+        # Load dedup for both sources
+        await shared_dedup.load_from_db("yell")
+        tp_keys = get_all_dedup_keys(source="trustpilot")
+        for k in tp_keys:
+            await shared_dedup.check_and_add(k)
+
+        semaphore = asyncio.Semaphore(max_parallel)
+
+        async def _worker(url: str) -> list[Lead]:
+            async with semaphore:
+                log.info("directory_worker_start", url=url)
+                worker_config = self.config.model_copy(deep=True)
+                worker_config.scraping.directory.category_urls = [url]
+
+                scraper = DirectoryScraper(
+                    config=worker_config,
+                    on_progress=self._on_progress,
+                    shared_dedup=shared_dedup,
+                )
+                try:
+                    leads = await scraper.run()
+                    log.info("directory_worker_done", url=url, leads=len(leads))
+                    return leads
+                except Exception as exc:
+                    log.error("directory_worker_failed", url=url, error=str(exc))
+                    raise
+
+        tasks = [_worker(u) for u in category_urls]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        all_leads: list[Lead] = []
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                log.error("directory_url_failed", url=category_urls[i], error=str(result))
+            else:
+                all_leads.extend(result)
+
+        all_leads = self._filter_excluded(all_leads)
+
+        log.info(
+            "directory_parallel_done",
+            urls=len(category_urls),
+            total_leads=len(all_leads),
+        )
+        return all_leads
+
+    async def scrape_industry(self) -> list[Lead]:
+        """Run industry site scrapers in parallel, one per site."""
+        sites = self.config.scraping.industry_sites.sites
+        max_parallel = self.config.scraping.industry_sites.max_parallel_browsers
+
+        if not sites:
+            log.info("no_industry_sites_configured")
+            return []
+
+        shared_dedup = SharedDedupSet()
+        await shared_dedup.load_from_db("industry_directory")
+
+        semaphore = asyncio.Semaphore(max_parallel)
+
+        async def _worker(site_entry) -> list[Lead]:
+            async with semaphore:
+                log.info("industry_worker_start", site=site_entry.name)
+                worker_config = self.config.model_copy(deep=True)
+                worker_config.scraping.industry_sites.sites = [site_entry]
+
+                scraper = IndustrySiteScraper(
+                    config=worker_config,
+                    on_progress=self._on_progress,
+                    shared_dedup=shared_dedup,
+                )
+                try:
+                    leads = await scraper.run()
+                    log.info("industry_worker_done", site=site_entry.name, leads=len(leads))
+                    return leads
+                except Exception as exc:
+                    log.error("industry_worker_failed", site=site_entry.name, error=str(exc))
+                    raise
+
+        tasks = [_worker(s) for s in sites]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        all_leads: list[Lead] = []
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                log.error("industry_site_failed", site=sites[i].name, error=str(result))
+            else:
+                all_leads.extend(result)
+
+        all_leads = self._filter_excluded(all_leads)
+
+        log.info(
+            "industry_parallel_done",
+            sites=len(sites),
+            total_leads=len(all_leads),
+        )
+        return all_leads
+
     async def scrape_instagram(self) -> list[Lead]:
         """Run Instagram scrapers in parallel, one per hashtag."""
         hashtags = self.config.scraping.instagram.hashtags
@@ -195,30 +427,36 @@ class ParallelScrapeOrchestrator:
     async def run(self) -> list[Lead]:
         """Run all scrapers in parallel, then return combined leads.
 
-        Google Maps and Instagram scrapers run concurrently.
+        All scraper types run concurrently: Google Maps, Google Search,
+        Bing, directories, industry sites, and Instagram.
         """
-        gmaps_task = self.scrape_gmaps()
-        ig_task = self.scrape_instagram()
+        scraper_tasks = {
+            "gmaps": self.scrape_gmaps(),
+            "gsearch": self.scrape_gsearch(),
+            "bing": self.scrape_bing(),
+            "directory": self.scrape_directories(),
+            "industry": self.scrape_industry(),
+            "instagram": self.scrape_instagram(),
+        }
 
-        gmaps_leads, ig_leads = await asyncio.gather(
-            gmaps_task, ig_task, return_exceptions=True
+        results = await asyncio.gather(
+            *scraper_tasks.values(), return_exceptions=True
         )
 
         all_leads: list[Lead] = []
-        if isinstance(gmaps_leads, Exception):
-            log.error("gmaps_scraping_failed", error=str(gmaps_leads))
-        else:
-            all_leads.extend(gmaps_leads)
+        counts: dict[str, int] = {}
 
-        if isinstance(ig_leads, Exception):
-            log.error("ig_scraping_failed", error=str(ig_leads))
-        else:
-            all_leads.extend(ig_leads)
+        for name, result in zip(scraper_tasks.keys(), results):
+            if isinstance(result, Exception):
+                log.error(f"{name}_scraping_failed", error=str(result))
+                counts[name] = 0
+            else:
+                all_leads.extend(result)
+                counts[name] = len(result)
 
         log.info(
             "parallel_scrape_complete",
             total_leads=len(all_leads),
-            gmaps=len(gmaps_leads) if not isinstance(gmaps_leads, Exception) else 0,
-            instagram=len(ig_leads) if not isinstance(ig_leads, Exception) else 0,
+            **counts,
         )
         return all_leads

@@ -12,7 +12,12 @@ from pydantic import BaseModel, Field
 
 class LeadSource(str, Enum):
     GOOGLE_MAPS = "google_maps"
+    GOOGLE_SEARCH = "google_search"
+    BING_SEARCH = "bing_search"
     INSTAGRAM = "instagram"
+    TRUSTPILOT = "trustpilot"
+    YELL = "yell"
+    INDUSTRY_DIRECTORY = "industry_directory"
     APOLLO = "apollo"
     MANUAL = "manual"
 
