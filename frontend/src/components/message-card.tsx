@@ -13,9 +13,6 @@ import {
   Send,
   ChevronDown,
   ChevronUp,
-  AlarmClock,
-  Building2,
-  MessageSquareMore,
   Reply,
   User,
   MoreVertical,
@@ -32,6 +29,8 @@ import {
   useUpdateMessage,
   useRegenerateMessage,
   useSendMessage,
+  useDeleteMessage,
+  useSendReply,
   useInboundReplies,
   useDeleteReply,
 } from "@/hooks/use-outreach";
@@ -86,11 +85,15 @@ export function MessageCard({ message }: Props) {
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [threadOpen, setThreadOpen] = useState(false);
   const [flowingDraft, setFlowingDraft] = useState<{ subject: string | null; content: string } | null>(null);
+  const [activeAction, setActiveAction] = useState<string | null>(null);
+  const [replyContent, setReplyContent] = useState("");
 
   const { isAdmin } = useAuth();
   const updateMutation = useUpdateMessage();
   const regenerateMutation = useRegenerateMessage();
   const sendMutation = useSendMessage();
+  const deleteMutation = useDeleteMessage();
+  const sendReplyMutation = useSendReply();
   const deleteReplyMutation = useDeleteReply();
   const generatingLeadId = useGeneratingLeadId();
 
@@ -105,15 +108,33 @@ export function MessageCard({ message }: Props) {
   const isRegenerating = regenerateMutation.isPending || generatingLeadId === message.lead_id;
 
   function handleApprove() {
-    updateMutation.mutate({ id: message.id, status: "approved" });
+    setActiveAction("approve");
+    updateMutation.mutate({ id: message.id, status: "approved" }, {
+      onSettled: () => setActiveAction(null),
+    });
   }
 
-  function handleRejectWithReason(reason: string) {
+  function handleReject() {
+    setActiveAction("reject");
     updateMutation.mutate({
       id: message.id,
       status: "rejected",
-      rejection_reason: reason,
-      lead_id: message.lead_id,
+    }, {
+      onSettled: () => setActiveAction(null),
+    });
+  }
+
+  function handleUnapprove() {
+    setActiveAction("unapprove");
+    updateMutation.mutate({ id: message.id, status: "draft" }, {
+      onSettled: () => setActiveAction(null),
+    });
+  }
+
+  function handleBackToDraft() {
+    setActiveAction("back-to-draft");
+    updateMutation.mutate({ id: message.id, status: "draft", restore_original_email: message.status === "sent" }, {
+      onSettled: () => setActiveAction(null),
     });
   }
 
@@ -296,58 +317,105 @@ export function MessageCard({ message }: Props) {
             ) : replies.length === 0 ? (
               <p className="text-xs text-muted-foreground py-2">No reply content found.</p>
             ) : (
-              replies.map((reply, idx) => (
-                <div key={reply.id} className="flex gap-2">
-                  <div className="flex flex-col items-center">
-                    <div className="flex h-6 w-6 items-center justify-center rounded-full bg-green-100 dark:bg-green-900/40">
-                      <User className="h-3 w-3 text-green-600 dark:text-green-400" />
+              replies.map((reply, idx) => {
+                const isOutbound = reply.direction === "outbound" || reply.source === "outbound_reply";
+                return (
+                  <div key={reply.id} className="flex gap-2">
+                    <div className="flex flex-col items-center">
+                      <div className={`flex h-6 w-6 items-center justify-center rounded-full ${
+                        isOutbound ? "bg-blue-100 dark:bg-blue-900/40" : "bg-green-100 dark:bg-green-900/40"
+                      }`}>
+                        {isOutbound ? (
+                          <Send className="h-3 w-3 text-blue-600 dark:text-blue-400" />
+                        ) : (
+                          <User className="h-3 w-3 text-green-600 dark:text-green-400" />
+                        )}
+                      </div>
+                      {idx < replies.length - 1 && (
+                        <div className="mt-1 w-px flex-1 bg-border" />
+                      )}
                     </div>
-                    {idx < replies.length - 1 && (
-                      <div className="mt-1 w-px flex-1 bg-border" />
-                    )}
+                    <div className="flex-1 pb-3">
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                        <span className="font-medium text-foreground">
+                          {isOutbound ? "Rob" : (reply.from_name || reply.from_email)}
+                        </span>
+                        {!isOutbound && reply.from_name && (
+                          <span>{reply.from_email}</span>
+                        )}
+                        <span>{formatDate(reply.created_at)}</span>
+                        {reply.source === "manual" && (
+                          <Badge variant="outline" className="text-[10px] px-1 py-0">manual</Badge>
+                        )}
+                        {isOutbound && (
+                          <Badge variant="outline" className="text-[10px] px-1 py-0 border-blue-500/30 text-blue-500">sent</Badge>
+                        )}
+                        {isAdmin && !isOutbound && (
+                          <Menu>
+                            <MenuTrigger
+                              render={
+                                <button className="ml-auto rounded p-0.5 hover:bg-muted transition-colors">
+                                  <MoreVertical className="h-3.5 w-3.5 text-muted-foreground" />
+                                </button>
+                              }
+                            />
+                            <MenuContent side="bottom" align="end" sideOffset={4}>
+                              <MenuItem
+                                onClick={() => deleteReplyMutation.mutate(reply.id)}
+                                className="text-red-600 dark:text-red-400"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                                Delete reply
+                              </MenuItem>
+                            </MenuContent>
+                          </Menu>
+                        )}
+                      </div>
+                      <div className={`mt-1 whitespace-pre-wrap text-sm leading-relaxed rounded border p-2.5 ${
+                        isOutbound
+                          ? "bg-blue-50/50 dark:bg-blue-950/20 border-blue-200/30 dark:border-blue-800/30"
+                          : "bg-green-50/50 dark:bg-green-950/20 border-green-200/30 dark:border-green-800/30"
+                      }`}>
+                        {reply.body || "(no content)"}
+                      </div>
+                    </div>
                   </div>
-                  <div className="flex-1 pb-3">
-                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                      <span className="font-medium text-foreground">
-                        {reply.from_name || reply.from_email}
-                      </span>
-                      {reply.from_name && (
-                        <span>{reply.from_email}</span>
-                      )}
-                      <span>{formatDate(reply.created_at)}</span>
-                      {reply.source === "manual" && (
-                        <Badge variant="outline" className="text-[10px] px-1 py-0">manual</Badge>
-                      )}
-                      {isAdmin && (
-                        <Menu>
-                          <MenuTrigger
-                            render={
-                              <button className="ml-auto rounded p-0.5 hover:bg-muted transition-colors">
-                                <MoreVertical className="h-3.5 w-3.5 text-muted-foreground" />
-                              </button>
-                            }
-                          />
-                          <MenuContent side="bottom" align="end" sideOffset={4}>
-                            <MenuItem
-                              onClick={() => deleteReplyMutation.mutate(reply.id)}
-                              className="text-red-600 dark:text-red-400"
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                              Delete reply
-                            </MenuItem>
-                          </MenuContent>
-                        </Menu>
-                      )}
-                    </div>
-                    {reply.subject && (
-                      <p className="text-xs font-medium mt-0.5">{reply.subject}</p>
-                    )}
-                    <div className="mt-1 whitespace-pre-wrap text-sm leading-relaxed rounded bg-green-50/50 dark:bg-green-950/20 border border-green-200/30 dark:border-green-800/30 p-2.5">
-                      {reply.body || "(no content)"}
-                    </div>
-                  </div>
-                </div>
-              ))
+                );
+              })
+            )}
+
+            {/* Reply input */}
+            {isAdmin && message.status === "sent" && (
+              <div className="flex gap-2 pt-2 border-t border-border">
+                <textarea
+                  className="flex-1 min-h-[80px] rounded-md border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring resize-y"
+                  placeholder="Type your reply..."
+                  value={replyContent}
+                  onChange={(e) => setReplyContent(e.target.value)}
+                />
+                <Button
+                  size="sm"
+                  className="self-end bg-blue-600 hover:bg-blue-700"
+                  disabled={!replyContent.trim() || sendReplyMutation.isPending}
+                  onClick={() => {
+                    sendReplyMutation.mutate(
+                      {
+                        lead_id: message.lead_id,
+                        message_id: message.id,
+                        content: replyContent.trim(),
+                      },
+                      { onSuccess: () => setReplyContent("") }
+                    );
+                  }}
+                >
+                  {sendReplyMutation.isPending ? (
+                    <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Send className="mr-1 h-3.5 w-3.5" />
+                  )}
+                  {sendReplyMutation.isPending ? "Sending..." : "Reply"}
+                </Button>
+              </div>
             )}
           </div>
         )}
@@ -363,41 +431,28 @@ export function MessageCard({ message }: Props) {
                 onClick={handleApprove}
                 disabled={isPending}
               >
-                <Check className="mr-1 h-3.5 w-3.5" />
-                Approve
+                {activeAction === "approve" ? (
+                  <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Check className="mr-1 h-3.5 w-3.5" />
+                )}
+                {activeAction === "approve" ? "Approving..." : "Approve"}
               </Button>
             )}
             {isAdmin && (
-              <Menu>
-                <MenuTrigger
-                  disabled={isPending}
-                  render={
-                    <Button
-                      size="sm"
-                      variant="destructive"
-                      disabled={isPending}
-                    >
-                      <X className="mr-1 h-3.5 w-3.5" />
-                      Reject
-                      <ChevronDown className="ml-0.5 h-3 w-3" />
-                    </Button>
-                  }
-                />
-                <MenuContent side="bottom" align="start" sideOffset={4}>
-                  <MenuItem onClick={() => handleRejectWithReason("snoozed")}>
-                    <AlarmClock className="h-3.5 w-3.5" />
-                    Snooze until next week
-                  </MenuItem>
-                  <MenuItem onClick={() => handleRejectWithReason("current_account")}>
-                    <Building2 className="h-3.5 w-3.5" />
-                    Current account
-                  </MenuItem>
-                  <MenuItem onClick={() => handleRejectWithReason("in_discussion")}>
-                    <MessageSquareMore className="h-3.5 w-3.5" />
-                    In discussion (60 days)
-                  </MenuItem>
-                </MenuContent>
-              </Menu>
+              <Button
+                size="sm"
+                variant="destructive"
+                onClick={handleReject}
+                disabled={isPending}
+              >
+                {activeAction === "reject" ? (
+                  <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <X className="mr-1 h-3.5 w-3.5" />
+                )}
+                {activeAction === "reject" ? "Rejecting..." : "Reject"}
+              </Button>
             )}
             <Menu>
               <MenuTrigger
@@ -409,7 +464,7 @@ export function MessageCard({ message }: Props) {
                     ) : (
                       <RefreshCw className="mr-1 h-3.5 w-3.5" />
                     )}
-                    Regenerate
+                    {isRegenerating ? "Regenerating..." : "Regenerate"}
                     <ChevronDown className="ml-0.5 h-3 w-3" />
                   </Button>
                 }
@@ -434,6 +489,22 @@ export function MessageCard({ message }: Props) {
               <Pencil className="mr-1 h-3.5 w-3.5" />
               Edit
             </Button>
+            {isAdmin && (
+              <Button
+                size="sm"
+                variant="ghost"
+                className="text-red-400 hover:text-red-300 hover:bg-red-500/10"
+                onClick={() => deleteMutation.mutate(message.id)}
+                disabled={isPending || deleteMutation.isPending}
+              >
+                {deleteMutation.isPending ? (
+                  <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Trash2 className="mr-1 h-3.5 w-3.5" />
+                )}
+                {deleteMutation.isPending ? "Deleting..." : "Delete"}
+              </Button>
+            )}
           </div>
         )}
         {/* Send + Unapprove buttons for approved messages */}
@@ -444,23 +515,27 @@ export function MessageCard({ message }: Props) {
               variant="default"
               className="bg-blue-600 hover:bg-blue-700"
               onClick={() => sendMutation.mutate(message.id)}
-              disabled={sendMutation.isPending}
+              disabled={sendMutation.isPending || updateMutation.isPending}
             >
               {sendMutation.isPending ? (
                 <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
               ) : (
                 <Send className="mr-1 h-3.5 w-3.5" />
               )}
-              Send
+              {sendMutation.isPending ? "Sending..." : "Send"}
             </Button>
             <Button
               size="sm"
               variant="outline"
-              onClick={() => updateMutation.mutate({ id: message.id, status: "draft" })}
-              disabled={updateMutation.isPending}
+              onClick={handleUnapprove}
+              disabled={updateMutation.isPending || sendMutation.isPending}
             >
-              <X className="mr-1 h-3.5 w-3.5" />
-              Unapprove
+              {activeAction === "unapprove" ? (
+                <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <X className="mr-1 h-3.5 w-3.5" />
+              )}
+              {activeAction === "unapprove" ? "Unapproving..." : "Unapprove"}
             </Button>
           </div>
         )}
@@ -470,11 +545,15 @@ export function MessageCard({ message }: Props) {
             <Button
               size="sm"
               variant="outline"
-              onClick={() => updateMutation.mutate({ id: message.id, status: "draft" })}
+              onClick={handleBackToDraft}
               disabled={updateMutation.isPending}
             >
-              <RefreshCw className="mr-1 h-3.5 w-3.5" />
-              Back to Draft
+              {activeAction === "back-to-draft" ? (
+                <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="mr-1 h-3.5 w-3.5" />
+              )}
+              {activeAction === "back-to-draft" ? "Restoring..." : "Back to Draft"}
             </Button>
           </div>
         )}
@@ -494,11 +573,15 @@ export function MessageCard({ message }: Props) {
             <Button
               size="sm"
               variant="outline"
-              onClick={() => updateMutation.mutate({ id: message.id, status: "draft", restore_original_email: true })}
+              onClick={handleBackToDraft}
               disabled={updateMutation.isPending}
             >
-              <RefreshCw className="mr-1 h-3.5 w-3.5" />
-              Back to Draft
+              {activeAction === "back-to-draft" ? (
+                <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="mr-1 h-3.5 w-3.5" />
+              )}
+              {activeAction === "back-to-draft" ? "Restoring..." : "Back to Draft"}
             </Button>
           </div>
         )}

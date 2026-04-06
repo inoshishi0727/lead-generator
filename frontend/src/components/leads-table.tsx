@@ -20,12 +20,17 @@ import {
   AlarmClock,
   Building2,
   MessageSquareMore,
+  ThumbsUp,
+  ThumbsDown,
+  Loader2,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Menu, MenuTrigger, MenuContent, MenuItem } from "@/components/ui/menu";
 import { LeadDetailDialog } from "@/components/lead-detail-dialog";
 import { updateLeadFields } from "@/lib/firestore-api";
 import { useQueryClient } from "@tanstack/react-query";
+import { useGenerateDrafts } from "@/hooks/use-outreach";
+import { toast } from "sonner";
 import type { Lead } from "@/lib/types";
 
 interface Props {
@@ -47,44 +52,94 @@ const rejectionColors: Record<string, string> = {
 
 export function LeadsTable({ leads, isLoading }: Props) {
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
+  const [pendingLeads, setPendingLeads] = useState<Set<string>>(new Set());
   const qc = useQueryClient();
+  const generateDrafts = useGenerateDrafts();
 
   const handleExport = () => {
     window.open("/api/leads/export", "_blank");
   };
 
-  async function handleApprove(e: React.MouseEvent, leadId: string) {
+  async function handleApprove(e: React.MouseEvent, lead: Lead) {
     e.stopPropagation();
-    await updateLeadFields(leadId, {
-      client_status: "approved",
-      rejection_reason: null,
-    });
-    qc.invalidateQueries({ queryKey: ["leads"] });
+    if (pendingLeads.has(lead.id)) return;
+    setPendingLeads((prev) => new Set(prev).add(lead.id));
+    try {
+      await updateLeadFields(lead.id, {
+        client_status: "approved",
+        rejection_reason: null,
+      });
+      qc.invalidateQueries({ queryKey: ["leads"] });
+
+      if (lead.email && lead.enrichment_status === "success") {
+        toast.promise(
+          new Promise((resolve, reject) => {
+            generateDrafts.mutate([lead.id], {
+              onSuccess: (data) => resolve(data),
+              onError: (err) => reject(err),
+            });
+          }),
+          {
+            loading: `Generating draft for ${lead.business_name}...`,
+            success: "Draft generated",
+            error: "Draft generation failed",
+          }
+        );
+      } else {
+        toast.success(`${lead.business_name} approved`);
+        if (!lead.email) toast.warning("No email — draft skipped");
+        else if (lead.enrichment_status !== "success") toast.warning("Not enriched — draft skipped");
+      }
+    } catch (err) {
+      console.error("Approve failed:", err);
+      toast.error("Failed to approve lead");
+    } finally {
+      setPendingLeads((prev) => {
+        const next = new Set(prev);
+        next.delete(lead.id);
+        return next;
+      });
+    }
   }
 
-  async function handleReject(leadId: string, reason: string) {
-    const updates: Record<string, unknown> = {
-      client_status: "rejected",
-      rejection_reason: reason,
-    };
+  async function handleReject(e: React.MouseEvent, leadId: string, reason: string) {
+    e.stopPropagation();
+    if (pendingLeads.has(leadId)) return;
+    setPendingLeads((prev) => new Set(prev).add(leadId));
+    try {
+      const updates: Record<string, unknown> = {
+        client_status: "rejected",
+        rejection_reason: reason,
+      };
 
-    if (reason === "snoozed") {
-      const now = new Date();
-      const daysUntilMonday = (8 - now.getDay()) % 7 || 7;
-      const nextMonday = new Date(now);
-      nextMonday.setDate(now.getDate() + daysUntilMonday);
-      nextMonday.setHours(9, 0, 0, 0);
-      updates.snoozed_until = nextMonday.toISOString();
-    } else if (reason === "current_account") {
-      updates.stage = "declined";
-    } else if (reason === "in_discussion") {
-      const snoozeUntil = new Date();
-      snoozeUntil.setDate(snoozeUntil.getDate() + 60);
-      updates.snoozed_until = snoozeUntil.toISOString();
+      if (reason === "snoozed") {
+        const now = new Date();
+        const daysUntilMonday = (8 - now.getDay()) % 7 || 7;
+        const nextMonday = new Date(now);
+        nextMonday.setDate(now.getDate() + daysUntilMonday);
+        nextMonday.setHours(9, 0, 0, 0);
+        updates.snoozed_until = nextMonday.toISOString();
+      } else if (reason === "current_account") {
+        updates.stage = "declined";
+      } else if (reason === "in_discussion") {
+        const snoozeUntil = new Date();
+        snoozeUntil.setDate(snoozeUntil.getDate() + 60);
+        updates.snoozed_until = snoozeUntil.toISOString();
+      }
+
+      await updateLeadFields(leadId, updates);
+      qc.invalidateQueries({ queryKey: ["leads"] });
+      toast.success("Lead rejected");
+    } catch (err) {
+      console.error("Reject failed:", err);
+      toast.error("Failed to reject lead");
+    } finally {
+      setPendingLeads((prev) => {
+        const next = new Set(prev);
+        next.delete(leadId);
+        return next;
+      });
     }
-
-    await updateLeadFields(leadId, updates);
-    qc.invalidateQueries({ queryKey: ["leads"] });
   }
 
   if (isLoading) {
@@ -136,7 +191,7 @@ export function LeadsTable({ leads, isLoading }: Props) {
                 <TableRow
                   key={lead.id}
                   className={`cursor-pointer transition-colors hover:bg-accent/50 ${
-                    lead.client_status === "rejected" ? "opacity-40" : ""
+                    lead.client_status === "rejected" ? "opacity-60" : ""
                   } ${index % 2 === 1 ? "bg-muted/30" : ""}`}
                   onClick={() => setSelectedLead(lead)}
                 >
@@ -144,6 +199,12 @@ export function LeadsTable({ leads, isLoading }: Props) {
                   <TableCell className="w-8 px-2">
                     {lead.client_status === "approved" ? (
                       <Check className="h-3.5 w-3.5 text-emerald-400" />
+                    ) : lead.client_status === "rejected" && lead.rejection_reason === "snoozed" ? (
+                      <AlarmClock className="h-3.5 w-3.5 text-amber-400" />
+                    ) : lead.client_status === "rejected" && lead.rejection_reason === "current_account" ? (
+                      <Building2 className="h-3.5 w-3.5 text-purple-400" />
+                    ) : lead.client_status === "rejected" && lead.rejection_reason === "in_discussion" ? (
+                      <MessageSquareMore className="h-3.5 w-3.5 text-sky-400" />
                     ) : lead.client_status === "rejected" ? (
                       <X className="h-3.5 w-3.5 text-red-400" />
                     ) : null}
@@ -208,47 +269,53 @@ export function LeadsTable({ leads, isLoading }: Props) {
                   {/* Actions */}
                   <TableCell className="text-center">
                     <div className="flex items-center justify-center gap-1" onClick={(e) => e.stopPropagation()}>
-                      <button
-                        className={`rounded px-2 py-0.5 text-xs font-medium transition-colors ${
-                          lead.client_status === "approved"
-                            ? "bg-emerald-500/20 text-emerald-400"
-                            : "text-muted-foreground hover:text-emerald-400 hover:bg-emerald-500/10"
-                        }`}
-                        onClick={(e) => handleApprove(e, lead.id)}
-                        title="Approve lead"
-                      >
-                        Accept
-                      </button>
-                      <Menu>
-                        <MenuTrigger
-                          render={
-                            <button
-                              className={`rounded px-2 py-0.5 text-xs font-medium transition-colors ${
-                                lead.client_status === "rejected"
-                                  ? "bg-red-500/20 text-red-400"
-                                  : "text-muted-foreground hover:text-red-400 hover:bg-red-500/10"
-                              }`}
-                              title="Reject lead"
-                            >
-                              Reject
-                            </button>
-                          }
-                        />
-                        <MenuContent side="bottom" align="end" sideOffset={4}>
-                          <MenuItem onClick={() => handleReject(lead.id, "snoozed")}>
-                            <AlarmClock className="h-3.5 w-3.5" />
-                            Snooze until next week
-                          </MenuItem>
-                          <MenuItem onClick={() => handleReject(lead.id, "current_account")}>
-                            <Building2 className="h-3.5 w-3.5" />
-                            Current account
-                          </MenuItem>
-                          <MenuItem onClick={() => handleReject(lead.id, "in_discussion")}>
-                            <MessageSquareMore className="h-3.5 w-3.5" />
-                            In discussion (60 days)
-                          </MenuItem>
-                        </MenuContent>
-                      </Menu>
+                      {pendingLeads.has(lead.id) ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+                      ) : (
+                        <>
+                          <button
+                            className={`rounded p-1.5 transition-colors ${
+                              lead.client_status === "approved"
+                                ? "bg-emerald-500/20 text-emerald-400"
+                                : "text-muted-foreground hover:text-emerald-400 hover:bg-emerald-500/10"
+                            }`}
+                            onClick={(e) => handleApprove(e, lead)}
+                            title="Approve lead"
+                          >
+                            <ThumbsUp className="h-3.5 w-3.5" />
+                          </button>
+                          <Menu>
+                            <MenuTrigger
+                              render={
+                                <button
+                                  className={`rounded p-1.5 transition-colors ${
+                                    lead.client_status === "rejected"
+                                      ? "bg-red-500/20 text-red-400"
+                                      : "text-muted-foreground hover:text-red-400 hover:bg-red-500/10"
+                                  }`}
+                                  title="Reject lead"
+                                >
+                                  <ThumbsDown className="h-3.5 w-3.5" />
+                                </button>
+                              }
+                            />
+                            <MenuContent side="bottom" align="end" sideOffset={4}>
+                              <MenuItem onClick={(e) => handleReject(e, lead.id, "snoozed")}>
+                                <AlarmClock className="h-3.5 w-3.5" />
+                                Snooze until next week
+                              </MenuItem>
+                              <MenuItem onClick={(e) => handleReject(e, lead.id, "current_account")}>
+                                <Building2 className="h-3.5 w-3.5" />
+                                Current account
+                              </MenuItem>
+                              <MenuItem onClick={(e) => handleReject(e, lead.id, "in_discussion")}>
+                                <MessageSquareMore className="h-3.5 w-3.5" />
+                                In discussion (60 days)
+                              </MenuItem>
+                            </MenuContent>
+                          </Menu>
+                        </>
+                      )}
                     </div>
                   </TableCell>
                 </TableRow>

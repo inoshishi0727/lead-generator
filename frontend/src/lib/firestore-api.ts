@@ -274,6 +274,7 @@ export async function getInboundReplies(filters?: {
       subject: data.subject || null,
       body: data.body || "",
       source: data.source || "manual",
+      direction: data.direction || "inbound",
       matched: data.matched || false,
       created_at: data.created_at || "",
       forwarded_by: data.forwarded_by || null,
@@ -286,6 +287,11 @@ export async function getInboundReplies(filters?: {
 
 export async function deleteInboundReply(replyId: string): Promise<void> {
   const ref = doc(db, "inbound_replies", replyId);
+  await deleteDoc(ref);
+}
+
+export async function deleteOutreachMessage(messageId: string): Promise<void> {
+  const ref = doc(db, "outreach_messages", messageId);
   await deleteDoc(ref);
 }
 

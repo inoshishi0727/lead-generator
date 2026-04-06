@@ -130,7 +130,8 @@ export interface InboundReply {
   from_name: string | null;
   subject: string | null;
   body: string;
-  source: "email_forward" | "manual";
+  source: "email_forward" | "manual" | "resend" | "outbound_reply";
+  direction: "inbound" | "outbound";
   matched: boolean;
   created_at: string;
   forwarded_by: string | null;

@@ -1127,6 +1127,100 @@ export const sendApproved = functions
     return { status: "completed", sent, failed, total: toSend.length };
   });
 
+// ---- Reply to Inbound Email ----
+
+/**
+ * Send a reply from the UI as Rob. Threads properly in the recipient's inbox.
+ * Called from frontend: sendReply({ lead_id, message_id, content })
+ */
+export const sendReply = functions
+  .runWith({ timeoutSeconds: 30, memory: "256MB", secrets: ["RESEND_API_KEY"] })
+  .https.onCall(async (data, context) => {
+    if (!context.auth) throw new HttpsError("unauthenticated", "Must be signed in.");
+
+    const userSnap = await db.collection("users").doc(context.auth.uid).get();
+    if (!userSnap.exists || userSnap.data().role !== "admin") {
+      throw new HttpsError("permission-denied", "Admin only.");
+    }
+
+    const { lead_id, message_id, content } = data || {};
+    if (!lead_id || !message_id || !content?.trim()) {
+      throw new HttpsError("invalid-argument", "lead_id, message_id, and content are required.");
+    }
+
+    // Load outreach message for subject
+    const msgSnap = await db.collection("outreach_messages").doc(message_id).get();
+    if (!msgSnap.exists) throw new HttpsError("not-found", "Message not found.");
+    const msg = msgSnap.data();
+
+    // Load lead for recipient email
+    const leadSnap = await db.collection("leads").doc(lead_id).get();
+    if (!leadSnap.exists) throw new HttpsError("not-found", "Lead not found.");
+    const lead = leadSnap.data();
+    const toEmail = lead.contact_email || lead.email;
+    if (!toEmail) throw new HttpsError("failed-precondition", "Lead has no email address.");
+
+    // Find latest inbound reply for threading headers
+    const repliesSnap = await db.collection("inbound_replies")
+      .where("lead_id", "==", lead_id)
+      .get();
+
+    const headers = {};
+    const inboundReplies = repliesSnap.docs
+      .map((d) => d.data())
+      .filter((d) => d.direction !== "outbound" && d.rfc_message_id)
+      .sort((a, b) => (b.created_at > a.created_at ? 1 : -1));
+
+    if (inboundReplies.length > 0) {
+      headers["In-Reply-To"] = inboundReplies[0].rfc_message_id;
+      headers["References"] = inboundReplies[0].rfc_message_id;
+    }
+
+    // Send via Resend
+    const apiKey = process.env.RESEND_API_KEY;
+    if (!apiKey) throw new HttpsError("failed-precondition", "RESEND_API_KEY not configured.");
+    const resend = new Resend(apiKey);
+
+    const replyToAddress = `reply+${lead_id}@${REPLY_DOMAIN}`;
+    const subject = `Re: ${msg.subject || "Asterley Bros"}`;
+
+    const { data: resendData, error } = await resend.emails.send({
+      from: `${SENDER_NAME} <${SENDER_EMAIL}>`,
+      to: toEmail,
+      replyTo: replyToAddress,
+      subject,
+      text: content.trim(),
+      html: buildHtmlEmail(content.trim()),
+      headers,
+    });
+
+    if (error) throw new HttpsError("internal", error.message);
+
+    // Store in inbound_replies so it shows in the thread
+    const replyId = crypto.randomUUID();
+    await db.collection("inbound_replies").doc(replyId).set({
+      id: replyId,
+      lead_id,
+      message_id,
+      from_email: SENDER_EMAIL,
+      from_name: "Rob",
+      subject,
+      body: content.trim(),
+      source: "outbound_reply",
+      direction: "outbound",
+      matched: true,
+      resend_email_id: resendData?.id ?? null,
+      created_at: new Date().toISOString(),
+    });
+
+    // Update reply count on outreach message
+    await db.collection("outreach_messages").doc(message_id).update({
+      reply_count: FieldValue.increment(1),
+    });
+
+    return { reply_id: replyId, status: "sent" };
+  });
+
 // ---- User Deletion ----
 
 /**
@@ -1166,6 +1260,50 @@ export const deleteUser = functions
   });
 
 // ---- Inbound Email Webhook (Resend) ----
+
+/**
+ * Strip quoted reply text from an email body.
+ * Returns only the new content the person actually wrote.
+ */
+function stripQuotedReply(text) {
+  if (!text) return "";
+  const lines = text.split("\n");
+  const cutPatterns = [
+    /^-{2,}\s*Original Message\s*-{2,}/, // Outlook: "--- Original Message ---"
+    /^_{2,}/,                             // Outlook underscores
+    /^From:\s+/,                          // Outlook/generic: "From: Rob..."
+    /^Sent from my /,                     // Mobile: "Sent from my iPhone"
+    /^Get Outlook for /,                  // "Get Outlook for iOS"
+  ];
+
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].trim();
+    if (cutPatterns.some((p) => p.test(trimmed))) {
+      return lines.slice(0, i).join("\n").trim();
+    }
+    // Gmail "On ... wrote:" — may span multiple lines, so check if line ends with "wrote:"
+    if (/wrote:\s*$/.test(trimmed) && /^On\s/.test(trimmed)) {
+      return lines.slice(0, i).join("\n").trim();
+    }
+    // Gmail multi-line: "On Mon, Apr 6, 2026 at 5:58 PM Name <email>\nwrote:"
+    if (trimmed === "wrote:" && i > 0 && /^On\s/.test(lines[i - 1].trim())) {
+      return lines.slice(0, i - 1).join("\n").trim();
+    }
+    // Lines starting with ">" are quoted
+    if (trimmed.startsWith(">") && i > 0) {
+      // Walk back over "On ... wrote:" lines
+      let cutLine = i;
+      if (/wrote:\s*$/.test(lines[i - 1].trim())) {
+        cutLine = i - 1;
+        if (cutLine > 0 && /^On\s/.test(lines[cutLine - 1].trim())) {
+          cutLine = cutLine - 1;
+        }
+      }
+      return lines.slice(0, cutLine).join("\n").trim();
+    }
+  }
+  return text.trim();
+}
 
 /**
  * Extract lead_id from a plus-addressed reply-to address.
@@ -1208,26 +1346,40 @@ export const processInboundEmail = functions
       // Fetch full email content via Resend Receiving API
       // The webhook only sends metadata; the body is in the received email object
       let fullEmail = {};
-      if (process.env.RESEND_API_KEY) {
-        try {
-          const resendClient = new Resend(process.env.RESEND_API_KEY);
-          // List recent received emails and find the one matching this webhook
-          const { data: recentEmails } = await resendClient.emails.receiving.list();
-          if (recentEmails && recentEmails.length > 0) {
-            // Match by message_id from webhook
-            const messageId = eventData.message_id || null;
-            const match = recentEmails.find((e) =>
-              e.message_id === messageId || e.email_id === resendEmailId
-            );
-            if (match) {
-              const { data: receivedEmail } = await resendClient.emails.receiving.get(match.id);
-              if (receivedEmail) {
-                fullEmail = receivedEmail;
-              }
+      if (process.env.RESEND_API_KEY && resendEmailId) {
+        const MAX_RETRIES = 3;
+        const RETRY_DELAY_MS = 2000;
+        for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+          try {
+            if (attempt > 1) {
+              console.log(`Receiving API retry ${attempt}/${MAX_RETRIES}`);
+              await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
             }
+            const res = await fetch(`https://api.resend.com/emails/receiving/${resendEmailId}`, {
+              headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}` },
+            });
+            if (!res.ok) {
+              console.warn(`Receiving API returned ${res.status}:`, (await res.text()).substring(0, 300));
+              if (attempt < MAX_RETRIES) continue;
+              break;
+            }
+            const receivedEmail = await res.json();
+            if (receivedEmail.text || receivedEmail.html) {
+              fullEmail = receivedEmail;
+              console.log("Fetched email body via Receiving API:", {
+                textLen: (receivedEmail.text || "").length,
+                htmlLen: (receivedEmail.html || "").length,
+              });
+              break;
+            }
+            if (attempt < MAX_RETRIES) {
+              console.warn(`Receiving API returned empty body on attempt ${attempt}, retrying...`);
+              continue;
+            }
+          } catch (fetchErr) {
+            console.warn(`Receiving API error (attempt ${attempt}):`, fetchErr.message);
+            if (attempt < MAX_RETRIES) continue;
           }
-        } catch (fetchErr) {
-          console.warn("Error fetching received email from Resend:", fetchErr.message);
         }
       }
 
@@ -1292,6 +1444,8 @@ export const processInboundEmail = functions
 
       // Create inbound_replies doc
       const replyId = crypto.randomUUID();
+      const rawBody = textBody || htmlBody;
+      const parsedBody = stripQuotedReply(textBody) || rawBody;
       await db.collection("inbound_replies").doc(replyId).set({
         id: replyId,
         lead_id: matchedLead?.id || null,
@@ -1299,12 +1453,15 @@ export const processInboundEmail = functions
         from_email: fromEmail,
         from_name: fromName,
         subject,
-        body: textBody || htmlBody,
+        body: parsedBody,
+        body_raw: rawBody,
         body_html: htmlBody,
         source: "resend",
+        direction: "inbound",
         matched: !!matchedLead,
         matched_by: matchedBy,
         is_auto_reply: isAutoReply,
+        rfc_message_id: fullEmail.message_id || eventData.message_id || null,
         resend_email_id: resendEmailId,
         has_attachments: (eventData.attachments || []).length > 0,
         attachment_count: (eventData.attachments || []).length,

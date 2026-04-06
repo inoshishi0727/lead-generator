@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { httpsCallable } from "firebase/functions";
 import { functions } from "@/lib/firebase";
 import { api } from "@/lib/api";
-import { getOutreachMessages, updateOutreachMessage, restoreOriginalEmail, getInboundReplies, deleteInboundReply } from "@/lib/firestore-api";
+import { getOutreachMessages, updateOutreachMessage, restoreOriginalEmail, getInboundReplies, deleteInboundReply, deleteOutreachMessage } from "@/lib/firestore-api";
 import { addJob } from "@/lib/job-store";
 import type { OutreachMessage, InboundReply } from "@/lib/types";
 
@@ -294,6 +294,38 @@ export function useInboundReplies(
     queryKey: ["inbound-replies", filters],
     queryFn: () => getInboundReplies(filters),
     enabled: options?.enabled ?? true,
+  });
+}
+
+export function useSendReply() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (params: {
+      lead_id: string;
+      message_id: string;
+      content: string;
+    }) => {
+      const fn = httpsCallable<
+        { lead_id: string; message_id: string; content: string },
+        { reply_id: string; status: string }
+      >(functions, "sendReply");
+      const result = await fn(params);
+      return result.data;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["inbound-replies"] });
+      qc.invalidateQueries({ queryKey: ["outreach"] });
+    },
+  });
+}
+
+export function useDeleteMessage() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (messageId: string) => deleteOutreachMessage(messageId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["outreach"] });
+    },
   });
 }
 
