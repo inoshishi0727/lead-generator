@@ -4,10 +4,11 @@ import { useState, useMemo } from "react";
 import { LeadsTable } from "@/components/leads-table";
 import { useLeads, useEnrichLeads } from "@/hooks/use-leads";
 import { QuickAddLeadDialog } from "@/components/quick-add-lead-dialog";
+import { SearchQueryManager } from "@/components/search-query-manager";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/lib/auth-context";
-import { Search, Sparkles, Loader2, Plus } from "lucide-react";
+import { Search, Sparkles, Loader2, Plus, Settings2 } from "lucide-react";
 
 const SOURCE_OPTIONS = [
   { value: "", label: "All Sources" },
@@ -37,6 +38,7 @@ export default function LeadsPage() {
   const [postcode, setPostcode] = useState("");
   const [emailOnly, setEmailOnly] = useState(true);
   const [showQuickAdd, setShowQuickAdd] = useState(false);
+  const [showQueries, setShowQueries] = useState(false);
   const enrichMutation = useEnrichLeads();
 
   // Extract outward code (district) from a UK postcode, e.g. "SE26 5HS" -> "SE26"
@@ -124,6 +126,14 @@ export default function LeadsPage() {
             <Button
               variant="outline"
               size="sm"
+              onClick={() => setShowQueries(!showQueries)}
+            >
+              <Settings2 className="mr-1.5 h-3.5 w-3.5" />
+              Search Queries
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
               onClick={() => setShowQuickAdd(true)}
             >
               <Plus className="mr-1.5 h-3.5 w-3.5" />
@@ -157,6 +167,8 @@ export default function LeadsPage() {
           Enrichment failed. Make sure the Python backend is running (uv run uvicorn main:app).
         </div>
       )}
+
+      {showQueries && <SearchQueryManager />}
 
       <div data-tour="leads-filters" className="flex flex-wrap gap-3">
         <select
