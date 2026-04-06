@@ -328,6 +328,27 @@ export async function createLead(data: {
   return docRef.id;
 }
 
+// --- Scrape Runs ---
+
+export interface ScrapeRunRecord {
+  id: string;
+  source: string;
+  query: string;
+  leads_found: number;
+  leads_new: number;
+  status: "running" | "completed" | "failed";
+  error: string | null;
+  started_at: string;
+  completed_at: string | null;
+}
+
+export async function getScrapeRuns(max = 10): Promise<ScrapeRunRecord[]> {
+  const ref = collection(db, "scrape_runs");
+  const q = query(ref, orderBy("started_at", "desc"), fbLimit(max));
+  const snap = await getDocs(q);
+  return snap.docs.map((d) => d.data() as ScrapeRunRecord);
+}
+
 export async function restoreOriginalEmail(messageId: string): Promise<void> {
   const ref = doc(db, "outreach_messages", messageId);
   const snap = await getDoc(ref);

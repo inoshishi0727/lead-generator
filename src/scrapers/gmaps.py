@@ -710,6 +710,7 @@ async def main() -> None:
     """CLI entry point for dry-run testing."""
     import argparse
     import csv
+    from datetime import datetime
     from pathlib import Path
 
     parser = argparse.ArgumentParser(description="Google Maps Scraper")
@@ -738,7 +739,33 @@ async def main() -> None:
     scraper = GoogleMapsScraper(config=config)
     log.info("mvp_scrape_start", headless=args.headless, limit=args.limit)
 
-    leads = await scraper.run()
+    # Log scrape run to Firestore
+    from src.db.firestore import save_scrape_run, update_scrape_run
+    from src.db.models import LeadSource, RunStatus, ScrapeRun
+
+    query_str = args.query or ", ".join(config.scraping.google_maps.search_queries)
+    run = ScrapeRun(
+        source=LeadSource.GOOGLE_MAPS,
+        query=query_str[:200],
+        status=RunStatus.RUNNING,
+    )
+    save_scrape_run(run)
+
+    try:
+        leads = await scraper.run()
+        update_scrape_run(str(run.id), {
+            "status": "completed",
+            "leads_found": len(leads),
+            "leads_new": sum(1 for l in leads if l.email),
+            "completed_at": datetime.now().isoformat(),
+        })
+    except Exception as exc:
+        update_scrape_run(str(run.id), {
+            "status": "failed",
+            "error": str(exc)[:500],
+            "completed_at": datetime.now().isoformat(),
+        })
+        raise
 
     # Print summary
     for lead in leads:

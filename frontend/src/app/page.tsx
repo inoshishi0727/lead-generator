@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ScrapeControl } from "@/components/scrape-control";
+import { ScrapeHistory } from "@/components/scrape-history";
 import { ScrapeStatus } from "@/components/scrape-status";
 import { OutreachPlan } from "@/components/outreach-plan";
 import { LeadDetailDialog } from "@/components/lead-detail-dialog";
@@ -191,7 +192,7 @@ export default function DashboardPage() {
             isStarting={isStarting}
             isRunning={isRunning}
           />
-          {status && <ScrapeStatus status={status} />}
+          {status ? <ScrapeStatus status={status} /> : <ScrapeHistory />}
         </div>
       )}
       <LeadDetailDialog

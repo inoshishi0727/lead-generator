@@ -252,6 +252,24 @@ def update_scrape_run(run_id: str, updates: dict) -> None:
         log.warning("update_scrape_run_failed", error=str(exc))
 
 
+def get_scrape_runs(limit: int = 10) -> list[dict]:
+    """Return the most recent scrape runs, ordered by started_at descending."""
+    db = get_firestore_client()
+    if db is None:
+        return []
+
+    try:
+        query = (
+            db.collection("scrape_runs")
+            .order_by("started_at", direction="DESCENDING")
+            .limit(limit)
+        )
+        return [doc.to_dict() for doc in query.stream()]
+    except Exception as exc:
+        log.warning("get_scrape_runs_failed", error=str(exc))
+        return []
+
+
 def update_lead(lead_id: str, updates: dict) -> bool:
     """Partially update a lead document in Firestore."""
     from src.db import cache

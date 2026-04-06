@@ -629,6 +629,19 @@ async def score_leads_endpoint() -> ScoreStatusResponse:
 
 
 # ---------------------------------------------------------------------------
+# Scrape run history
+# ---------------------------------------------------------------------------
+
+
+@router.get("/scrape-runs")
+async def get_scrape_runs():
+    """Return the most recent scrape runs for the dashboard."""
+    from src.db.firestore import get_scrape_runs as get_runs
+
+    return get_runs(limit=10)
+
+
+# ---------------------------------------------------------------------------
 # Search query management
 # ---------------------------------------------------------------------------
 

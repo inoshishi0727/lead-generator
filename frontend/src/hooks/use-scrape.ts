@@ -3,6 +3,7 @@ import { api } from "@/lib/api";
 import type { ScrapeRequest, ScrapeStatus } from "@/lib/types";
 import { useJobs } from "@/components/jobs-provider";
 import { getActiveJobs } from "@/lib/job-store";
+import { getScrapeRuns } from "@/lib/firestore-api";
 
 export function useScrape() {
   const queryClient = useQueryClient();
@@ -49,4 +50,12 @@ export function useScrape() {
     status: statusQuery.data ?? null,
     activeRunId,
   };
+}
+
+export function useScrapeHistory() {
+  return useQuery({
+    queryKey: ["scrape-runs"],
+    queryFn: () => getScrapeRuns(10),
+    refetchInterval: 60_000,
+  });
 }
