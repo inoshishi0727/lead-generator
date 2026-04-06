@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { EnvStatus } from "@/components/env-status";
-import { SearchQueriesList } from "@/components/search-queries-list";
+import { SearchQueryManager } from "@/components/search-query-manager";
 import { RatioManager } from "@/components/ratio-manager";
 import { SuggestedQueries } from "@/components/suggested-queries";
 import { TeamManager } from "@/components/team-manager";
@@ -134,7 +134,7 @@ export default function SettingsPage() {
       {isAdmin && config && (
         <>
           <EnvStatus envVars={config.env_vars} />
-          <SearchQueriesList queries={config.search_queries} />
+          <SearchQueryManager />
           <RatioManager />
           <SuggestedQueries />
         </>

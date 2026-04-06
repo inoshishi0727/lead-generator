@@ -225,3 +225,23 @@ def load_config(config_path: str | Path | None = None) -> AppConfig:
         raw = yaml.safe_load(f)
 
     return AppConfig.model_validate(raw or {})
+
+
+def load_search_queries() -> dict[str, list[str]]:
+    """Load search queries with Firestore overrides, falling back to YAML.
+
+    Returns dict keyed by source: google_maps, google_search, bing_search, directory.
+    """
+    from src.db.firestore import get_config as get_fs_config
+
+    fs_queries = get_fs_config("search_queries")
+    if fs_queries:
+        return fs_queries
+
+    config = load_config()
+    return {
+        "google_maps": config.scraping.google_maps.search_queries,
+        "google_search": config.scraping.google_search.search_queries,
+        "bing_search": config.scraping.bing_search.search_queries,
+        "directory": config.scraping.directory.category_urls,
+    }

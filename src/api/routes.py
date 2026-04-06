@@ -628,6 +628,76 @@ async def score_leads_endpoint() -> ScoreStatusResponse:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Search query management
+# ---------------------------------------------------------------------------
+
+
+@router.get("/search-queries")
+async def get_search_queries():
+    """Return current search queries per source, with Firestore overrides."""
+    from src.db.firestore import get_config as get_fs_config
+
+    config = load_config()
+
+    # Firestore overrides take precedence
+    fs_queries = get_fs_config("search_queries")
+    if fs_queries:
+        return fs_queries
+
+    # Fall back to YAML defaults
+    return {
+        "google_maps": config.scraping.google_maps.search_queries,
+        "google_search": config.scraping.google_search.search_queries,
+        "bing_search": config.scraping.bing_search.search_queries,
+        "directory": config.scraping.directory.category_urls,
+    }
+
+
+@router.put("/search-queries")
+async def update_search_queries(queries: dict):
+    """Save search query overrides to Firestore."""
+    from src.db.firestore import save_config as save_fs_config
+
+    save_fs_config("search_queries", queries)
+    return {"status": "updated", "queries": queries}
+
+
+@router.post("/search-queries/import")
+async def import_search_queries(payload: dict):
+    """Import queries from a list, merge into existing queries for a source."""
+    from src.db.firestore import get_config as get_fs_config
+    from src.db.firestore import save_config as save_fs_config
+
+    source = payload.get("source", "google_maps")
+    new_queries = payload.get("queries", [])
+
+    if not new_queries:
+        raise HTTPException(status_code=400, detail="No queries provided")
+
+    # Load current queries
+    config = load_config()
+    fs_queries = get_fs_config("search_queries")
+    if not fs_queries:
+        fs_queries = {
+            "google_maps": config.scraping.google_maps.search_queries,
+            "google_search": config.scraping.google_search.search_queries,
+            "bing_search": config.scraping.bing_search.search_queries,
+            "directory": config.scraping.directory.category_urls,
+        }
+
+    # Merge — deduplicate
+    existing = set(fs_queries.get(source, []))
+    for q in new_queries:
+        q = q.strip()
+        if q:
+            existing.add(q)
+    fs_queries[source] = sorted(existing)
+
+    save_fs_config("search_queries", fs_queries)
+    return {"status": "imported", "source": source, "total": len(fs_queries[source])}
+
+
 @router.get("/ratios")
 async def get_ratios():
     from src.db.firestore import get_config as get_fs_config

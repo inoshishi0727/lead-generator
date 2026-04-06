@@ -19,13 +19,13 @@ log = structlog.get_logger()
 
 
 def _dedup_key(lead: Lead) -> str:
-    """Generate a composite dedup key from source, name, and address."""
-    parts = [
+    """Generate a composite dedup key from source, name, and address/website."""
+    from src.db.dedup import build_dedup_key
+    return build_dedup_key(
         lead.source.value,
-        lead.business_name.strip().lower(),
-        (lead.address or "").strip().lower(),
-    ]
-    return "|".join(parts)
+        lead.business_name,
+        lead.website or lead.address,
+    )
 
 
 def get_known_dedup_keys(source: str = "google_maps") -> set[str]:
@@ -65,18 +65,35 @@ def save_lead_immediate(lead: Lead) -> bool:
         return False
 
     try:
+        from src.db.dedup import build_universal_key
+
         key = _dedup_key(lead)
+        universal = build_universal_key(
+            lead.business_name,
+            lead.website or lead.address,
+        )
         collection = db.collection("leads")
 
-        # Check if already exists
+        # Check by exact dedup key (same source)
         existing = collection.where(filter=FieldFilter("dedup_key", "==", key)).limit(1).get()
         if existing:
             log.debug("lead_already_exists", business_name=lead.business_name, key=key)
             return False
 
+        # Check by universal key (cross-source: same name already in any source)
+        name_lower = lead.business_name.strip().lower()
+        name_matches = collection.where(
+            filter=FieldFilter("business_name_lower", "==", name_lower)
+        ).limit(1).get()
+        if name_matches:
+            log.debug("lead_exists_other_source", business_name=lead.business_name)
+            return False
+
         doc_ref = collection.document(str(lead.id))
         doc_data = lead.model_dump(mode="json")
         doc_data["dedup_key"] = key
+        doc_data["universal_dedup_key"] = universal
+        doc_data["business_name_lower"] = name_lower
         doc_ref.set(doc_data)
         cache.invalidate("leads:")
         log.info("lead_saved_immediate", business_name=lead.business_name)
@@ -100,30 +117,48 @@ def save_leads(leads: list[Lead]) -> int:
         return 0
 
     try:
+        from src.db.dedup import build_universal_key
+
         collection = db.collection("leads")
         inserted = 0
 
-        # Build set of existing dedup keys
+        # Build sets of existing keys — both source-specific and universal (name-based)
         existing_keys: set[str] = set()
+        existing_names: set[str] = set()
         for doc in collection.stream():
             data = doc.to_dict()
             if "dedup_key" in data:
                 existing_keys.add(data["dedup_key"])
+            name = data.get("business_name", "")
+            if name:
+                existing_names.add(name.strip().lower())
 
         batch = db.batch()
         batch_count = 0
 
         for lead in leads:
             key = _dedup_key(lead)
+            name_lower = lead.business_name.strip().lower()
+            universal = build_universal_key(
+                lead.business_name,
+                lead.website or lead.address,
+            )
+
             if key in existing_keys:
                 log.debug("lead_dedup_skip", business_name=lead.business_name)
+                continue
+            if name_lower in existing_names:
+                log.debug("lead_dedup_skip_cross_source", business_name=lead.business_name)
                 continue
 
             doc_ref = collection.document(str(lead.id))
             doc_data = lead.model_dump(mode="json")
             doc_data["dedup_key"] = key
+            doc_data["universal_dedup_key"] = universal
+            doc_data["business_name_lower"] = name_lower
             batch.set(doc_ref, doc_data)
             existing_keys.add(key)
+            existing_names.add(name_lower)
             inserted += 1
             batch_count += 1
 

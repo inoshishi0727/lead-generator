@@ -49,7 +49,7 @@ log = structlog.get_logger()
 
 # Listicle / directory patterns in the title — skip these results
 NOISE_TITLE_PATTERNS = re.compile(
-    r"\b(top \d+|best \d+|\d+ best|review|compared|vs\.?|directory|listing)\b",
+    r"\b(top \d+|best \d+|\d+ best|\d+ of .+best|review|compared|vs\.?|directory|listing|guide to|where to|must.visit)\b",
     re.IGNORECASE,
 )
 

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import structlog
 
-from src.config.loader import AppConfig, load_config
+from src.config.loader import AppConfig, load_config, load_search_queries
 from src.db.dedup import SharedDedupSet, get_all_dedup_keys
 from src.db.exclusions import ExclusionSet, load_exclusion_set
 from src.db.models import Lead
@@ -65,7 +65,8 @@ class ParallelScrapeOrchestrator:
 
     async def scrape_gmaps(self) -> list[Lead]:
         """Run Google Maps scrapers in parallel, one per search query."""
-        queries = self.config.scraping.google_maps.search_queries
+        dynamic = load_search_queries()
+        queries = dynamic.get("google_maps", self.config.scraping.google_maps.search_queries)
         max_parallel = self.config.scraping.google_maps.max_parallel_browsers
 
         if not queries:
@@ -133,7 +134,8 @@ class ParallelScrapeOrchestrator:
 
     async def scrape_gsearch(self) -> list[Lead]:
         """Run Google Search scrapers in parallel, one per search query."""
-        queries = self.config.scraping.google_search.search_queries
+        dynamic = load_search_queries()
+        queries = dynamic.get("google_search", self.config.scraping.google_search.search_queries)
         max_parallel = self.config.scraping.google_search.max_parallel_browsers
 
         if not queries:
@@ -200,7 +202,8 @@ class ParallelScrapeOrchestrator:
 
     async def scrape_bing(self) -> list[Lead]:
         """Run Bing Search scrapers in parallel, one per search query."""
-        queries = self.config.scraping.bing_search.search_queries
+        dynamic = load_search_queries()
+        queries = dynamic.get("bing_search", self.config.scraping.bing_search.search_queries)
         max_parallel = self.config.scraping.bing_search.max_parallel_browsers
 
         if not queries:
@@ -253,7 +256,8 @@ class ParallelScrapeOrchestrator:
 
     async def scrape_directories(self) -> list[Lead]:
         """Run directory scrapers in parallel, one per category URL."""
-        category_urls = self.config.scraping.directory.category_urls
+        dynamic = load_search_queries()
+        category_urls = dynamic.get("directory", self.config.scraping.directory.category_urls)
         max_parallel = self.config.scraping.directory.max_parallel_browsers
 
         if not category_urls:
