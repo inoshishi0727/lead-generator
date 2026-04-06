@@ -1181,7 +1181,7 @@ function extractLeadIdFromTo(toAddresses) {
 }
 
 export const processInboundEmail = functions
-  .runWith({ timeoutSeconds: 30, memory: "256MB" })
+  .runWith({ timeoutSeconds: 30, memory: "256MB", secrets: ["RESEND_API_KEY"] })
   .https.onRequest(async (req, res) => {
     if (req.method !== "POST") {
       res.status(405).send("Method not allowed");
@@ -1205,11 +1205,37 @@ export const processInboundEmail = functions
         }
       }
 
+      // Fetch full email content via Resend Receiving API
+      // The webhook only sends metadata; the body is in the received email object
+      let fullEmail = {};
+      if (process.env.RESEND_API_KEY) {
+        try {
+          const resendClient = new Resend(process.env.RESEND_API_KEY);
+          // List recent received emails and find the one matching this webhook
+          const { data: recentEmails } = await resendClient.emails.receiving.list();
+          if (recentEmails && recentEmails.length > 0) {
+            // Match by message_id from webhook
+            const messageId = eventData.message_id || null;
+            const match = recentEmails.find((e) =>
+              e.message_id === messageId || e.email_id === resendEmailId
+            );
+            if (match) {
+              const { data: receivedEmail } = await resendClient.emails.receiving.get(match.id);
+              if (receivedEmail) {
+                fullEmail = receivedEmail;
+              }
+            }
+          }
+        } catch (fetchErr) {
+          console.warn("Error fetching received email from Resend:", fetchErr.message);
+        }
+      }
+
       const fromEmail = (eventData.from?.email || eventData.from || "").toLowerCase().trim();
-      const fromName = eventData.from?.name || null;
+      const fromName = eventData.from?.name || fullEmail.from?.name || null;
       const subject = eventData.subject || "";
-      const textBody = eventData.text || "";
-      const htmlBody = eventData.html || "";
+      const textBody = fullEmail.text || eventData.text || "";
+      const htmlBody = fullEmail.html || eventData.html || "";
       const toAddresses = eventData.to || [];
 
       // Extract lead_id from the plus-addressed reply-to

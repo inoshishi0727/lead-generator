@@ -12,13 +12,16 @@ import {
   Clock,
   Send,
   ChevronDown,
+  ChevronUp,
   AlarmClock,
   Building2,
   MessageSquareMore,
   Reply,
+  User,
+  MoreVertical,
+  Trash2,
 } from "lucide-react";
 import { EditMessageDialog } from "@/components/edit-message-dialog";
-import { LogReplyDialog } from "@/components/log-reply-dialog";
 import { RegenerateCompareDialog } from "@/components/regenerate-compare-dialog";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -29,6 +32,8 @@ import {
   useUpdateMessage,
   useRegenerateMessage,
   useSendMessage,
+  useInboundReplies,
+  useDeleteReply,
 } from "@/hooks/use-outreach";
 import { useGeneratingLeadId } from "@/hooks/use-live-updates";
 import { useAuth } from "@/lib/auth-context";
@@ -79,14 +84,22 @@ function rejectionLabel(reason: string): string {
 
 export function MessageCard({ message }: Props) {
   const [editDialogOpen, setEditDialogOpen] = useState(false);
-  const [logReplyOpen, setLogReplyOpen] = useState(false);
+  const [threadOpen, setThreadOpen] = useState(false);
   const [flowingDraft, setFlowingDraft] = useState<{ subject: string | null; content: string } | null>(null);
 
   const { isAdmin } = useAuth();
   const updateMutation = useUpdateMessage();
   const regenerateMutation = useRegenerateMessage();
   const sendMutation = useSendMessage();
+  const deleteReplyMutation = useDeleteReply();
   const generatingLeadId = useGeneratingLeadId();
+
+  const repliesQuery = useInboundReplies(
+    { lead_id: message.lead_id },
+    { enabled: threadOpen && !!message.has_reply }
+  );
+  const replies = (repliesQuery.data ?? [])
+    .sort((a, b) => (a.created_at > b.created_at ? 1 : -1));
 
   const ChannelIcon = message.channel === "email" ? Mail : MessageCircle;
   const isRegenerating = regenerateMutation.isPending || generatingLeadId === message.lead_id;
@@ -193,9 +206,14 @@ export function MessageCard({ message }: Props) {
             </Badge>
           )}
           {message.has_reply && (
-            <Badge variant="outline" className="gap-1 text-xs border-green-500/30 text-green-600">
+            <Badge
+              variant="outline"
+              className="gap-1 text-xs border-green-500/30 text-green-600 cursor-pointer hover:bg-green-50 dark:hover:bg-green-950/20 transition-colors"
+              onClick={() => setThreadOpen((o) => !o)}
+            >
               <Reply className="h-2.5 w-2.5" />
               {message.reply_count || 1} {(message.reply_count || 1) === 1 ? "reply" : "replies"}
+              {threadOpen ? <ChevronUp className="h-2.5 w-2.5" /> : <ChevronDown className="h-2.5 w-2.5" />}
             </Badge>
           )}
           {/* Date/time */}
@@ -264,6 +282,75 @@ export function MessageCard({ message }: Props) {
             </div>
           )}
         </div>
+
+        {/* Email thread */}
+        {threadOpen && (
+          <div className="space-y-2 border-t border-border pt-3">
+            <p className="text-xs font-medium text-muted-foreground">Replies</p>
+
+            {repliesQuery.isLoading ? (
+              <div className="flex items-center gap-2 py-3 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Loading replies...
+              </div>
+            ) : replies.length === 0 ? (
+              <p className="text-xs text-muted-foreground py-2">No reply content found.</p>
+            ) : (
+              replies.map((reply, idx) => (
+                <div key={reply.id} className="flex gap-2">
+                  <div className="flex flex-col items-center">
+                    <div className="flex h-6 w-6 items-center justify-center rounded-full bg-green-100 dark:bg-green-900/40">
+                      <User className="h-3 w-3 text-green-600 dark:text-green-400" />
+                    </div>
+                    {idx < replies.length - 1 && (
+                      <div className="mt-1 w-px flex-1 bg-border" />
+                    )}
+                  </div>
+                  <div className="flex-1 pb-3">
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <span className="font-medium text-foreground">
+                        {reply.from_name || reply.from_email}
+                      </span>
+                      {reply.from_name && (
+                        <span>{reply.from_email}</span>
+                      )}
+                      <span>{formatDate(reply.created_at)}</span>
+                      {reply.source === "manual" && (
+                        <Badge variant="outline" className="text-[10px] px-1 py-0">manual</Badge>
+                      )}
+                      {isAdmin && (
+                        <Menu>
+                          <MenuTrigger
+                            render={
+                              <button className="ml-auto rounded p-0.5 hover:bg-muted transition-colors">
+                                <MoreVertical className="h-3.5 w-3.5 text-muted-foreground" />
+                              </button>
+                            }
+                          />
+                          <MenuContent side="bottom" align="end" sideOffset={4}>
+                            <MenuItem
+                              onClick={() => deleteReplyMutation.mutate(reply.id)}
+                              className="text-red-600 dark:text-red-400"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                              Delete reply
+                            </MenuItem>
+                          </MenuContent>
+                        </Menu>
+                      )}
+                    </div>
+                    {reply.subject && (
+                      <p className="text-xs font-medium mt-0.5">{reply.subject}</p>
+                    )}
+                    <div className="mt-1 whitespace-pre-wrap text-sm leading-relaxed rounded bg-green-50/50 dark:bg-green-950/20 border border-green-200/30 dark:border-green-800/30 p-2.5">
+                      {reply.body || "(no content)"}
+                    </div>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        )}
 
         {/* Action buttons */}
         {message.status === "draft" && (
@@ -391,18 +478,18 @@ export function MessageCard({ message }: Props) {
             </Button>
           </div>
         )}
-        {/* Log Reply + Reset for sent messages */}
+        {/* View Replies + Reset for sent messages */}
         {message.status === "sent" && isAdmin && (
           <div className="flex items-center gap-2 pt-1">
             <Button
               size="sm"
               variant="outline"
               className="border-green-500 text-green-600 hover:bg-green-50 dark:hover:bg-green-950/20"
-              onClick={() => setLogReplyOpen(true)}
+              onClick={() => setThreadOpen((o) => !o)}
               disabled={isPending}
             >
               <Reply className="mr-1 h-3.5 w-3.5" />
-              Log Reply
+              {threadOpen ? "Hide Replies" : "View Replies"}
             </Button>
             <Button
               size="sm"
@@ -422,13 +509,6 @@ export function MessageCard({ message }: Props) {
           message={message}
           onSave={handleDialogSave}
           onClose={() => setEditDialogOpen(false)}
-        />
-      )}
-
-      {logReplyOpen && (
-        <LogReplyDialog
-          message={message}
-          onClose={() => setLogReplyOpen(false)}
         />
       )}
 

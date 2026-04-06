@@ -13,6 +13,7 @@ import {
   limit as fbLimit,
   updateDoc,
   addDoc,
+  deleteDoc,
 } from "firebase/firestore";
 import { db } from "./firebase";
 import type { Lead, LeadDetail, OutreachMessage, InboundReply } from "./types";
@@ -281,6 +282,11 @@ export async function getInboundReplies(filters?: {
 
   results.sort((a, b) => (b.created_at > a.created_at ? 1 : -1));
   return results;
+}
+
+export async function deleteInboundReply(replyId: string): Promise<void> {
+  const ref = doc(db, "inbound_replies", replyId);
+  await deleteDoc(ref);
 }
 
 // --- Create a manual lead ---
