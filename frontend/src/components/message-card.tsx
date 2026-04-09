@@ -36,6 +36,7 @@ import {
 } from "@/hooks/use-outreach";
 import { useGeneratingLeadId } from "@/hooks/use-live-updates";
 import { useAuth } from "@/lib/auth-context";
+import { useLeadDetail } from "@/hooks/use-lead-detail";
 
 interface Props {
   message: OutreachMessage;
@@ -84,6 +85,7 @@ function rejectionLabel(reason: string): string {
 export function MessageCard({ message }: Props) {
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [threadOpen, setThreadOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const [flowingDraft, setFlowingDraft] = useState<{ subject: string | null; content: string } | null>(null);
   const [activeAction, setActiveAction] = useState<string | null>(null);
   const [replyContent, setReplyContent] = useState("");
@@ -101,6 +103,8 @@ export function MessageCard({ message }: Props) {
     { lead_id: message.lead_id },
     { enabled: threadOpen && !!message.has_reply }
   );
+  const leadQuery = useLeadDetail(message.lead_id);
+  const drinksProgramme = leadQuery.data?.drinks_programme ?? null;
   const replies = (repliesQuery.data ?? [])
     .sort((a, b) => (a.created_at > b.created_at ? 1 : -1));
 
@@ -276,6 +280,45 @@ export function MessageCard({ message }: Props) {
                 {p}
               </Badge>
             ))}
+          </div>
+        )}
+
+        {/* Drinks programme toggle */}
+        <button
+          className="flex w-full items-center justify-between rounded border border-border/60 bg-muted/20 px-2.5 py-1.5 text-xs font-medium text-foreground hover:bg-muted/40 transition-colors"
+          onClick={() => setMenuOpen((o) => !o)}
+        >
+          <span className="flex items-center gap-1.5">
+            🍸 Venue drinks programme
+            {drinksProgramme && !menuOpen && (
+              <span className="text-muted-foreground font-normal truncate max-w-[300px]">
+                — {drinksProgramme.split(";")[0].trim()}{drinksProgramme.includes(";") ? ", ..." : ""}
+              </span>
+            )}
+            {!drinksProgramme && !leadQuery.isLoading && (
+              <span className="text-muted-foreground font-normal">— none scraped</span>
+            )}
+          </span>
+          {menuOpen ? <ChevronUp className="h-3.5 w-3.5 shrink-0 text-muted-foreground" /> : <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
+        </button>
+
+        {menuOpen && (
+          <div className="rounded border border-border bg-muted/20 p-2.5 text-xs text-muted-foreground">
+            {leadQuery.isLoading ? (
+              <span className="flex items-center gap-1.5">
+                <Loader2 className="h-3 w-3 animate-spin" /> Loading...
+              </span>
+            ) : drinksProgramme ? (
+              <div className="flex flex-wrap gap-1">
+                {drinksProgramme.split(";").map((item) => item.trim()).filter(Boolean).map((item) => (
+                  <Badge key={item} variant="outline" className="text-[10px] font-normal">
+                    {item}
+                  </Badge>
+                ))}
+              </div>
+            ) : (
+              <span>No drinks programme scraped for this venue.</span>
+            )}
           </div>
         )}
 
