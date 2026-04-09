@@ -37,7 +37,7 @@ const DEFAULT_CATEGORIES: CategoryConfig[] = [
 export function ScrapeControl({ onStart, isStarting, isRunning }: Props) {
   const { data: config } = useConfig();
   const { data: plan } = useOutreachPlan(10);
-  const [location, setLocation] = useState("London");
+  const [location, setLocation] = useState("UK");
   const [limit, setLimit] = useState(60);
   const [headless, setHeadless] = useState(false);
   const [categories, setCategories] = useState<CategoryConfig[]>(DEFAULT_CATEGORIES);

@@ -129,7 +129,7 @@ export default function LeadsPage() {
               onClick={() => setShowQueries(!showQueries)}
             >
               <Settings2 className="mr-1.5 h-3.5 w-3.5" />
-              Search Queries
+              Scrape Queries
             </Button>
             <Button
               variant="outline"

@@ -1,12 +1,9 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL;
-const hasBackend = !!API_URL;
-const WS_URL =
-  typeof window !== "undefined" && hasBackend && API_URL
-    ? API_URL.replace(/^http/, "ws") + "/ws"
-    : "";
+import { hasVps, getVpsWsUrl } from "@/lib/vps-api";
+
+const WS_URL = typeof window !== "undefined" && hasVps ? getVpsWsUrl() : "";
 
 // --- Generating leads tracker (module-level singleton) ---
 let _generatingLeadId: string | null = null;

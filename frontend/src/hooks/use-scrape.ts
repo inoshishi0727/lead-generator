@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api } from "@/lib/api";
+import { vpsApi } from "@/lib/vps-api";
 import type { ScrapeRequest, ScrapeStatus } from "@/lib/types";
 import { useJobs } from "@/components/jobs-provider";
 import { getActiveJobs } from "@/lib/job-store";
@@ -15,7 +15,7 @@ export function useScrape() {
 
   const mutation = useMutation({
     mutationFn: (req: ScrapeRequest) =>
-      api.post<ScrapeStatus>("/api/scrape", req),
+      vpsApi.post<ScrapeStatus>("/api/scrape", req),
     onSuccess: (data) => {
       addJob("scrape", data.run_id);
     },
@@ -25,7 +25,7 @@ export function useScrape() {
     queryKey: ["scrape-status", activeRunId],
     queryFn: async () => {
       try {
-        return await api.get<ScrapeStatus>(`/api/scrape-status/${activeRunId}`);
+        return await vpsApi.get<ScrapeStatus>(`/api/scrape-status/${activeRunId}`);
       } catch {
         return null;
       }

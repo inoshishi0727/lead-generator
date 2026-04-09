@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef } from "react";
 import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -20,9 +20,42 @@ import {
   FileText,
   Send,
   ChevronRight,
+  Upload,
+  Download,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
+import { useImportQueries, type SearchQueries } from "@/hooks/use-search-queries";
+import { toast } from "sonner";
 import type { Lead } from "@/lib/types";
+
+const SOURCE_KEYS: (keyof SearchQueries)[] = [
+  "google_maps", "google_search", "bing_search", "directory",
+];
+
+const SOURCE_LABELS: Record<string, string> = {
+  google_maps: "Google Maps",
+  google_search: "Google Search",
+  bing_search: "Bing Search",
+  directory: "Directory URLs",
+};
+
+function downloadTemplate() {
+  const csv = [
+    "source,query",
+    "google_maps,cocktail bars London",
+    "google_maps,wine bars Manchester",
+    "google_search,UK spirits subscription box companies",
+    "bing_search,airline beverage suppliers UK",
+    "directory,https://www.yell.com/s/cocktail+bars-london.html",
+  ].join("\n");
+  const blob = new Blob([csv], { type: "text/csv" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "scrape-queries-template.csv";
+  a.click();
+  URL.revokeObjectURL(url);
+}
 
 export default function DashboardPage() {
   const { isAdmin } = useAuth();
@@ -30,6 +63,50 @@ export default function DashboardPage() {
   const { data: leads, isLoading: leadsLoading } = useLeads();
   const { data: messages } = useMessages();
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
+  const importMutation = useImportQueries();
+  const csvInputRef = useRef<HTMLInputElement>(null);
+  const [uploadedQueries, setUploadedQueries] = useState<Record<string, string[]> | null>(null);
+
+  function handleCsvUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const text = ev.target?.result as string;
+      const lines = text.split(/[\r\n]+/).map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
+      if (lines.length === 0) return;
+      const first = lines[0].toLowerCase();
+      if (first.includes("source") && first.includes("query")) {
+        const grouped: Record<string, string[]> = {};
+        for (let i = 1; i < lines.length; i++) {
+          const idx = lines[i].indexOf(",");
+          if (idx === -1) continue;
+          const src = lines[i].slice(0, idx).trim().toLowerCase();
+          const q = lines[i].slice(idx + 1).trim().replace(/^"|"$/g, "");
+          if (!src || !q) continue;
+          if (!grouped[src]) grouped[src] = [];
+          grouped[src].push(q);
+        }
+        let count = 0;
+        for (const [src, qs] of Object.entries(grouped)) {
+          if (SOURCE_KEYS.includes(src as keyof SearchQueries)) {
+            importMutation.mutate({ source: src, queries: qs });
+            count += qs.length;
+          }
+        }
+        if (count > 0) {
+          setUploadedQueries(grouped);
+          toast.success(`Imported ${count} scrape queries`);
+        } else {
+          toast.error("No valid sources found. Use: google_maps, google_search, bing_search, directory");
+        }
+      } else {
+        toast.error("Invalid CSV. Download the template for the correct format.");
+      }
+    };
+    reader.readAsText(file);
+    if (csvInputRef.current) csvInputRef.current.value = "";
+  }
 
   const isRunning =
     status?.status === "pending" || status?.status === "running";
@@ -184,6 +261,76 @@ export default function DashboardPage() {
 
       {/* Scrape Controls (admin only) */}
       {isAdmin && (
+        <div className="space-y-4">
+          <div className="flex items-center gap-2">
+            <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Scrape Controls</h2>
+            <div className="ml-auto flex gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => csvInputRef.current?.click()}
+              >
+                <Upload className="mr-1.5 h-3.5 w-3.5" />
+                Upload Scrape Queries
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={downloadTemplate}
+              >
+                <Download className="mr-1.5 h-3.5 w-3.5" />
+                CSV Template
+              </Button>
+              <input
+                ref={csvInputRef}
+                type="file"
+                accept=".csv,.txt"
+                onChange={handleCsvUpload}
+                className="hidden"
+              />
+            </div>
+          </div>
+
+          {/* Uploaded queries preview */}
+          {uploadedQueries && (
+            <Card className="border-emerald-500/30 bg-emerald-500/5">
+              <CardContent className="p-4">
+                <div className="flex items-start justify-between mb-2">
+                  <div>
+                    <p className="text-sm font-semibold text-emerald-400">Queries uploaded — will be used on the next scrape</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      {Object.values(uploadedQueries).flat().length} queries across {Object.keys(uploadedQueries).length} source{Object.keys(uploadedQueries).length !== 1 ? "s" : ""}
+                    </p>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setUploadedQueries(null)}
+                    className="text-muted-foreground hover:text-foreground -mt-1"
+                  >
+                    Dismiss
+                  </Button>
+                </div>
+                <div className="space-y-2">
+                  {Object.entries(uploadedQueries).map(([source, queries]) => (
+                    <div key={source}>
+                      <p className="text-xs font-medium text-muted-foreground mb-1">
+                        {SOURCE_LABELS[source] ?? source} ({queries.length})
+                      </p>
+                      <div className="flex flex-wrap gap-1">
+                        {queries.map((q, i) => (
+                          <Badge key={i} variant="secondary" className="text-[10px] font-mono">
+                            {q}
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
         <div data-tour="scrape-controls" className="grid gap-6 lg:grid-cols-2">
           <ScrapeControl
             onStart={(queries, limit, headless) =>
@@ -193,6 +340,7 @@ export default function DashboardPage() {
             isRunning={isRunning}
           />
           {status ? <ScrapeStatus status={status} /> : <ScrapeHistory />}
+        </div>
         </div>
       )}
       <LeadDetailDialog
