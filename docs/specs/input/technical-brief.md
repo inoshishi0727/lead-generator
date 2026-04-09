@@ -1,113 +1,105 @@
 # Technical Brief: Asterley Bros AI Lead Generation System
 
 ## Architecture Overview
-Python-based pipeline with Supabase (Postgres) persistence, stealth browser
-automation via Camoufox, AI generation via Gemini Flash, and a Streamlit
-dashboard for human oversight.
+
+Three-tier system: Next.js 16 frontend on Netlify, Firebase Cloud Functions
+(Node 20, ESM) for backend logic, and Firestore for persistence. Python
+scrapers run via GitHub Actions on a weekly schedule.
 
 ## System Components
 
-### 1. Scrapers (`src/scrapers/`)
+### 1. Frontend (`frontend/`)
 
-#### Google Maps Scraper
-- **Browser**: Camoufox (Firefox-based anti-detect) + Playwright async API
-- **Strategy**: Two-pass — scroll feed to collect cards, then click into each
-  listing for detail extraction
-- **Selectors**: Stable `data-item-id` and `role`/`aria-label` attributes
-- **Rate limiting**: Configurable RPM with tenacity retry logic
-- **Email extraction**: Secondary scrape of venue website contact pages
-- **Locale**: Force `?hl=en` on all URLs
+- **Framework**: Next.js 16 with React 19, TypeScript, Tailwind CSS 4
+- **UI**: shadcn/ui component library, dark mode only
+- **Data fetching**: TanStack Query v5 with Firebase callable functions
+- **Auth**: Firebase Auth (email/password) with role-based access (admin/viewer)
+- **Hosting**: Netlify (static export, auto-deploy from `main`)
+- **API routes**: Server-side routes using `firebase-admin` for enrichment,
+  outbound email sending, outreach planning, and inbound webhook handling
 
-#### Instagram Scraper
-- **Browser**: Camoufox + Playwright via Claude computer-use agent
-- **Strategy**: Navigate hashtag pages, extract profile data from posts
-- **Authentication**: Session-based login with credential management
-- **Anti-detection**: Random delays, human-like scroll patterns
+### 2. Cloud Functions (`functions/index.js`)
 
-### 2. Database (`src/db/`)
+Single ESM file containing all 11 callable/HTTP functions:
 
-#### Schema (Supabase/Postgres)
-- `leads` — master lead table with all scraped fields + scoring
-- `outreach_messages` — drafted/sent messages linked to leads
-- `scrape_runs` — audit trail of scraper executions
-- `activity_log` — all system events for debugging
+| Function                | Trigger    | Purpose                                    |
+|------------------------|------------|--------------------------------------------|
+| `generateDrafts`       | callable   | Claude-powered email draft generation      |
+| `regenerateDraft`      | callable   | Regenerate a single draft                  |
+| `regenerateAllDrafts`  | callable   | Wipe and recreate all drafts               |
+| `getOutreachPlan`      | callable   | Gemini weekly outreach strategy            |
+| `getStrategy`          | callable   | Gemini campaign recommendations            |
+| `sendApproved`         | callable   | Send approved emails via Resend            |
+| `deleteUser`           | callable   | Delete user account + data                 |
+| `processInboundEmail`  | HTTP POST  | Resend inbound webhook handler             |
+| `logReply`             | callable   | Manually log a reply                       |
+| `updateLeadOutcome`    | callable   | Set lead outcome                           |
+| `assignReplyToLead`    | callable   | Link unmatched reply to a lead             |
 
-#### Client
-- Supabase Python SDK with connection pooling
-- Pydantic models for type-safe data access
+- **Runtime**: Node 20, ESM (`"type": "module"`)
+- **AI**: Claude Sonnet for email drafts, Gemini 2.5 Flash for enrichment/strategy
+- **Email**: Resend for outbound sending + inbound webhook body fetch
+- **Secrets**: Firebase secret manager in production, `.env.local` locally
 
-### 3. Scoring Engine (`src/scoring/`)
-- Individual rule functions return (score, reason) tuples
-- Configurable weights loaded from `config.yaml`
-- Composite score normalized to 0–100
-- Rules: website presence, email availability, rating threshold,
+### 3. Database (Firestore)
+
+| Collection           | Purpose                                          |
+|---------------------|--------------------------------------------------|
+| `leads`             | Venue records with enrichment, scoring, stage    |
+| `outreach_messages` | Email drafts and sent messages                   |
+| `inbound_replies`   | Matched/unmatched reply records                  |
+| `edit_feedback`     | Human corrections to Claude drafts (few-shot)    |
+| `users`             | Firebase Auth users with roles                   |
+| `activity_log`      | Audit trail                                      |
+| `webhook_events`    | Idempotency records for Resend webhooks          |
+
+Pipeline stages:
+```
+scraped -> needs_email -> enriched -> scored -> draft_generated ->
+approved -> sent -> follow_up_1 -> follow_up_2 -> responded ->
+converted | declined
+```
+
+### 4. Scrapers (`src/`, legacy Python)
+
+- **Google Maps**: Camoufox (Firefox-based anti-detect) + Playwright async API
+- **Instagram**: Camoufox + Playwright session-based scraping
+- **Scheduling**: GitHub Actions cron (`weekly_scrape.yml` Mon 09:00 UTC,
+  `weekly_followup.yml` Wed 10:00 UTC)
+- **Output**: Writes leads directly to Firestore `leads` collection
+
+> Note: Python code is used only for scrapers via GitHub Actions.
+> All other backend logic is in Firebase Cloud Functions.
+
+### 5. Scoring Engine
+
+- Rule-based scoring with configurable weights from `config.yaml`
+- Factors: website presence, email availability, rating threshold,
   review volume, cocktail keywords, venue independence, geography,
   Instagram activity
-
-### 4. Outreach Generation (`src/outreach/`)
-
-#### Draft Generation
-- Gemini 2.0 Flash via `google-genai` SDK
-- Template-based prompts with venue-specific context injection
-- Separate templates for email vs. Instagram DM
-- Temperature 0.7 for creative but professional tone
-
-#### Email Sending
-- Resend API with batch processing
-- Rate limiting: 50/day, 10/batch, 30s between sends
-- Delivery status tracking via webhooks
-
-#### Instagram DM Sending
-- Claude computer-use agent controls Camoufox browser
-- Natural typing patterns and interaction timing
-- Session management to avoid re-authentication
-
-### 5. Pipeline Tracker (`src/pipeline/`)
-- Stage progression: scraped → scored → draft_generated → approved →
-  sent → follow_up_1 → follow_up_2 → responded → converted/declined
-- Automated follow-up scheduling with configurable day offsets
-- Stage transition validation (no skipping steps)
-
-### 6. Dashboard (`src/dashboard/`)
-- **Framework**: Streamlit with multi-page layout
-- **Pages**:
-  1. Leads — browse/filter/search all discovered leads
-  2. Scoring — view score breakdowns, adjust weights
-  3. Outreach — approve/reject/regenerate message drafts
-  4. Pipeline — visual funnel, stage management
-  5. Settings — configuration, API keys, run controls
-
-### 7. Scheduling
-- GitHub Actions cron workflows for weekly scrape runs
-- Manual trigger option via workflow_dispatch
+- Composite score normalized to 0-100
 
 ## Dependencies
-```
-camoufox[geoip] >= 0.4
-playwright >= 1.40
-supabase >= 2.0
-google-genai >= 1.0
-anthropic >= 0.40
-resend >= 2.0
-streamlit >= 1.30
-pydantic >= 2.0
-pydantic-settings >= 2.0
-tenacity >= 8.0
-structlog >= 24.0
-pyyaml >= 6.0
-pytest >= 8.0
-pytest-asyncio >= 0.23
-```
+
+### Frontend (`frontend/package.json`)
+- next, react, typescript, tailwindcss, @tanstack/react-query
+- firebase, firebase-admin
+- shadcn/ui components, sonner (toasts)
+- resend (server-side API routes)
+
+### Cloud Functions (`functions/package.json`)
+- firebase-functions, firebase-admin
+- @anthropic-ai/sdk (Claude), @google/generative-ai (Gemini)
+- resend
+
+### Scrapers (`pyproject.toml`)
+- camoufox, playwright, google-cloud-firestore
+- pydantic, tenacity, structlog
 
 ## Security Considerations
-- All secrets in `.env`, never committed
-- Supabase RLS policies for data access
-- Rate limiting to avoid IP bans
-- Camoufox fingerprint rotation
+- All secrets in `.env.local` files (not committed) or Firebase secret manager
+- Firebase Auth with role-based access control
+- Firestore security rules for data access
 - Human approval gate before any external communication
-
-## Error Handling
-- Tenacity retry with exponential backoff for all external calls
-- Structured logging via structlog for debugging
-- Failed scrapes logged to `scrape_runs` with error details
-- Dashboard shows error states for failed operations
+- Rate limiting on scrapers and email sending (150/day cap)
+- Plus-addressing for inbound reply matching (`reply+{lead_id}@replies.asterleybros.com`)

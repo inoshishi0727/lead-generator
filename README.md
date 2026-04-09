@@ -2,6 +2,43 @@
 
 Automated pipeline for Asterley Bros craft spirits. Scrapes hospitality venue leads, enriches them via Gemini AI, generates personalised outreach emails via Claude, sends via Resend, and tracks inbound replies -- all with human-in-the-loop approval.
 
+## Quick Start (New Developers)
+
+1. **Clone** the repo and install dependencies:
+   ```bash
+   git clone <repo-url> && cd asterley-bros
+   cd frontend && npm install
+   cd ../functions && npm install
+   ```
+2. **Set up environment variables** -- copy `.env.example` files and fill in keys:
+   ```bash
+   cp frontend/.env.example frontend/.env.local
+   cp functions/.env.example functions/.env.local
+   ```
+3. **Run the frontend** (port 4000):
+   ```bash
+   cd frontend && npm run dev
+   ```
+4. **Run Cloud Functions locally** (port 5001):
+   ```bash
+   cd functions && firebase emulators:start --only functions
+   ```
+5. **Read the docs** -- see [Documentation Map](#documentation-map) below.
+
+## Documentation Map
+
+| Document | Description |
+|----------|-------------|
+| [frontend/README.md](frontend/README.md) | Frontend stack, structure, patterns, and setup |
+| [docs/specs/input/product-brief.md](docs/specs/input/product-brief.md) | Product requirements and success metrics |
+| [docs/specs/input/technical-brief.md](docs/specs/input/technical-brief.md) | Full technical architecture reference |
+| [docs/specs/input/api-spec.yaml](docs/specs/input/api-spec.yaml) | Lead data model (OpenAPI schema) |
+| [docs/brand/](docs/brand/) | Brand voice guide, drinks guide, email templates and tests |
+| [docs/prompt-refinement-guide.md](docs/prompt-refinement-guide.md) | How to iterate on email generation prompts |
+| [docs/gcp-iam-fix.md](docs/gcp-iam-fix.md) | GCP IAM troubleshooting for Cloud Functions 403 errors |
+| [docs/vps-proposal.md](docs/vps-proposal.md) | VPS infrastructure proposal for scraper hosting |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Branching, commits, linting, and deployment guide |
+
 ## Architecture
 
 ```
@@ -66,9 +103,12 @@ asterley-bros/
   src/                         # Python scrapers (legacy, used by GitHub Actions)
   scripts/                     # Automation scripts
   config.yaml                  # Scraper + pipeline configuration
-  docs/                        # Specs and operational docs
+  docs/                        # All documentation
+    brand/                     # Brand voice, drinks guide, email templates & tests
     specs/input/               # Product brief, technical brief, API spec
     gcp-iam-fix.md             # GCP org policy fix guide
+    vps-proposal.md            # VPS infrastructure proposal
+    prompt-refinement-guide.md # Email prompt iteration guide
   .github/workflows/           # CI/CD
     weekly_scrape.yml           # Mon 09:00 UTC -- Google Maps scraper
     weekly_followup.yml         # Wed 10:00 UTC -- follow-up checker
