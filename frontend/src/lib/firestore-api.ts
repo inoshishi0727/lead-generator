@@ -101,6 +101,63 @@ export async function getLeads(filters?: {
   return results;
 }
 
+export async function getLeadById(id: string): Promise<Lead | null> {
+  const ref = doc(db, "leads", id);
+  const snap = await getDoc(ref);
+  if (!snap.exists()) return null;
+  const data = snap.data();
+  const enrichment = data.enrichment || {};
+  const contact = enrichment.contact || {};
+  return {
+    id: data.id || snap.id,
+    business_name: data.business_name || "",
+    address: data.address || null,
+    phone: data.phone || null,
+    website: data.website || null,
+    email: data.email || null,
+    email_found: data.email_found || false,
+    source: data.source || null,
+    stage: data.stage || null,
+    rating: data.rating || null,
+    review_count: data.review_count || null,
+    category: data.category || null,
+    scraped_at: data.scraped_at || null,
+    score: data.score || null,
+    venue_category: enrichment.venue_category || null,
+    menu_fit: enrichment.menu_fit || null,
+    tone_tier: enrichment.tone_tier || null,
+    lead_products: enrichment.lead_products || [],
+    enrichment_status: enrichment.enrichment_status || null,
+    context_notes: enrichment.context_notes || null,
+    business_summary: enrichment.business_summary || null,
+    drinks_programme: enrichment.drinks_programme || null,
+    why_asterley_fits: enrichment.why_asterley_fits || null,
+    opening_hours_summary: enrichment.opening_hours_summary || null,
+    price_tier: enrichment.price_tier || null,
+    menu_fit_signals: enrichment.menu_fit_signals || [],
+    ai_approval: enrichment.ai_approval || null,
+    ai_approval_reason: enrichment.ai_approval_reason || null,
+    google_maps_place_id: data.google_maps_place_id || null,
+    location_postcode: data.location_postcode || null,
+    location_city: data.location_city || null,
+    location_area: data.location_area || enrichment.location_area || null,
+    contact_name: data.contact_name || contact.name || null,
+    contact_email: data.contact_email || null,
+    contact_role: data.contact_role || contact.role || null,
+    contact_confidence: data.contact_confidence || contact.confidence || null,
+    email_domain: data.email_domain || null,
+    client_status: data.client_status || null,
+    rejection_reason: data.rejection_reason || null,
+    rejection_notes: data.rejection_notes || null,
+    batch_id: data.batch_id || null,
+    human_takeover: data.human_takeover || false,
+    human_takeover_at: data.human_takeover_at || null,
+    outcome: data.outcome || null,
+    outcome_updated_at: data.outcome_updated_at || null,
+    reply_count: data.reply_count || 0,
+  };
+}
+
 // --- Outreach Messages ---
 
 export async function getOutreachMessages(filters?: {
