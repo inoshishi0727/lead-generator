@@ -97,6 +97,8 @@ export interface OutreachMessage {
   content: string;
   status: "draft" | "approved" | "rejected" | "sent";
   step_number: number;
+  follow_up_label: string | null;
+  scheduled_send_date: string | null;
   created_at: string | null;
   tone_tier: string | null;
   lead_products: string[];
