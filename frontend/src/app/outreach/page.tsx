@@ -25,7 +25,7 @@ import {
   useGenerateFollowups,
 } from "@/hooks/use-outreach";
 
-const STATUS_FILTERS = ["draft", "approved", "sent", "replied", "rejected", "all"] as const;
+const STATUS_FILTERS = ["draft", "approved", "sent", "replied", "rejected", "follow-ups", "all"] as const;
 
 const CATEGORY_OPTIONS = [
   { value: "", label: "All Categories" },
@@ -58,7 +58,7 @@ export default function OutreachPage() {
   const [showSendWarning, setShowSendWarning] = useState(false);
 
   // "replied" is a client-side filter (has_reply), not a Firestore status
-  const firestoreFilter = statusFilter === "all" || statusFilter === "replied"
+  const firestoreFilter = statusFilter === "all" || statusFilter === "replied" || statusFilter === "follow-ups"
     ? undefined
     : { status: statusFilter };
   const { data: messages, isLoading } = useMessages(firestoreFilter);
@@ -71,7 +71,9 @@ export default function OutreachPage() {
 
   const filteredByStatus = statusFilter === "replied"
     ? (messages ?? []).filter((m) => m.has_reply)
-    : (messages ?? []);
+    : statusFilter === "follow-ups"
+      ? (messages ?? []).filter((m) => m.step_number > 1)
+      : (messages ?? []);
   const filteredByCategory = filteredByStatus.filter(
     (m) => !categoryFilter || m.venue_category === categoryFilter
   );
