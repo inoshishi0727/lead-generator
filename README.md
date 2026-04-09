@@ -262,16 +262,151 @@ scraped -> needs_email -> enriched -> scored -> draft_generated -> approved -> s
 
 ### Local Development
 
+#### 1. Install everything
+
 ```bash
-# Frontend (http://localhost:4000)
-cd frontend && npm install && npm run dev
+# Clone
+git clone https://github.com/inoshishi0727/lead-generator.git
+cd lead-generator
 
-# Cloud Functions (http://localhost:5001)
-cd functions && npm install && firebase emulators:start --only functions
+# Frontend deps
+cd frontend && npm install && cd ..
 
-# Python backend (http://localhost:8000) -- optional, for scraper testing
-cd . && uv sync && uv run uvicorn main:app --reload
+# Cloud Functions deps
+cd functions && npm install && cd ..
+
+# Python backend deps
+uv sync
 ```
+
+#### 2. Set up environment files
+
+```bash
+# Frontend
+cp frontend/.env.example frontend/.env.local
+# Edit frontend/.env.local -- fill in Firebase keys, Resend, Gemini
+
+# Python backend
+cp .env.example .env
+# Edit .env -- fill in Firebase project ID, Gemini key, service account path
+
+# Cloud Functions
+cp functions/.env.example functions/.env.local
+# Edit functions/.env.local -- fill in Anthropic, Gemini, Resend keys
+```
+
+#### 3. Run the frontend only (reads from Firestore)
+
+```bash
+cd frontend && npm run dev
+# Open http://localhost:4000
+```
+
+This is the simplest mode. The dashboard reads leads/outreach/analytics from Firestore. Scraping and enrichment buttons won't work (no VPS connected).
+
+#### 4. Run the Python backend locally (for scraping/enrichment)
+
+```bash
+# Terminal 1: Start the backend
+uv run uvicorn main:app --reload --host 0.0.0.0 --port 8000
+
+# Terminal 2: Point the frontend to the local backend
+# Edit frontend/.env.local and change:
+#   NEXT_PUBLIC_VPS_URL=http://localhost:8000
+# Then restart the frontend:
+cd frontend && npm run dev
+```
+
+Now the dashboard connects to your local backend. You can:
+- Trigger scrapes from the dashboard
+- Run enrichment
+- Upload CSV scrape queries
+- See real-time WebSocket updates
+
+**When you're done testing, change `NEXT_PUBLIC_VPS_URL` back to `http://46.225.19.1:8000` to reconnect to the VPS.**
+
+#### 5. Run Cloud Functions locally
+
+```bash
+cd functions && firebase emulators:start --only functions
+# Emulator runs on http://localhost:5001
+```
+
+### Running Scrapers Locally
+
+You need Playwright browsers installed:
+
+```bash
+uv run playwright install firefox
+```
+
+#### Run Google Maps scraper
+
+```bash
+# Full scrape using config.yaml queries
+uv run python -m src.scrapers.gmaps
+
+# With a lead limit
+uv run python -m src.scrapers.gmaps --limit 20
+
+# Non-headless (visible browser window for debugging)
+uv run python -m src.scrapers.gmaps --limit 10 --no-headless
+```
+
+#### Run other scrapers
+
+```bash
+uv run python -m src.scrapers.gsearch      # Google Search
+uv run python -m src.scrapers.bing          # Bing Search
+uv run python -m src.scrapers.directory     # Yell.com / Trustpilot
+uv run python -m src.scrapers.industry      # Industry publications
+uv run python -m src.scrapers.instagram     # Instagram
+```
+
+#### Run enrichment manually
+
+```bash
+# Via API (backend must be running)
+curl -X POST http://localhost:8000/api/enrich -H "Content-Type: application/json" -d '{"force": false}'
+
+# force=true re-enriches leads that were already enriched
+curl -X POST http://localhost:8000/api/enrich -H "Content-Type: application/json" -d '{"force": true}'
+```
+
+#### Run scoring manually
+
+```bash
+curl -X POST http://localhost:8000/api/score -H "Content-Type: application/json"
+```
+
+#### Manage search queries via API
+
+```bash
+# View current queries
+curl http://localhost:8000/api/search-queries | python3 -m json.tool
+
+# Import new queries
+curl -X POST http://localhost:8000/api/search-queries/import \
+  -H "Content-Type: application/json" \
+  -d '{"source": "google_maps", "queries": ["cocktail bars Bristol", "wine bars Bath"]}'
+
+# Replace all queries
+curl -X PUT http://localhost:8000/api/search-queries \
+  -H "Content-Type: application/json" \
+  -d '{"google_maps": ["cocktail bars London"], "google_search": [], "bing_search": [], "directory": []}'
+```
+
+### Switching Between Local Backend and VPS
+
+The `NEXT_PUBLIC_VPS_URL` env var in `frontend/.env.local` controls where scraping/enrichment requests go:
+
+| Value | Behaviour |
+|-------|-----------|
+| `http://localhost:8000` | Frontend connects to your local Python backend |
+| `http://46.225.19.1:8000` | Frontend connects to the production VPS |
+| _(empty or removed)_ | VPS features disabled, frontend reads Firestore only |
+
+**Always restart the frontend after changing this value** (`npm run dev`).
 
 ### Environment Variables
 
