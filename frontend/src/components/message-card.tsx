@@ -210,9 +210,15 @@ export function MessageCard({ message }: Props) {
               {message.venue_category.replace(/_/g, " ")}
             </Badge>
           )}
-          {message.step_number > 1 && (
-            <Badge variant="secondary" className="text-xs">
-              Step {message.step_number}
+          {message.follow_up_label && message.follow_up_label !== "initial" && (
+            <Badge variant="secondary" className="text-xs bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400">
+              {message.follow_up_label}
+            </Badge>
+          )}
+          {message.scheduled_send_date && message.status === "draft" && (
+            <Badge variant="outline" className="text-xs gap-1">
+              <Clock className="h-2.5 w-2.5" />
+              Send by {message.scheduled_send_date}
             </Badge>
           )}
           {message.tone_tier && (

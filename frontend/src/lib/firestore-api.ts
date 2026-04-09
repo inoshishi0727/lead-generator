@@ -131,6 +131,8 @@ export async function getOutreachMessages(filters?: {
       content: data.content || "",
       status: data.status || "draft",
       step_number: data.step_number || 1,
+      follow_up_label: data.follow_up_label || null,
+      scheduled_send_date: data.scheduled_send_date || null,
       created_at: data.created_at || null,
       tone_tier: data.tone_tier || null,
       lead_products: data.lead_products || [],

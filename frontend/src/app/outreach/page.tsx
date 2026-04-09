@@ -284,9 +284,9 @@ export default function OutreachPage() {
       )}
 
       {/* Followup status */}
-      {followupsMutation.isSuccess && (
+      {followupsMutation.isSuccess && followupsMutation.data && (
         <div className="rounded-lg border border-purple-200 bg-purple-50 p-3 text-sm text-purple-800 dark:border-purple-800 dark:bg-purple-950/20 dark:text-purple-400">
-          Follow-up generation started. Refresh to see new drafts.
+          Follow-ups: {followupsMutation.data.generated} drafted, {followupsMutation.data.skipped} skipped, {followupsMutation.data.failed} failed.
         </div>
       )}
 
