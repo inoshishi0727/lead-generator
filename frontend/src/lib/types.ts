@@ -63,6 +63,7 @@ export interface Lead {
   email_domain: string | null;
   client_status: string | null;
   rejection_reason: string | null;
+  rejection_notes: string | null;
   batch_id: string | null;
   // Reply tracking
   human_takeover: boolean;
@@ -135,6 +136,8 @@ export interface InboundReply {
   matched: boolean;
   created_at: string;
   forwarded_by: string | null;
+  sentiment?: "positive" | "negative" | "neutral" | null;
+  sentiment_reason?: string | null;
 }
 
 // --- Analytics ---

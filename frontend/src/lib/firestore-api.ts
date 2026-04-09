@@ -83,6 +83,7 @@ export async function getLeads(filters?: {
       email_domain: data.email_domain || null,
       client_status: data.client_status || null,
       rejection_reason: data.rejection_reason || null,
+      rejection_notes: data.rejection_notes || null,
       batch_id: data.batch_id || null,
       human_takeover: data.human_takeover || false,
       human_takeover_at: data.human_takeover_at || null,
@@ -278,6 +279,8 @@ export async function getInboundReplies(filters?: {
       matched: data.matched || false,
       created_at: data.created_at || "",
       forwarded_by: data.forwarded_by || null,
+      sentiment: data.sentiment || null,
+      sentiment_reason: data.sentiment_reason || null,
     };
   });
 

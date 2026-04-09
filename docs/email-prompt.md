@@ -19,7 +19,7 @@ Title case (capitalise first letter only): Schofield's, Dispense, Estate, Britan
 
 ## Product Reference
 
-- **Schofield's**: English Dry Vermouth, 16%. Created with bartenders Joe and Daniel Schofield. Crisp, herbaceous. The ultimate Martini (and a banging White Negroni too!).
+- **Schofield's**: English Dry Vermouth, 16%. Created with bartenders Joe and Daniel Schofield. Crisp, herbaceous. the ultimate Dry Martini (and a banging White Negroni too!).
 - **Estate**: English Sweet Vermouth, 16%. Rich, full-bodied. The go-to for Negronis. Brilliant in Manhattans.
 - **Rosé**: Rosé Vermouth, 15%. Value-conscious, strong in BiB. Rosé Americano, Rosé Spritz.
 - **RED**: Value sweet vermouth, 15%. For high-volume venues, pubs. Solid Negroni at a keen price.
@@ -28,6 +28,11 @@ Title case (capitalise first letter only): Schofield's, Dispense, Estate, Britan
 - **Britannica**: London Fernet, 40%. Bold, complex, minty. Hanky Panky. Toronto with rye.
 
 > **CRITICAL:** Dispense (amaro, 26%) goes into Negronis, Boulevardiers, Americanos. Asterley Original (aperitivo, 12%) goes into Spritzes, Pink Negronis, lighter twists. They are NOT interchangeable.
+
+## Venue-Specific Messaging
+
+- **Pubs:** Keep it simple. Lead with RED or Estate, not cocktail-bar products. Focus on simple serves (Negroni, Spritz, highball). No cocktail programme language. Think "something a bit different for the drinks list" not "for your cocktail menu."
+- **Brewery taprooms:** These are NOT cocktail bars. Focus on sessionable, easy serves (Spritz, highball with ginger ale). Frame as "something different alongside your beers" not cocktail language.
 
 ## Personalisation Rules
 
@@ -59,6 +64,9 @@ Say "samples" never "bottles." Say "the bar" not "your bar."
 - Say "Pinot Noir grape base." Say "Pinot Noir base."
 - Say "house Negroni spirit." Say "use it in their House Negroni."
 - Lead with BiB in the first email. The first email is about the product and the serve.
+- Add filler sentences just to hit the word count. Every sentence must carry genuine information or a clear purpose. If the email is complete at 110 words, that is better than padding to 120 with a forced sentence.
+- Use "Martini Vermouth" in subject lines or body (Martini is a competing brand). Say "English Vermouth for Your Martinis" or "English Dry Vermouth."
+- Say "The Martini" — use "Your Martinis" (possessive, plural) when referring to the drink a venue makes.
 
 ## Email Structure (follow this order exactly)
 
@@ -92,7 +100,7 @@ Can I swing by one afternoon with some samples?
 
 Schofield's was created with bartenders Joe and Daniel Schofield. Crisp, herbaceous, distinctly British. Designed for the ultimate Martini (and a banging White Negroni too!). Quite different from the classic styles, and I think it could work really well in your Spring menu.
 
-Saw the TimeOut piece recently and it looked great. Congrats! The whole stirred-down classics direction is exactly the kind of programme our bottles are made for.
+Saw the TimeOut piece recently and it looked great. Congrats! The whole stirred-down classics direction is exactly the kind of programme our range is made for.
 
 I'd love to pop in, try one of your Martinis, and leave you with some samples to play with. No pitch, just a tasting.
 

@@ -44,16 +44,10 @@ export function useEnrichLeads() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (opts?: { force?: boolean }) => {
-      const res = await fetch("/api/enrich", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ force: opts?.force ?? false }),
-      });
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || "Enrichment failed");
-      }
-      return res.json();
+      return api.post<{ status: string; enriched: number; failed: number }>(
+        "/api/enrich",
+        { force: opts?.force ?? false },
+      );
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["leads"] });

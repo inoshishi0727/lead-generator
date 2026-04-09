@@ -11,28 +11,28 @@ scraping:
     max_parallel_browsers: 3
     search_queries:
       # Core bar/drinks categories
-      - "cocktail bars London"
-      - "wine bars London"
-      - "restaurants with bar London"
-      - "boutique hotels London bar"
+      - "cocktail bars UK"
+      - "wine bars UK"
+      - "restaurants with bar UK"
+      - "boutique hotels UK bar"
       # Retail
-      - "independent bottle shops London"
-      - "deli and wine shop London"
-      - "farm shops London"
-      - "luxury food shops London"
-      - "independent grocery shops London"
+      - "independent bottle shops UK"
+      - "deli and wine shop UK"
+      - "farm shops UK"
+      - "luxury food shops UK"
+      - "independent grocery shops UK"
       # Dining
-      - "Italian restaurants London"
-      - "gastropubs London"
+      - "Italian restaurants UK"
+      - "gastropubs UK"
       # Events & hospitality
-      - "events catering companies London"
-      - "festival food vendors London"
-      - "restaurant groups London"
+      - "events catering companies UK"
+      - "festival food vendors UK"
+      - "restaurant groups UK"
       # Membership & education
-      - "private members clubs London"
-      - "cookery schools London"
+      - "private members clubs UK"
+      - "cookery schools UK"
       # Corporate
-      - "corporate gift hampers London"
+      - "corporate gift hampers UK"
     scroll_pause_seconds: 2
     max_stale_rounds: 3
     locale: "en"
@@ -47,7 +47,7 @@ scraping:
       - "airline beverage suppliers UK"
       - "train catering suppliers UK spirits"
       - "yacht charter catering UK drinks"
-      - "film TV production catering London drinks"
+      - "film TV production catering UK drinks"
       - "RTD ready to drink spirits brands UK"
     skip_domains:
       - "youtube.com"
@@ -74,7 +74,7 @@ scraping:
       - "airline beverage suppliers UK"
       - "train catering suppliers UK spirits"
       - "yacht charter catering UK drinks"
-      - "film TV production catering London drinks"
+      - "film TV production catering UK drinks"
       - "RTD ready to drink spirits brands UK"
     skip_domains:
       - "youtube.com"
@@ -98,12 +98,12 @@ scraping:
     headless: false
     category_urls:
       # Yell.com — UK business directory
-      - "https://www.yell.com/s/cocktail+bars-london.html"
-      - "https://www.yell.com/s/wine+bars-london.html"
-      - "https://www.yell.com/s/italian+restaurants-london.html"
-      - "https://www.yell.com/s/gastropubs-london.html"
-      - "https://www.yell.com/s/off+licences-london.html"
-      - "https://www.yell.com/s/delicatessens-london.html"
+      - "https://www.yell.com/s/cocktail+bars-uk.html"
+      - "https://www.yell.com/s/wine+bars-uk.html"
+      - "https://www.yell.com/s/italian+restaurants-uk.html"
+      - "https://www.yell.com/s/gastropubs-uk.html"
+      - "https://www.yell.com/s/off+licences-uk.html"
+      - "https://www.yell.com/s/delicatessens-uk.html"
       # Trustpilot — business reviews
       - "https://www.trustpilot.com/categories/food_beverage_tobacco"
 
@@ -135,10 +135,10 @@ scraping:
     target_count: 40
     max_parallel_browsers: 2
     hashtags:
-      - "londoncocktails"
-      - "londonbars"
+      - "ukcocktails"
+      - "ukbars"
       - "craftspirits"
-      - "londondrinks"
+      - "ukdrinks"
       - "vermouthlovers"
     max_profiles_per_hashtag: 20
     headless: false

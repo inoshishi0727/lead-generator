@@ -164,7 +164,10 @@ export default function LeadsPage() {
 
       {enrichMutation.isError && (
         <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800 dark:border-red-800 dark:bg-red-950/20 dark:text-red-400">
-          Enrichment failed. Make sure the Python backend is running (uv run uvicorn main:app).
+          Enrichment failed.{" "}
+          {enrichMutation.error instanceof Error && enrichMutation.error.message
+            ? enrichMutation.error.message
+            : "Check the backend server logs for details."}
         </div>
       )}
 

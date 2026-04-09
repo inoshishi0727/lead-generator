@@ -53,6 +53,8 @@ const rejectionColors: Record<string, string> = {
 export function LeadsTable({ leads, isLoading }: Props) {
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
   const [pendingLeads, setPendingLeads] = useState<Set<string>>(new Set());
+  const [rejectDialog, setRejectDialog] = useState<{ leadId: string; reason: string } | null>(null);
+  const [rejectionNotes, setRejectionNotes] = useState("");
   const qc = useQueryClient();
   const generateDrafts = useGenerateDrafts();
 
@@ -102,8 +104,7 @@ export function LeadsTable({ leads, isLoading }: Props) {
     }
   }
 
-  async function handleReject(e: React.MouseEvent, leadId: string, reason: string) {
-    e.stopPropagation();
+  async function handleReject(leadId: string, reason: string, notes?: string) {
     if (pendingLeads.has(leadId)) return;
     setPendingLeads((prev) => new Set(prev).add(leadId));
     try {
@@ -111,6 +112,10 @@ export function LeadsTable({ leads, isLoading }: Props) {
         client_status: "rejected",
         rejection_reason: reason,
       };
+
+      if (notes?.trim()) {
+        updates.rejection_notes = notes.trim();
+      }
 
       if (reason === "snoozed") {
         const now = new Date();
@@ -218,12 +223,19 @@ export function LeadsTable({ leads, isLoading }: Props) {
                       </Badge>
                     )}
                     {lead.client_status === "rejected" && lead.rejection_reason && (
-                      <Badge
-                        variant="outline"
-                        className={`ml-2 text-[9px] ${rejectionColors[lead.rejection_reason] || ""}`}
-                      >
-                        {REJECTION_LABELS[lead.rejection_reason] || lead.rejection_reason}
-                      </Badge>
+                      <>
+                        <Badge
+                          variant="outline"
+                          className={`ml-2 text-[9px] ${rejectionColors[lead.rejection_reason] || ""}`}
+                        >
+                          {REJECTION_LABELS[lead.rejection_reason] || lead.rejection_reason}
+                        </Badge>
+                        {lead.rejection_notes && (
+                          <span className="ml-1 text-[9px] text-muted-foreground" title={lead.rejection_notes}>
+                            — {lead.rejection_notes.length > 30 ? lead.rejection_notes.slice(0, 30) + "…" : lead.rejection_notes}
+                          </span>
+                        )}
+                      </>
                     )}
                   </TableCell>
                   {/* Category */}
@@ -300,15 +312,15 @@ export function LeadsTable({ leads, isLoading }: Props) {
                               }
                             />
                             <MenuContent side="bottom" align="end" sideOffset={4}>
-                              <MenuItem onClick={(e) => handleReject(e, lead.id, "snoozed")}>
+                              <MenuItem onClick={(e) => { e.stopPropagation(); setRejectDialog({ leadId: lead.id, reason: "snoozed" }); setRejectionNotes(""); }}>
                                 <AlarmClock className="h-3.5 w-3.5" />
                                 Snooze until next week
                               </MenuItem>
-                              <MenuItem onClick={(e) => handleReject(e, lead.id, "current_account")}>
+                              <MenuItem onClick={(e) => { e.stopPropagation(); setRejectDialog({ leadId: lead.id, reason: "current_account" }); setRejectionNotes(""); }}>
                                 <Building2 className="h-3.5 w-3.5" />
                                 Current account
                               </MenuItem>
-                              <MenuItem onClick={(e) => handleReject(e, lead.id, "in_discussion")}>
+                              <MenuItem onClick={(e) => { e.stopPropagation(); setRejectDialog({ leadId: lead.id, reason: "in_discussion" }); setRejectionNotes(""); }}>
                                 <MessageSquareMore className="h-3.5 w-3.5" />
                                 In discussion (60 days)
                               </MenuItem>
@@ -330,6 +342,58 @@ export function LeadsTable({ leads, isLoading }: Props) {
         lead={selectedLead}
         onClose={() => setSelectedLead(null)}
       />
+
+      {/* Rejection notes dialog */}
+      {rejectDialog && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              setRejectDialog(null);
+              setRejectionNotes("");
+            }
+          }}
+        >
+          <div className="w-full max-w-md rounded-lg border border-border/50 bg-card p-6 shadow-2xl">
+            <h3 className="text-sm font-semibold mb-1">
+              Reject as: {REJECTION_LABELS[rejectDialog.reason] ?? rejectDialog.reason}
+            </h3>
+            <p className="text-xs text-muted-foreground mb-3">
+              Add optional notes explaining why.
+            </p>
+            <textarea
+              className="w-full min-h-[80px] resize-y rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+              placeholder="Notes (optional)..."
+              value={rejectionNotes}
+              onChange={(e) => setRejectionNotes(e.target.value)}
+              autoFocus
+            />
+            <div className="flex justify-end gap-2 mt-4">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setRejectDialog(null);
+                  setRejectionNotes("");
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={() => {
+                  handleReject(rejectDialog.leadId, rejectDialog.reason, rejectionNotes);
+                  setRejectDialog(null);
+                  setRejectionNotes("");
+                }}
+              >
+                Reject
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

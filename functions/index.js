@@ -13,6 +13,49 @@ const db = getFirestore();
 
 const CLAUDE_MODEL = "claude-sonnet-4-20250514";
 
+// ---- Gemini sentiment analysis for inbound replies ----
+
+async function analyzeSentiment(body) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey || !body || body.trim().length < 5) return null;
+
+  const ai = new GoogleGenAI({ apiKey });
+  const prompt = `Classify the sentiment of this email reply to a spirits/drinks sales outreach.
+
+Reply:
+"""
+${body.slice(0, 1500)}
+"""
+
+Return ONLY valid JSON:
+{"sentiment":"positive|negative|neutral","reason":"brief 5-10 word summary"}
+
+Rules:
+- "positive": interested, wants to learn more, requests tasting/meeting, asks for pricing
+- "negative": not interested, already has supplier, asks to stop emailing, declines
+- "neutral": out of office, auto-forward, asks a question without clear interest/disinterest`;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-2.0-flash",
+      contents: prompt,
+      config: { maxOutputTokens: 200, temperature: 0.1 },
+    });
+    let text = (response.text || "").replace(/```json\s*/g, "").replace(/```/g, "").trim();
+    const start = text.indexOf("{");
+    const end = text.lastIndexOf("}");
+    if (start >= 0 && end > start) {
+      const parsed = JSON.parse(text.slice(start, end + 1));
+      if (["positive", "negative", "neutral"].includes(parsed.sentiment)) {
+        return parsed;
+      }
+    }
+  } catch (err) {
+    console.warn("Sentiment analysis failed:", err.message);
+  }
+  return null;
+}
+
 // ---- Venue category to lead products + tone mapping ----
 
 const VENUE_PRODUCT_MAP = {
@@ -33,6 +76,8 @@ const VENUE_PRODUCT_MAP = {
   airline: { products: ["Schofield's", "Asterley Original"], tone: "corporate_formal" },
   luxury_retail: { products: ["Dispense", "Schofield's"], tone: "corporate_formal" },
   grocery: { products: ["Asterley Original", "Schofield's"], tone: "b2b_commercial" },
+  pub: { products: ["RED", "Estate"], tone: "bartender_casual" },
+  brewery_taproom: { products: ["Asterley Original", "Dispense"], tone: "bartender_casual" },
 };
 
 const TONE_CONFIG = {
@@ -142,7 +187,7 @@ PRODUCT NAMES are title case (capitalise first letter only): Schofield's, Dispen
 "Vermouth" and "Amaro" are capitalised as proper nouns.
 
 PRODUCT REFERENCE:
-- Schofield's: English Dry Vermouth, 16%. Created with bartenders Joe and Daniel Schofield. Crisp, herbaceous. The ultimate Martini (and a banging White Negroni too!).
+- Schofield's: English Dry Vermouth, 16%. Created with bartenders Joe and Daniel Schofield. Crisp, herbaceous. the ultimate Dry Martini (and a banging White Negroni too!).
 - Estate: English Sweet Vermouth, 16%. Rich, full-bodied. The go-to for Negronis. Brilliant in Manhattans.
 - Rosé: Rosé Vermouth, 15%. Value-conscious, strong in BiB. Rosé Americano, Rosé Spritz.
 - RED: Value sweet vermouth, 15%. For high-volume venues, pubs. Solid Negroni at a keen price.
@@ -151,6 +196,10 @@ PRODUCT REFERENCE:
 - Britannica: London Fernet, 40%. Bold, complex, minty. Hanky Panky. Toronto with rye.
 
 CRITICAL: Dispense (amaro, 26%) goes into Negronis, Boulevardiers, Americanos. Asterley Original (aperitivo, 12%) goes into Spritzes, Pink Negronis, lighter twists. They are NOT interchangeable.
+
+VENUE-SPECIFIC MESSAGING:
+- Pubs: Keep it simple. Lead with RED or Estate, not cocktail-bar products. Focus on simple serves (Negroni, Spritz, highball). No cocktail programme language. Think "something a bit different for the drinks list" not "for your cocktail menu."
+- Brewery taprooms: These are NOT cocktail bars. Focus on sessionable, easy serves (Spritz, highball with ginger ale). Frame as "something different alongside your beers" not cocktail language.
 
 PERSONALISATION RULES:
 - You CAN reference: things from their website, Instagram, press features, Google reviews, menu items visible online, events they're running.
@@ -174,6 +223,9 @@ DO NOT:
 - Say "Pinot Noir grape base." Say "Pinot Noir base."
 - Say "house Negroni spirit." Say "use it in their House Negroni."
 - Lead with BiB in the first email. The first email is about the product and the serve.
+- Add filler sentences just to hit the word count. Every sentence must carry genuine information or a clear purpose. If the email is complete at 110 words, that is better than padding to 120 with a forced sentence.
+- Use "Martini Vermouth" in subject lines or body (Martini is a competing brand). Say "English Vermouth for Your Martinis" or "English Dry Vermouth."
+- Say "The Martini" — use "Your Martinis" (possessive, plural) when referring to the drink a venue makes.
 
 EMAIL STRUCTURE (follow this order exactly):
 
@@ -202,7 +254,7 @@ Can I swing by one afternoon with some samples?
 
 Schofield's was created with bartenders Joe and Daniel Schofield. Crisp, herbaceous, distinctly British. Designed for the ultimate Martini (and a banging White Negroni too!). Quite different from the classic styles, and I think it could work really well in your Spring menu.
 
-Saw the TimeOut piece recently and it looked great. Congrats! The whole stirred-down classics direction is exactly the kind of programme our bottles are made for.
+Saw the TimeOut piece recently and it looked great. Congrats! The whole stirred-down classics direction is exactly the kind of programme our range is made for.
 
 I'd love to pop in, try one of your Martinis, and leave you with some samples to play with. No pitch, just a tasting.
 
@@ -705,10 +757,10 @@ const SEASONS = {
 };
 
 const SEASONAL_CAT_PRIORITY = {
-  spring_summer: { cocktail_bar:10, wine_bar:9, hotel_bar:8, italian_restaurant:8, bottle_shop:7, gastropub:6, restaurant_groups:5 },
-  high_summer: { gastropub:10, hotel_bar:9, cocktail_bar:8, wine_bar:7 },
-  autumn_winter: { cocktail_bar:10, hotel_bar:9, italian_restaurant:9, wine_bar:8, restaurant_groups:7 },
-  january: { wine_bar:10, cocktail_bar:9, hotel_bar:8, gastropub:7, bottle_shop:6 },
+  spring_summer: { cocktail_bar:10, wine_bar:9, hotel_bar:8, italian_restaurant:8, bottle_shop:7, gastropub:6, restaurant_groups:5, pub:5, brewery_taproom:5 },
+  high_summer: { gastropub:10, hotel_bar:9, cocktail_bar:8, wine_bar:7, pub:8, brewery_taproom:7 },
+  autumn_winter: { cocktail_bar:10, hotel_bar:9, italian_restaurant:9, wine_bar:8, restaurant_groups:7, pub:5, brewery_taproom:4 },
+  january: { wine_bar:10, cocktail_bar:9, hotel_bar:8, gastropub:7, bottle_shop:6, pub:4, brewery_taproom:3 },
 };
 
 function getSeason() {
@@ -1319,7 +1371,7 @@ function extractLeadIdFromTo(toAddresses) {
 }
 
 export const processInboundEmail = functions
-  .runWith({ timeoutSeconds: 30, memory: "256MB", secrets: ["RESEND_API_KEY"] })
+  .runWith({ timeoutSeconds: 30, memory: "256MB", secrets: ["RESEND_API_KEY", "GEMINI_API_KEY"] })
   .https.onRequest(async (req, res) => {
     if (req.method !== "POST") {
       res.status(405).send("Method not allowed");
@@ -1468,15 +1520,39 @@ export const processInboundEmail = functions
         created_at: new Date().toISOString(),
       });
 
+      // Sentiment analysis via Gemini (skip auto-replies)
+      let sentimentResult = null;
+      if (!isAutoReply && parsedBody && parsedBody.trim().length >= 5) {
+        try {
+          sentimentResult = await analyzeSentiment(parsedBody);
+          if (sentimentResult?.sentiment) {
+            await db.collection("inbound_replies").doc(replyId).update({
+              sentiment: sentimentResult.sentiment,
+              sentiment_reason: sentimentResult.reason || null,
+              sentiment_analyzed_at: new Date().toISOString(),
+            });
+          }
+        } catch (err) {
+          console.warn("Sentiment analysis failed (non-blocking):", err.message);
+        }
+      }
+
       // Update lead if matched (skip stage update for auto-replies)
       if (matchedLead && !isAutoReply) {
-        await db.collection("leads").doc(matchedLead.id).update({
+        const leadUpdate = {
           stage: "responded",
           human_takeover: true,
           human_takeover_at: new Date().toISOString(),
           reply_count: FieldValue.increment(1),
           outcome: matchedLead.outcome || "ongoing",
-        });
+        };
+
+        // Refine outcome based on sentiment
+        if (sentimentResult?.sentiment === "negative" && matchedLead.outcome !== "converted") {
+          leadUpdate.outcome = "not_interested";
+        }
+
+        await db.collection("leads").doc(matchedLead.id).update(leadUpdate);
       }
 
       // Update message if matched

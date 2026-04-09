@@ -1,10 +1,11 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
-const hasBackend = !!process.env.NEXT_PUBLIC_API_URL;
+const API_URL = process.env.NEXT_PUBLIC_API_URL;
+const hasBackend = !!API_URL;
 const WS_URL =
-  typeof window !== "undefined" && hasBackend
-    ? `ws://${window.location.hostname}:8000/ws`
+  typeof window !== "undefined" && hasBackend && API_URL
+    ? API_URL.replace(/^http/, "ws") + "/ws"
     : "";
 
 // --- Generating leads tracker (module-level singleton) ---

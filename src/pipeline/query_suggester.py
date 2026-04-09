@@ -4,44 +4,44 @@ from __future__ import annotations
 
 CATEGORY_QUERIES: dict[str, list[str]] = {
     "cocktail_bar": [
-        "cocktail bars London",
-        "speakeasy London",
-        "craft cocktail bar London",
+        "cocktail bars UK",
+        "speakeasy UK",
+        "craft cocktail bar UK",
     ],
     "wine_bar": [
-        "wine bars London",
-        "natural wine bar London",
-        "wine and cheese bar London",
+        "wine bars UK",
+        "natural wine bar UK",
+        "wine and cheese bar UK",
     ],
     "hotel_bar": [
-        "boutique hotel bar London",
-        "hotel cocktail bar London",
-        "luxury hotel bar London",
+        "boutique hotel bar UK",
+        "hotel cocktail bar UK",
+        "luxury hotel bar UK",
     ],
     "italian_restaurant": [
-        "Italian restaurant London",
-        "aperitivo bar London",
-        "Negroni bar London",
+        "Italian restaurant UK",
+        "aperitivo bar UK",
+        "Negroni bar UK",
     ],
     "gastropub": [
-        "gastropub London",
-        "craft beer pub cocktails London",
-        "elevated pub London",
+        "gastropub UK",
+        "craft beer pub cocktails UK",
+        "elevated pub UK",
     ],
     "bottle_shop": [
-        "independent bottle shop London",
-        "craft spirits shop London",
-        "wine and spirits shop London",
+        "independent bottle shop UK",
+        "craft spirits shop UK",
+        "wine and spirits shop UK",
     ],
     "restaurant_groups": [
-        "restaurant group London",
-        "multi-site bar group London",
+        "restaurant group UK",
+        "multi-site bar group UK",
     ],
     "other": [
-        "deli and wine shop London",
-        "farm shop London spirits",
-        "events venue London bar",
-        "members club London bar",
+        "deli and wine shop UK",
+        "farm shop UK spirits",
+        "events venue UK bar",
+        "members club UK bar",
     ],
 }
 

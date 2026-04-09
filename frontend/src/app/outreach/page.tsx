@@ -25,7 +25,7 @@ import {
   useGenerateFollowups,
 } from "@/hooks/use-outreach";
 
-const STATUS_FILTERS = ["all", "draft", "approved", "rejected", "sent", "replied"] as const;
+const STATUS_FILTERS = ["draft", "approved", "sent", "replied", "rejected", "all"] as const;
 
 const CATEGORY_OPTIONS = [
   { value: "", label: "All Categories" },
@@ -53,7 +53,7 @@ const CATEGORY_OPTIONS = [
 
 export default function OutreachPage() {
   const { isAdmin } = useAuth();
-  const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [statusFilter, setStatusFilter] = useState<string>("draft");
   const [categoryFilter, setCategoryFilter] = useState<string>("");
   const [showSendWarning, setShowSendWarning] = useState(false);
 
@@ -245,17 +245,15 @@ export default function OutreachPage() {
       <div className="flex items-center gap-3">
         <div className="flex gap-1.5">
           {STATUS_FILTERS.map((s) => (
-            <button
+            <Button
               key={s}
+              size="sm"
+              variant={statusFilter === s ? "default" : "outline"}
               onClick={() => setStatusFilter(s)}
-              className={`rounded-full px-3 py-1 text-xs font-medium capitalize transition-colors ${
-                statusFilter === s
-                  ? "bg-primary text-primary-foreground"
-                  : "bg-muted text-muted-foreground hover:bg-accent"
-              }`}
+              className="capitalize"
             >
               {s}
-            </button>
+            </Button>
           ))}
         </div>
         <select
