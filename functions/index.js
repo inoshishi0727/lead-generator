@@ -1058,13 +1058,54 @@ function buildHtmlEmail(content) {
   return `<div style="font-family: Arial, sans-serif; font-size: 14px; color: #333; line-height: 1.5;"><div style="white-space: pre-wrap;">${escaped}</div><br>${EMAIL_SIGNATURE_HTML}</div>`;
 }
 
+// UK bank holidays (England & Wales) for 2026-2027.
+// Update annually or fetch from https://www.gov.uk/bank-holidays.json
+const UK_BANK_HOLIDAYS = new Set([
+  // 2026
+  "2026-01-01", "2026-04-03", "2026-04-06", "2026-05-04", "2026-05-25",
+  "2026-08-31", "2026-12-25", "2026-12-28",
+  // 2027
+  "2027-01-01", "2027-03-26", "2027-03-29", "2027-05-03", "2027-05-31",
+  "2027-08-30", "2027-12-27", "2027-12-28",
+]);
+
+/**
+ * Check if a given date (London time) is a blackout day for outreach.
+ * Blackout = weekends, UK bank holidays, Dec 24 - Jan 3.
+ */
+function isBlackoutDay(londonDate) {
+  const day = londonDate.getDay(); // 0=Sun, 6=Sat
+  if (day === 0 || day === 6) return true;
+
+  const month = londonDate.getMonth(); // 0-indexed
+  const date = londonDate.getDate();
+
+  // Dec 24-31
+  if (month === 11 && date >= 24) return true;
+  // Jan 1-3
+  if (month === 0 && date <= 3) return true;
+
+  // Bank holidays
+  const iso = londonDate.toISOString().split("T")[0];
+  if (UK_BANK_HOLIDAYS.has(iso)) return true;
+
+  return false;
+}
+
+/**
+ * Is now within the optimal send window?
+ * Per proposal: Tue-Thu, 9-11am London time, no blackout days.
+ */
 function isOptimalWindow() {
   const now = new Date();
   const london = new Date(now.toLocaleString("en-US", { timeZone: "Europe/London" }));
-  const day = london.getDay(); // 0=Sun
+
+  if (isBlackoutDay(london)) return false;
+
+  const day = london.getDay();
   const hour = london.getHours();
   const isBestDay = [2, 3, 4].includes(day); // Tue, Wed, Thu
-  const isBestTime = hour >= 10 && hour < 13;
+  const isBestTime = hour >= 9 && hour < 11; // 9-11am per proposal
   return isBestDay && isBestTime;
 }
 
@@ -1767,157 +1808,180 @@ export const assignReplyToLead = functions
 // ---- Generate Follow-Up Drafts ----
 
 /**
- * Generate follow-up email drafts for leads that are due.
- * Callable from frontend + can be wired to Cloud Scheduler.
- *
- * Logic:
- * - Finds leads in "sent", "follow_up_1", or "follow_up_2" stage
- * - For each, checks if a follow-up draft is due (1 day before scheduled send)
- * - Generates the draft via Claude using the appropriate step instructions
- * - Tags with follow_up_label and scheduled_send_date
- * - Requires manual approval before sending
+ * Core follow-up generation logic, shared by the callable and the scheduled trigger.
+ * Returns { generated, skipped, failed, total }.
+ */
+async function runFollowUpGeneration() {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    throw new Error("ANTHROPIC_API_KEY not configured.");
+  }
+
+  const anthropic = new Anthropic({ apiKey });
+
+  // 1. Find all leads in follow-up eligible stages
+  const eligibleStages = ["sent", "follow_up_1", "follow_up_2"];
+  const leadsSnap = await db.collection("leads").get();
+  const allLeads = leadsSnap.docs
+    .map((d) => ({ id: d.id, ...d.data() }))
+    .filter((d) => eligibleStages.includes(d.stage));
+
+  if (allLeads.length === 0) {
+    return { generated: 0, skipped: 0, failed: 0, total: 0 };
+  }
+
+  // 2. Get all outreach messages and inbound replies for these leads
+  const msgsSnap = await db.collection("outreach_messages").get();
+  const allMessages = msgsSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+
+  const repliesSnap = await db.collection("inbound_replies")
+    .where("matched", "==", true)
+    .get();
+  const leadsWithReplies = new Set(
+    repliesSnap.docs.map((d) => d.data().lead_id).filter(Boolean)
+  );
+
+  const now = new Date();
+  let generated = 0;
+  let skipped = 0;
+  let failed = 0;
+
+  for (const lead of allLeads) {
+    try {
+      // STOP CHECKS using extracted logic
+      const skipReason = shouldSkipLead(lead, leadsWithReplies.has(lead.id));
+      if (skipReason) { skipped++; continue; }
+
+      // Find messages for this lead
+      const leadMessages = allMessages
+        .filter((m) => m.lead_id === lead.id)
+        .sort((a, b) => (b.sent_at || b.created_at || "").localeCompare(a.sent_at || a.created_at || ""));
+
+      // Use extracted logic to determine action
+      const result = determineFollowUpAction(leadMessages, now);
+
+      if (result.action === "complete") {
+        await db.collection("leads").doc(lead.id).update({ stage: "no_response" });
+        skipped++;
+        continue;
+      }
+
+      if (result.action === "skip") { skipped++; continue; }
+
+      const { nextStepNumber, followUpLabel, scheduledSendDate } = result;
+
+      // Find previous subject for "Re:" threading
+      const initialMessage = leadMessages.find((m) => m.step_number === 1 && m.status === "sent");
+      const lastSent = leadMessages.find((m) => m.status === "sent");
+      const previousSubject = initialMessage?.subject || lastSent?.subject || "";
+
+      // Generate the follow-up draft
+      const enrichment = lead.enrichment || {};
+      const venueCat = enrichment.venue_category || lead.category || "cocktail_bar";
+      const toneTier = enrichment.tone_tier || "bartender_casual";
+      const prompt = buildPrompt(lead, enrichment, nextStepNumber, previousSubject);
+
+      const feedbackBlock = await getEditFeedback(venueCat, toneTier);
+      const systemPrompt = feedbackBlock
+        ? EMAIL_SYSTEM_PROMPT + feedbackBlock
+        : EMAIL_SYSTEM_PROMPT;
+
+      const response = await anthropic.messages.create({
+        model: CLAUDE_MODEL,
+        max_tokens: 1024,
+        system: systemPrompt,
+        messages: [{ role: "user", content: prompt }],
+      });
+
+      let content = response.content[0].text || "";
+      let subject = null;
+
+      if (content.includes("Subject:")) {
+        const lines = content.split("\n");
+        for (let i = 0; i < lines.length; i++) {
+          if (lines[i].trim().startsWith("Subject:")) {
+            subject = lines[i].trim().replace("Subject:", "").trim();
+            content = lines.slice(i + 1).join("\n").trim();
+            break;
+          }
+        }
+      }
+
+      const contact = enrichment.contact || {};
+      const msgId = crypto.randomUUID();
+      await db.collection("outreach_messages").doc(msgId).set({
+        id: msgId,
+        lead_id: lead.id,
+        business_name: lead.business_name,
+        venue_category: enrichment.venue_category || null,
+        channel: "email",
+        subject,
+        content,
+        status: "draft",
+        step_number: nextStepNumber,
+        follow_up_label: followUpLabel,
+        scheduled_send_date: scheduledSendDate,
+        created_at: new Date().toISOString(),
+        tone_tier: enrichment.tone_tier || null,
+        lead_products: enrichment.lead_products || [],
+        contact_name: lead.contact_name || contact.name || null,
+        context_notes: enrichment.context_notes || null,
+        menu_fit: enrichment.menu_fit || null,
+        recipient_email: lead.email || lead.contact_email || null,
+        website: lead.website || null,
+        workspace_id: lead.workspace_id || "",
+        original_content: content,
+        original_subject: subject,
+        was_edited: false,
+      });
+
+      // Update lead stage
+      if (result.newStage && result.newStage !== lead.stage) {
+        await db.collection("leads").doc(lead.id).update({ stage: result.newStage });
+      }
+
+      generated++;
+    } catch (err) {
+      console.error("Follow-up draft failed for", lead.business_name, err.message);
+      failed++;
+    }
+  }
+
+  return { generated, skipped, failed, total: allLeads.length };
+}
+
+/**
+ * Manual trigger — callable from frontend.
  */
 export const generateFollowups = functions
   .runWith({ timeoutSeconds: 540, memory: "512MB", secrets: ["ANTHROPIC_API_KEY"] })
-  .https.onCall(async (data, context) => {
+  .https.onCall(async (_data, context) => {
     if (!context.auth) {
       throw new HttpsError("unauthenticated", "Must be signed in.");
     }
+    return runFollowUpGeneration();
+  });
 
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) {
-      throw new HttpsError("failed-precondition", "ANTHROPIC_API_KEY not configured.");
-    }
-
-    const anthropic = new Anthropic({ apiKey });
-
-    // 1. Find all leads in follow-up eligible stages
-    const eligibleStages = ["sent", "follow_up_1", "follow_up_2"];
-    const leadsSnap = await db.collection("leads").get();
-    const allLeads = leadsSnap.docs
-      .map((d) => ({ id: d.id, ...d.data() }))
-      .filter((d) => eligibleStages.includes(d.stage));
-
-    if (allLeads.length === 0) {
-      return { generated: 0, skipped: 0, failed: 0, total: 0 };
-    }
-
-    // 2. Get all outreach messages and inbound replies for these leads
-    const msgsSnap = await db.collection("outreach_messages").get();
-    const allMessages = msgsSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
-
-    const repliesSnap = await db.collection("inbound_replies")
-      .where("matched", "==", true)
-      .get();
-    const leadsWithReplies = new Set(
-      repliesSnap.docs.map((d) => d.data().lead_id).filter(Boolean)
-    );
-
+/**
+ * Scheduled trigger — runs Mon-Fri at 8am London time.
+ * Skips weekends, bank holidays, and Dec 24 - Jan 3.
+ * Generates follow-up drafts so they're ready for review
+ * before the optimal send window (Tue-Thu 9-11am).
+ */
+export const scheduledFollowups = functions
+  .runWith({ timeoutSeconds: 540, memory: "512MB", secrets: ["ANTHROPIC_API_KEY"] })
+  .pubsub.schedule("0 8 * * 1-5")
+  .timeZone("Europe/London")
+  .onRun(async () => {
+    // Skip blackout days (bank holidays, Dec 24 - Jan 3)
     const now = new Date();
-    let generated = 0;
-    let skipped = 0;
-    let failed = 0;
-
-    for (const lead of allLeads) {
-      try {
-        // STOP CHECKS using extracted logic
-        const skipReason = shouldSkipLead(lead, leadsWithReplies.has(lead.id));
-        if (skipReason) { skipped++; continue; }
-
-        // Find messages for this lead
-        const leadMessages = allMessages
-          .filter((m) => m.lead_id === lead.id)
-          .sort((a, b) => (b.sent_at || b.created_at || "").localeCompare(a.sent_at || a.created_at || ""));
-
-        // Use extracted logic to determine action
-        const result = determineFollowUpAction(leadMessages, now);
-
-        if (result.action === "complete") {
-          await db.collection("leads").doc(lead.id).update({ stage: "no_response" });
-          skipped++;
-          continue;
-        }
-
-        if (result.action === "skip") { skipped++; continue; }
-
-        const { nextStepNumber, followUpLabel, scheduledSendDate } = result;
-
-        // Find previous subject for "Re:" threading
-        const initialMessage = leadMessages.find((m) => m.step_number === 1 && m.status === "sent");
-        const lastSent = leadMessages.find((m) => m.status === "sent");
-        const previousSubject = initialMessage?.subject || lastSent?.subject || "";
-
-        // Generate the follow-up draft
-        const enrichment = lead.enrichment || {};
-        const venueCat = enrichment.venue_category || lead.category || "cocktail_bar";
-        const toneTier = enrichment.tone_tier || "bartender_casual";
-        const prompt = buildPrompt(lead, enrichment, nextStepNumber, previousSubject);
-
-        const feedbackBlock = await getEditFeedback(venueCat, toneTier);
-        const systemPrompt = feedbackBlock
-          ? EMAIL_SYSTEM_PROMPT + feedbackBlock
-          : EMAIL_SYSTEM_PROMPT;
-
-        const response = await anthropic.messages.create({
-          model: CLAUDE_MODEL,
-          max_tokens: 1024,
-          system: systemPrompt,
-          messages: [{ role: "user", content: prompt }],
-        });
-
-        let content = response.content[0].text || "";
-        let subject = null;
-
-        if (content.includes("Subject:")) {
-          const lines = content.split("\n");
-          for (let i = 0; i < lines.length; i++) {
-            if (lines[i].trim().startsWith("Subject:")) {
-              subject = lines[i].trim().replace("Subject:", "").trim();
-              content = lines.slice(i + 1).join("\n").trim();
-              break;
-            }
-          }
-        }
-
-        const contact = enrichment.contact || {};
-        const msgId = crypto.randomUUID();
-        await db.collection("outreach_messages").doc(msgId).set({
-          id: msgId,
-          lead_id: lead.id,
-          business_name: lead.business_name,
-          venue_category: enrichment.venue_category || null,
-          channel: "email",
-          subject,
-          content,
-          status: "draft",
-          step_number: nextStepNumber,
-          follow_up_label: followUpLabel,
-          scheduled_send_date: scheduledSendDate,
-          created_at: new Date().toISOString(),
-          tone_tier: enrichment.tone_tier || null,
-          lead_products: enrichment.lead_products || [],
-          contact_name: lead.contact_name || contact.name || null,
-          context_notes: enrichment.context_notes || null,
-          menu_fit: enrichment.menu_fit || null,
-          recipient_email: lead.email || lead.contact_email || null,
-          website: lead.website || null,
-          workspace_id: lead.workspace_id || "",
-          original_content: content,
-          original_subject: subject,
-          was_edited: false,
-        });
-
-        // Update lead stage
-        if (result.newStage && result.newStage !== lead.stage) {
-          await db.collection("leads").doc(lead.id).update({ stage: result.newStage });
-        }
-
-        generated++;
-      } catch (err) {
-        console.error("Follow-up draft failed for", lead.business_name, err.message);
-        failed++;
-      }
+    const london = new Date(now.toLocaleString("en-US", { timeZone: "Europe/London" }));
+    if (isBlackoutDay(london)) {
+      console.log("Scheduled follow-ups skipped: blackout day");
+      return null;
     }
 
-    return { generated, skipped, failed, total: allLeads.length };
+    const result = await runFollowUpGeneration();
+    console.log("Scheduled follow-up generation:", JSON.stringify(result));
+    return null;
   });
