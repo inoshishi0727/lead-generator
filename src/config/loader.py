@@ -105,8 +105,8 @@ class EnrichmentConfig(BaseModel):
     camoufox_timeout_seconds: int = 20
     pages_to_visit: list[str] = ["/", "/menu", "/about", "/contact"]
     gemini_model: str = "gemini-2.5-flash"
-    gemini_max_input_chars: int = 12000
-    gemini_max_tokens: int = 1000
+    gemini_max_input_chars: int = 40000
+    gemini_max_tokens: int = 2000
     gemini_temperature: float = 0.2
     max_concurrent: int = 3
     headless: bool = True

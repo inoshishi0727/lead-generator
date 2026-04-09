@@ -152,7 +152,7 @@ scraping:
       - "/about"
       - "/contact"
     gemini_model: "gemini-2.5-flash"
-    gemini_max_input_chars: 12000
+    gemini_max_input_chars: 40000
     gemini_max_tokens: 4000
     gemini_temperature: 0.2
     max_concurrent: 3
