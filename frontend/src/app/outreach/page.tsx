@@ -24,6 +24,7 @@ import {
   useSendApproved,
   useGenerateFollowups,
 } from "@/hooks/use-outreach";
+import { EditReflectionBanner } from "@/components/edit-reflection-banner";
 
 const STATUS_FILTERS = ["draft", "approved", "sent", "replied", "rejected", "follow-ups", "all"] as const;
 
@@ -213,6 +214,9 @@ export default function OutreachPage() {
           </div>
         </div>
       )}
+
+      {/* Edit reflection banner */}
+      <EditReflectionBanner />
 
       {/* Stats */}
       <div className="grid grid-cols-5 gap-4">

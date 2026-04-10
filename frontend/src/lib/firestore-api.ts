@@ -16,7 +16,7 @@ import {
   deleteDoc,
 } from "firebase/firestore";
 import { db } from "./firebase";
-import type { Lead, LeadDetail, OutreachMessage, InboundReply } from "./types";
+import type { Lead, LeadDetail, OutreachMessage, InboundReply, EditFeedback, ReflectionCategory } from "./types";
 
 // --- Leads ---
 
@@ -306,6 +306,57 @@ export async function updateOutreachMessage(
   // Strip lead_id (not a message field) but keep rejection_reason on the message doc
   const { lead_id: _leadId, ...messageUpdates } = updates;
   await updateDoc(ref, messageUpdates as Record<string, unknown>);
+}
+
+// --- Edit Feedback / Reflections ---
+
+export async function getWeeklyEdits(sinceDays = 7): Promise<EditFeedback[]> {
+  const since = new Date();
+  since.setDate(since.getDate() - sinceDays);
+  const sinceISO = since.toISOString();
+
+  // Simple query: fetch most recent edits, filter by date client-side.
+  // Avoids composite index requirement (orderBy + where on created_at).
+  const ref = collection(db, "edit_feedback");
+  const q = query(ref, orderBy("created_at", "desc"), fbLimit(50));
+  const snap = await getDocs(q);
+
+  return snap.docs
+    .map((d) => {
+      const data = d.data();
+      return {
+        id: d.id,
+        message_id: data.message_id || "",
+        lead_id: data.lead_id || null,
+        channel: data.channel || null,
+        venue_category: data.venue_category || null,
+        tone_tier: data.tone_tier || null,
+        step_number: data.step_number || null,
+        lead_products: data.lead_products || [],
+        original_content: data.original_content || "",
+        edited_content: data.edited_content || "",
+        original_subject: data.original_subject || null,
+        edited_subject: data.edited_subject || null,
+        created_at: data.created_at || "",
+        reflection_category: data.reflection_category || null,
+        reflection_note: data.reflection_note || null,
+        reflected_at: data.reflected_at || null,
+      };
+    })
+    .filter((d) => d.created_at >= sinceISO);
+}
+
+export async function saveReflection(
+  feedbackId: string,
+  category: ReflectionCategory,
+  note: string | null
+): Promise<void> {
+  const ref = doc(db, "edit_feedback", feedbackId);
+  await updateDoc(ref, {
+    reflection_category: category,
+    reflection_note: note || null,
+    reflected_at: new Date().toISOString(),
+  });
 }
 
 // --- Inbound Replies ---

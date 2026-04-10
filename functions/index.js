@@ -403,8 +403,23 @@ async function getEditFeedback(venueCat, toneTier, limit = 3) {
     const toneMatched = docs.filter((d) => d.tone_tier === toneTier);
     const examples = matched.length >= 2 ? matched : toneMatched.length >= 2 ? toneMatched : docs;
 
-    const selected = examples.slice(0, limit);
+    // Prioritize reflected edits (those with a reason) over unreflected ones
+    const reflected = examples.filter((d) => d.reflection_category);
+    const unreflected = examples.filter((d) => !d.reflection_category);
+    const selected = reflected.length >= limit
+      ? reflected.slice(0, limit)
+      : [...reflected, ...unreflected].slice(0, limit);
     if (selected.length === 0) return "";
+
+    const categoryLabels = {
+      tone: "tone issue",
+      product_focus: "wrong product focus",
+      length: "length issue",
+      personalization: "not personalized enough",
+      factual_error: "factual error",
+      structure: "structure issue",
+      other: "general correction",
+    };
 
     let block = `\nHUMAN EDIT EXAMPLES (learn from these corrections — the human edited Claude's draft to improve it):\n`;
     for (let i = 0; i < selected.length; i++) {
@@ -415,7 +430,15 @@ async function getEditFeedback(venueCat, toneTier, limit = 3) {
         block += `\nCorrected subject: ${fb.edited_subject}`;
       }
       block += `\nOriginal:\n${fb.original_content}`;
-      block += `\nCorrected:\n${fb.edited_content}\n`;
+      block += `\nCorrected:\n${fb.edited_content}`;
+      if (fb.reflection_category) {
+        const label = categoryLabels[fb.reflection_category] || fb.reflection_category;
+        block += `\nReason for edit: ${label}`;
+        if (fb.reflection_note) {
+          block += ` — ${fb.reflection_note}`;
+        }
+      }
+      block += "\n";
     }
     return block;
   } catch (err) {
