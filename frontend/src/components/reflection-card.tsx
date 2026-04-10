@@ -3,18 +3,9 @@
 import { useState } from "react";
 import { Check, ChevronDown, ChevronUp, Undo2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { useSaveReflection, useClearReflection } from "@/hooks/use-edit-reflections";
-import type { EditFeedback, ReflectionCategory } from "@/lib/types";
-
-const CATEGORIES: { value: ReflectionCategory; label: string }[] = [
-  { value: "tone", label: "Tone" },
-  { value: "product_focus", label: "Product Focus" },
-  { value: "length", label: "Length" },
-  { value: "personalization", label: "Personalization" },
-  { value: "factual_error", label: "Factual Error" },
-  { value: "structure", label: "Structure" },
-  { value: "other", label: "Other" },
-];
+import type { EditFeedback } from "@/lib/types";
 
 interface Props {
   feedback: EditFeedback;
@@ -22,31 +13,32 @@ interface Props {
 }
 
 export function ReflectionCard({ feedback, onReflected }: Props) {
-  const [selectedCategory, setSelectedCategory] = useState<ReflectionCategory | null>(
-    feedback.reflection_category
-  );
   const [note, setNote] = useState(feedback.reflection_note ?? "");
   const [expanded, setExpanded] = useState(false);
+  const [saved, setSaved] = useState(!!feedback.reflected_at);
   const saveMutation = useSaveReflection();
   const clearMutation = useClearReflection();
-  const isReflected = !!feedback.reflected_at;
 
-  function handleSelectCategory(cat: ReflectionCategory) {
-    setSelectedCategory(cat);
+  function handleSave() {
+    if (!note.trim()) return;
     saveMutation.mutate(
-      { feedbackId: feedback.id, category: cat, note: note || null },
-      { onSuccess: () => onReflected?.() }
+      { feedbackId: feedback.id, category: "other", note: note.trim() },
+      {
+        onSuccess: () => {
+          setSaved(true);
+          onReflected?.();
+        },
+      }
     );
   }
 
-  function handleNoteBlur() {
-    if (selectedCategory && note !== (feedback.reflection_note ?? "")) {
-      saveMutation.mutate({
-        feedbackId: feedback.id,
-        category: selectedCategory,
-        note: note || null,
-      });
-    }
+  function handleUndo() {
+    clearMutation.mutate(feedback.id, {
+      onSuccess: () => {
+        setSaved(false);
+        setNote("");
+      },
+    });
   }
 
   const truncateLen = 150;
@@ -59,7 +51,7 @@ export function ReflectionCard({ feedback, onReflected }: Props) {
   const needsExpand = feedback.original_content.length > truncateLen || feedback.edited_content.length > truncateLen;
 
   return (
-    <div className={`rounded-lg border p-4 space-y-3 ${isReflected && !selectedCategory ? "opacity-60" : ""} ${selectedCategory ? "border-emerald-500/30 bg-emerald-950/5" : "border-border/50"}`}>
+    <div className={`rounded-lg border p-4 space-y-3 ${saved ? "border-emerald-500/30 bg-emerald-950/5" : "border-border/50"}`}>
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
@@ -79,16 +71,9 @@ export function ReflectionCard({ feedback, onReflected }: Props) {
             </Badge>
           )}
         </div>
-        {selectedCategory && (
+        {saved && (
           <button
-            onClick={() => {
-              clearMutation.mutate(feedback.id, {
-                onSuccess: () => {
-                  setSelectedCategory(null);
-                  setNote("");
-                },
-              });
-            }}
+            onClick={handleUndo}
             className="flex items-center gap-1 text-muted-foreground hover:text-foreground transition-colors"
           >
             <Undo2 className="h-3.5 w-3.5" />
@@ -137,37 +122,31 @@ export function ReflectionCard({ feedback, onReflected }: Props) {
         </button>
       )}
 
-      {/* Category pills */}
+      {/* Reflection text box */}
       <div>
         <span className="text-xs font-medium text-muted-foreground">Why did you edit this?</span>
-        <div className="mt-1.5 flex flex-wrap gap-1.5">
-          {CATEGORIES.map((cat) => (
-            <button
-              key={cat.value}
-              onClick={() => handleSelectCategory(cat.value)}
-              className={`rounded-full px-2.5 py-1 text-xs font-medium transition-colors ${
-                selectedCategory === cat.value
-                  ? "bg-primary text-primary-foreground"
-                  : "bg-muted text-muted-foreground hover:bg-muted/80 hover:text-foreground"
-              }`}
-            >
-              {cat.label}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Note text box */}
-      {selectedCategory && (
         <textarea
-          placeholder="Brief note (optional) — e.g. 'too formal for a cocktail bar'"
+          placeholder="e.g. 'Too formal for a cocktail bar, needed to mention their signature negroni, and the opening line felt generic'"
           value={note}
           onChange={(e) => setNote(e.target.value)}
-          onBlur={handleNoteBlur}
+          disabled={saved}
           rows={3}
-          className="w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-xs leading-relaxed focus:outline-none focus:ring-2 focus:ring-ring"
+          className="mt-1.5 w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-xs leading-relaxed focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-60 disabled:cursor-not-allowed"
         />
-      )}
+        {!saved && (
+          <div className="mt-2 flex justify-end">
+            <Button
+              size="sm"
+              className="h-7 text-xs"
+              onClick={handleSave}
+              disabled={!note.trim() || saveMutation.isPending}
+            >
+              <Check className="mr-1 h-3 w-3" />
+              Save
+            </Button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
