@@ -33,6 +33,7 @@ import {
   useSendReply,
   useInboundReplies,
   useDeleteReply,
+  useGenerateFollowupForLead,
 } from "@/hooks/use-outreach";
 import { useGeneratingLeadId } from "@/hooks/use-live-updates";
 import { useAuth } from "@/lib/auth-context";
@@ -43,6 +44,7 @@ interface Props {
 }
 
 const statusColors: Record<string, string> = {
+  planned: "bg-violet-100 text-violet-800 dark:bg-violet-900/30 dark:text-violet-300",
   draft: "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400",
   approved:
     "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400",
@@ -97,6 +99,7 @@ export function MessageCard({ message }: Props) {
   const deleteMutation = useDeleteMessage();
   const sendReplyMutation = useSendReply();
   const deleteReplyMutation = useDeleteReply();
+  const generateFollowupMutation = useGenerateFollowupForLead();
   const generatingLeadId = useGeneratingLeadId();
 
   const repliesQuery = useInboundReplies(
@@ -157,6 +160,23 @@ export function MessageCard({ message }: Props) {
     }
   }
 
+  async function handleGenerateFollowup() {
+    try {
+      setActiveAction("generate-followup");
+      const res = await generateFollowupMutation.mutateAsync({ leadId: message.lead_id, force: false });
+      // Inform the user that a planned follow-up was created and where to find it.
+      // If the backend returned details about generation, surface them minimally.
+      alert("Planned follow-up created — appears in Follow-ups tab");
+    } catch (err: any) {
+      console.error("Generate follow-up failed", err);
+      // Surface a simple alert in the UI so the user sees the error when clicking the button.
+      // In-app toast could be used instead if available.
+      alert(`Generate follow-up failed: ${err?.message ?? String(err)}`);
+    } finally {
+      setActiveAction(null);
+    }
+  }
+
   function handlePickFlowing() {
     if (!flowingDraft) return;
     updateMutation.mutate(
@@ -165,13 +185,35 @@ export function MessageCard({ message }: Props) {
     );
   }
 
-  function handleDialogSave(content: string, subject?: string) {
-    const updates: { id: string; content: string; subject?: string } = {
+  function handleDialogSave(
+    content: string,
+    subject?: string,
+    scheduledSendDate?: string | null
+  ) {
+    const updates: {
+      id: string;
+      content: string;
+      subject?: string;
+      scheduled_send_date?: string | null;
+    } = {
       id: message.id,
       content,
     };
     if (subject !== undefined) updates.subject = subject;
-    updateMutation.mutate(updates);
+    if (scheduledSendDate !== undefined) {
+      updates.scheduled_send_date = scheduledSendDate;
+    }
+    const shouldCheckDueNow =
+      message.status === "planned"
+      && scheduledSendDate !== undefined
+      && scheduledSendDate !== message.scheduled_send_date;
+    updateMutation.mutate(updates, {
+      onSuccess: () => {
+        if (shouldCheckDueNow) {
+          generateFollowupMutation.mutate({ leadId: message.lead_id, force: false });
+        }
+      },
+    });
     setEditDialogOpen(false);
   }
 
@@ -219,7 +261,7 @@ export function MessageCard({ message }: Props) {
               {message.follow_up_label}
             </Badge>
           )}
-          {message.scheduled_send_date && message.status === "draft" && (
+          {message.scheduled_send_date && (message.status === "draft" || message.status === "planned") && (
             <Badge variant="outline" className="text-xs gap-1">
               <Clock className="h-2.5 w-2.5" />
               Send by {message.scheduled_send_date}
@@ -486,6 +528,19 @@ export function MessageCard({ message }: Props) {
         )}
 
         {/* Action buttons */}
+        {message.status === "planned" && isAdmin && (
+          <div className="flex items-center gap-2 pt-1">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setEditDialogOpen(true)}
+              disabled={isPending}
+            >
+              <Clock className="mr-1 h-3.5 w-3.5" />
+              Edit Schedule
+            </Button>
+          </div>
+        )}
         {message.status === "draft" && (
           <div className="flex items-center gap-2 pt-1">
             {isAdmin && (
@@ -657,6 +712,21 @@ export function MessageCard({ message }: Props) {
               )}
               {activeAction === "back-to-draft" ? "Restoring..." : "Back to Draft"}
             </Button>
+            {!message.has_reply && (message.step_number ?? 1) < 4 && (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={handleGenerateFollowup}
+                  disabled={generateFollowupMutation.isPending || activeAction === "generate-followup"}
+              >
+                {generateFollowupMutation.isPending ? (
+                  <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <RefreshCw className="mr-1 h-3.5 w-3.5" />
+                )}
+                {generateFollowupMutation.isPending ? "Generating..." : "Generate Follow-up"}
+              </Button>
+            )}
           </div>
         )}
       </CardContent>
