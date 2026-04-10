@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { getWeeklyEdits, saveReflection } from "@/lib/firestore-api";
+import { getWeeklyEdits, saveReflection, clearReflection } from "@/lib/firestore-api";
 import type { ReflectionCategory } from "@/lib/types";
 
 export function useWeeklyEdits() {
@@ -34,6 +34,18 @@ export function useSaveReflection() {
       note: string | null;
     }) => {
       await saveReflection(feedbackId, category, note);
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["edit-feedback"] });
+    },
+  });
+}
+
+export function useClearReflection() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (feedbackId: string) => {
+      await clearReflection(feedbackId);
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["edit-feedback"] });
