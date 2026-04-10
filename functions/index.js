@@ -1850,7 +1850,10 @@ async function runFollowUpGeneration() {
     try {
       // STOP CHECKS using extracted logic
       const skipReason = shouldSkipLead(lead, leadsWithReplies.has(lead.id));
-      if (skipReason) { skipped++; continue; }
+      if (skipReason) {
+        console.log(`SKIP [${lead.business_name}]: ${skipReason}`);
+        skipped++; continue;
+      }
 
       // Find messages for this lead
       const leadMessages = allMessages
@@ -1861,12 +1864,18 @@ async function runFollowUpGeneration() {
       const result = determineFollowUpAction(leadMessages, now);
 
       if (result.action === "complete") {
+        console.log(`COMPLETE [${lead.business_name}]: marking no_response`);
         await db.collection("leads").doc(lead.id).update({ stage: "no_response" });
         skipped++;
         continue;
       }
 
-      if (result.action === "skip") { skipped++; continue; }
+      if (result.action === "skip") {
+        console.log(`SKIP [${lead.business_name}]: ${result.reason}`);
+        skipped++; continue;
+      }
+
+      console.log(`GENERATE [${lead.business_name}]: step ${result.nextStepNumber} (${result.followUpLabel}), send on ${result.scheduledSendDate}`);
 
       const { nextStepNumber, followUpLabel, scheduledSendDate } = result;
 
