@@ -1,9 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { Check, ChevronDown, ChevronUp } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, Undo2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { useSaveReflection } from "@/hooks/use-edit-reflections";
+import { useSaveReflection, useClearReflection } from "@/hooks/use-edit-reflections";
 import type { EditFeedback, ReflectionCategory } from "@/lib/types";
 
 const CATEGORIES: { value: ReflectionCategory; label: string }[] = [
@@ -28,6 +28,7 @@ export function ReflectionCard({ feedback, onReflected }: Props) {
   const [note, setNote] = useState(feedback.reflection_note ?? "");
   const [expanded, setExpanded] = useState(false);
   const saveMutation = useSaveReflection();
+  const clearMutation = useClearReflection();
   const isReflected = !!feedback.reflected_at;
 
   function handleSelectCategory(cat: ReflectionCategory) {
@@ -79,10 +80,20 @@ export function ReflectionCard({ feedback, onReflected }: Props) {
           )}
         </div>
         {selectedCategory && (
-          <div className="flex items-center gap-1 text-emerald-500">
-            <Check className="h-3.5 w-3.5" />
-            <span className="text-xs">Reviewed</span>
-          </div>
+          <button
+            onClick={() => {
+              clearMutation.mutate(feedback.id, {
+                onSuccess: () => {
+                  setSelectedCategory(null);
+                  setNote("");
+                },
+              });
+            }}
+            className="flex items-center gap-1 text-muted-foreground hover:text-foreground transition-colors"
+          >
+            <Undo2 className="h-3.5 w-3.5" />
+            <span className="text-xs">Undo</span>
+          </button>
         )}
       </div>
 
@@ -146,15 +157,15 @@ export function ReflectionCard({ feedback, onReflected }: Props) {
         </div>
       </div>
 
-      {/* Note input */}
+      {/* Note text box */}
       {selectedCategory && (
-        <input
-          type="text"
+        <textarea
           placeholder="Brief note (optional) — e.g. 'too formal for a cocktail bar'"
           value={note}
           onChange={(e) => setNote(e.target.value)}
           onBlur={handleNoteBlur}
-          className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-ring"
+          rows={3}
+          className="w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-xs leading-relaxed focus:outline-none focus:ring-2 focus:ring-ring"
         />
       )}
     </div>

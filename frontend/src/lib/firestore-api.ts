@@ -359,6 +359,15 @@ export async function saveReflection(
   });
 }
 
+export async function clearReflection(feedbackId: string): Promise<void> {
+  const ref = doc(db, "edit_feedback", feedbackId);
+  await updateDoc(ref, {
+    reflection_category: null,
+    reflection_note: null,
+    reflected_at: null,
+  });
+}
+
 // --- Inbound Replies ---
 
 export async function getInboundReplies(filters?: {
