@@ -249,17 +249,19 @@ export default function OutreachPage() {
 
       {/* Filters */}
       <div className="flex items-center gap-3">
-        <div className="flex gap-1.5">
+        <div className="inline-flex rounded-lg bg-muted p-1 gap-1">
           {STATUS_FILTERS.map((s) => (
-            <Button
+            <button
               key={s}
-              size="sm"
-              variant={statusFilter === s ? "default" : "outline"}
               onClick={() => setStatusFilter(s)}
-              className="capitalize"
+              className={`rounded-md px-3 py-1.5 text-sm font-medium capitalize transition-colors ${
+                statusFilter === s
+                  ? "bg-primary text-primary-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground hover:bg-muted-foreground/10"
+              }`}
             >
               {s}
-            </Button>
+            </button>
           ))}
         </div>
         <select
