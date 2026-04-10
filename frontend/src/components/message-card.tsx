@@ -105,7 +105,7 @@ export function MessageCard({ message, inConversation }: Props) {
   const deleteMutation = useDeleteMessage();
   const sendReplyMutation = useSendReply();
   const deleteReplyMutation = useDeleteReply();
-  const generateFollowupMutation = useGenerateFollowupForLead();
+  const generateFollowupMutation = useGenerateFollowups();
   const generatingLeadId = useGeneratingLeadId();
 
   // Fetch original email for follow-ups
@@ -624,6 +624,55 @@ export function MessageCard({ message, inConversation }: Props) {
               <Clock className="mr-1 h-3.5 w-3.5" />
               Edit Schedule
             </Button>
+
+            {/* Generate a draft for planned follow-ups */}
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => handleRegenerate("default")}
+              disabled={isPending || regenerateMutation.isPending}
+            >
+              {regenerateMutation.isPending ? (
+                <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="mr-1 h-3.5 w-3.5" />
+              )}
+              {regenerateMutation.isPending ? "Generating..." : "Generate Draft"}
+            </Button>
+
+            {/* If a generated draft exists on a planned follow-up, allow Approve/Reject */}
+            {message.content && message.content.trim() !== "" && (
+              <>
+                <Button
+                  size="sm"
+                  variant="default"
+                  className="bg-emerald-600 hover:bg-emerald-700"
+                  onClick={handleApprove}
+                  disabled={isPending}
+                >
+                  {activeAction === "approve" ? (
+                    <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Check className="mr-1 h-3.5 w-3.5" />
+                  )}
+                  {activeAction === "approve" ? "Approving..." : "Approve"}
+                </Button>
+
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  onClick={handleReject}
+                  disabled={isPending}
+                >
+                  {activeAction === "reject" ? (
+                    <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <X className="mr-1 h-3.5 w-3.5" />
+                  )}
+                  {activeAction === "reject" ? "Rejecting..." : "Reject"}
+                </Button>
+              </>
+            )}
           </div>
         )}
         {message.status === "draft" && (
