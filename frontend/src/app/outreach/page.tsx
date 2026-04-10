@@ -73,8 +73,8 @@ export default function OutreachPage() {
   const filteredByStatus = statusFilter === "replied"
     ? (messages ?? []).filter((m) => m.has_reply)
     : statusFilter === "follow-ups"
-      ? (messages ?? []).filter((m) => m.step_number > 1)
-      : (messages ?? []);
+      ? (messages ?? []).filter((m) => ((m.step_number ?? 1) > 1) || m.status === "planned")
+      : (statusFilter === "all" ? (messages ?? []) : (messages ?? []).filter((m) => m.status === statusFilter));
   const filteredByCategory = filteredByStatus.filter(
     (m) => !categoryFilter || m.venue_category === categoryFilter
   );
@@ -273,6 +273,14 @@ export default function OutreachPage() {
       {sendMutation.isSuccess && sendMutation.data?.status === "pending" && (
         <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800 dark:border-blue-800 dark:bg-blue-950/20 dark:text-blue-400">
           Sending emails. This may take a few minutes due to rate limiting.
+        </div>
+      )}
+      {sendMutation.isSuccess && sendMutation.data?.status === "completed" && (
+        <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800 dark:border-blue-800 dark:bg-blue-950/20 dark:text-blue-400">
+          Sent {sendMutation.data.sent}, failed {sendMutation.data.failed}
+          {sendMutation.data.skipped_scheduled
+            ? `, skipped by schedule ${sendMutation.data.skipped_scheduled}`
+            : ""}.
         </div>
       )}
 
