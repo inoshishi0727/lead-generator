@@ -121,6 +121,36 @@ export interface OutreachMessage {
   variant?: "A" | "B" | null;
 }
 
+// --- Edit Feedback / Reflection ---
+
+export type ReflectionCategory =
+  | "tone"
+  | "product_focus"
+  | "length"
+  | "personalization"
+  | "factual_error"
+  | "structure"
+  | "other";
+
+export interface EditFeedback {
+  id: string;
+  message_id: string;
+  lead_id: string | null;
+  channel: string | null;
+  venue_category: string | null;
+  tone_tier: string | null;
+  step_number: number | null;
+  lead_products: string[];
+  original_content: string;
+  edited_content: string;
+  original_subject: string | null;
+  edited_subject: string | null;
+  created_at: string;
+  reflection_category: ReflectionCategory | null;
+  reflection_note: string | null;
+  reflected_at: string | null;
+}
+
 // --- Reply Tracking ---
 
 export type LeadOutcome = "ongoing" | "converted" | "lost" | "not_interested" | "snoozed";
