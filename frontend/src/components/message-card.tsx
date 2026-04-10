@@ -572,9 +572,18 @@ export function MessageCard({ message }: Props) {
             )}
           </div>
         )}
-        {/* Send + Unapprove buttons for approved messages */}
+        {/* Edit + Send + Unapprove buttons for approved messages */}
         {message.status === "approved" && isAdmin && (
           <div className="flex items-center gap-2 pt-1">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setEditDialogOpen(true)}
+              disabled={sendMutation.isPending || updateMutation.isPending}
+            >
+              <Pencil className="mr-1 h-3.5 w-3.5" />
+              Edit
+            </Button>
             <Button
               size="sm"
               variant="default"
@@ -591,7 +600,7 @@ export function MessageCard({ message }: Props) {
             </Button>
             <Button
               size="sm"
-              variant="outline"
+              variant="ghost"
               onClick={handleUnapprove}
               disabled={updateMutation.isPending || sendMutation.isPending}
             >
@@ -601,15 +610,6 @@ export function MessageCard({ message }: Props) {
                 <X className="mr-1 h-3.5 w-3.5" />
               )}
               {activeAction === "unapprove" ? "Unapproving..." : "Unapprove"}
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => setEditDialogOpen(true)}
-              disabled={sendMutation.isPending || updateMutation.isPending}
-            >
-              <Pencil className="mr-1 h-3.5 w-3.5" />
-              Edit
             </Button>
           </div>
         )}
