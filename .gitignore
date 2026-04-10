@@ -41,6 +41,10 @@ uv.lock
 # Local dedup data
 data/
 
+# Firebase emulator logs
+*-debug.log
+firestore-debug.log
+
 # Frontend
 frontend/node_modules/
 frontend/.next/
