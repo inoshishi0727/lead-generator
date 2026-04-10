@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   FileText,
   CheckCheck,
@@ -24,6 +24,7 @@ import {
   useSendApproved,
   useGenerateFollowups,
 } from "@/hooks/use-outreach";
+import { getOutreachMessages } from "@/lib/firestore-api";
 import { EditReflectionBanner } from "@/components/edit-reflection-banner";
 
 const STATUS_FILTERS = ["draft", "approved", "sent", "replied", "rejected", "follow-ups", "all"] as const;
@@ -59,10 +60,32 @@ export default function OutreachPage() {
   const [showSendWarning, setShowSendWarning] = useState(false);
 
   // "replied" is a client-side filter (has_reply), not a Firestore status
-  const firestoreFilter = statusFilter === "all" || statusFilter === "replied" || statusFilter === "follow-ups"
+  const firestoreFilter = statusFilter === "all" || statusFilter === "replied"
     ? undefined
-    : { status: statusFilter };
-  const { data: messages, isLoading } = useMessages(firestoreFilter);
+    : (statusFilter === "follow-ups" ? undefined : { status: statusFilter });
+
+  // Use API-backed messages by default, but when viewing Follow-ups, fetch directly
+  // from Firestore client to avoid server-side cache delays (live functions write directly to Firestore).
+  const { data: apiMessages, isLoading: apiLoading } = useMessages(firestoreFilter);
+  const [clientMessages, setClientMessages] = useState<any[] | null>(null);
+  const [clientLoading, setClientLoading] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+    if (statusFilter === "follow-ups") {
+      setClientLoading(true);
+      getOutreachMessages({ limit: 500 })
+        .then((res) => { if (mounted) setClientMessages(res); })
+        .catch((err) => { console.error("Failed to load follow-ups from client Firestore", err); if (mounted) setClientMessages([]); })
+        .finally(() => { if (mounted) setClientLoading(false); });
+    } else {
+      setClientMessages(null);
+    }
+    return () => { mounted = false; };
+  }, [statusFilter]);
+
+  const messages = statusFilter === "follow-ups" ? (clientMessages ?? []) : (apiMessages ?? []);
+  const isLoading = statusFilter === "follow-ups" ? clientLoading : apiLoading;
 
   const generateMutation = useGenerateDrafts();
   const regenerateAllMutation = useRegenerateAll();
