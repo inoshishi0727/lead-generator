@@ -167,21 +167,6 @@ export default function OutreachPage() {
               Send Approved ({approvedCount})
             </Button>
           )}
-          {isAdmin && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={handleFollowups}
-              disabled={followupsMutation.isPending}
-            >
-              {followupsMutation.isPending ? (
-                <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-              ) : (
-                <RefreshCw className="mr-1.5 h-4 w-4" />
-              )}
-              Follow-ups
-            </Button>
-          )}
         </div>
       </div>
 
