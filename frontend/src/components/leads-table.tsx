@@ -181,8 +181,8 @@ export function LeadsTable({ leads, isLoading }: Props) {
           <Table className="w-full table-fixed">
             <TableHeader>
               <TableRow>
-                <TableHead className="w-8"></TableHead>
-                <TableHead className="w-[22%]">Business</TableHead>
+                <TableHead className="w-20"></TableHead>
+                <TableHead className="w-[18%]">Business</TableHead>
                 <TableHead className="w-[14%]">Category</TableHead>
                 <TableHead className="w-[7%]">Fit</TableHead>
                 <TableHead className="w-[22%]">Email</TableHead>
@@ -200,18 +200,30 @@ export function LeadsTable({ leads, isLoading }: Props) {
                   } ${index % 2 === 1 ? "bg-muted/30" : ""}`}
                   onClick={() => setSelectedLead(lead)}
                 >
-                  {/* Flag column */}
-                  <TableCell className="w-8 px-2">
+                  {/* Status column */}
+                  <TableCell className="w-20 px-2">
                     {lead.client_status === "approved" ? (
                       <Check className="h-3.5 w-3.5 text-emerald-400" />
                     ) : lead.client_status === "rejected" && lead.rejection_reason === "snoozed" ? (
-                      <AlarmClock className="h-3.5 w-3.5 text-amber-400" />
+                      <Badge variant="outline" className="gap-1 text-[10px] border-amber-500/30 text-amber-400 bg-amber-500/10">
+                        <AlarmClock className="h-3 w-3" />
+                        Snoozed
+                      </Badge>
                     ) : lead.client_status === "rejected" && lead.rejection_reason === "current_account" ? (
-                      <Building2 className="h-3.5 w-3.5 text-purple-400" />
+                      <Badge variant="outline" className="gap-1 text-[10px] border-purple-500/30 text-purple-400 bg-purple-500/10">
+                        <Building2 className="h-3 w-3" />
+                        Account
+                      </Badge>
                     ) : lead.client_status === "rejected" && lead.rejection_reason === "in_discussion" ? (
-                      <MessageSquareMore className="h-3.5 w-3.5 text-sky-400" />
+                      <Badge variant="outline" className="gap-1 text-[10px] border-sky-500/30 text-sky-400 bg-sky-500/10">
+                        <MessageSquareMore className="h-3 w-3" />
+                        In Disc.
+                      </Badge>
                     ) : lead.client_status === "rejected" ? (
-                      <X className="h-3.5 w-3.5 text-red-400" />
+                      <Badge variant="outline" className="gap-1 text-[10px] border-red-500/30 text-red-400 bg-red-500/10">
+                        <X className="h-3 w-3" />
+                        Rejected
+                      </Badge>
                     ) : null}
                   </TableCell>
                   {/* Business name */}
@@ -222,20 +234,10 @@ export function LeadsTable({ leads, isLoading }: Props) {
                         Queued — next week
                       </Badge>
                     )}
-                    {lead.client_status === "rejected" && lead.rejection_reason && (
-                      <>
-                        <Badge
-                          variant="outline"
-                          className={`ml-2 text-[9px] ${rejectionColors[lead.rejection_reason] || ""}`}
-                        >
-                          {REJECTION_LABELS[lead.rejection_reason] || lead.rejection_reason}
-                        </Badge>
-                        {lead.rejection_notes && (
-                          <span className="ml-1 text-[9px] text-muted-foreground" title={lead.rejection_notes}>
-                            — {lead.rejection_notes.length > 30 ? lead.rejection_notes.slice(0, 30) + "…" : lead.rejection_notes}
-                          </span>
-                        )}
-                      </>
+                    {lead.client_status === "rejected" && lead.rejection_notes && (
+                      <span className="ml-1 text-[10px] text-muted-foreground" title={lead.rejection_notes}>
+                        — {lead.rejection_notes.length > 30 ? lead.rejection_notes.slice(0, 30) + "…" : lead.rejection_notes}
+                      </span>
                     )}
                   </TableCell>
                   {/* Category */}
