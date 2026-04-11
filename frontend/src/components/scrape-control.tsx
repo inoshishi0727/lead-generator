@@ -1,13 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { useConfig } from "@/hooks/use-config";
 import { useOutreachPlan } from "@/hooks/use-outreach-plan";
-import { Play, Monitor, MapPin, Search, ChevronDown, ChevronUp, Plus, X, Sparkles, Target } from "lucide-react";
+import { useScrapeHistory } from "@/hooks/use-scrape";
+import { Play, Monitor, MapPin, Search, ChevronDown, ChevronUp, Plus, X, Sparkles, Target, AlertTriangle } from "lucide-react";
 
 interface Props {
   onStart: (queries: string[], limit: number, headless: boolean) => void;
@@ -34,9 +35,17 @@ const DEFAULT_CATEGORIES: CategoryConfig[] = [
   { key: "other", label: "Other (Delis, Farm Shops...)", queries: ["deli and wine shop", "farm shop spirits"], enabled: true, ratio: 20 },
 ];
 
+function normalizeScrapeFingerprint(queries: string[]): string {
+  return [...queries]
+    .map((q) => q.toLowerCase().trim())
+    .sort()
+    .join("|");
+}
+
 export function ScrapeControl({ onStart, isStarting, isRunning }: Props) {
   const { data: config } = useConfig();
   const { data: plan } = useOutreachPlan(10);
+  const { data: runs } = useScrapeHistory();
   const [location, setLocation] = useState("UK");
   const [limit, setLimit] = useState(60);
   const [headless, setHeadless] = useState(false);
@@ -44,6 +53,7 @@ export function ScrapeControl({ onStart, isStarting, isRunning }: Props) {
   const [showCategories, setShowCategories] = useState(false);
   const [newCatLabel, setNewCatLabel] = useState("");
   const [newCatQuery, setNewCatQuery] = useState("");
+  const [duplicateAcknowledged, setDuplicateAcknowledged] = useState(false);
 
   const enabledCategories = categories.filter((c) => c.enabled);
   const totalRatio = enabledCategories.reduce((sum, c) => sum + c.ratio, 0);
@@ -86,11 +96,34 @@ export function ScrapeControl({ onStart, isStarting, isRunning }: Props) {
     setCategories((prev) => prev.filter((c) => c.key !== key));
   }
 
+  // Detect duplicate parameters vs last completed run
+  const currentQueries = useMemo(
+    () => enabledCategories.map((c) => `${c.queries[0]} ${location}`.trim()),
+    [enabledCategories, location],
+  );
+
+  const lastCompletedRun = runs?.find((r) => r.status === "completed") ?? null;
+
+  const isDuplicate = useMemo(() => {
+    if (!lastCompletedRun?.query) return false;
+    const currentFp = normalizeScrapeFingerprint(currentQueries);
+    // scrape_runs store queries as comma-separated string
+    const lastQueries = lastCompletedRun.query.split(",").map((q) => q.trim());
+    const lastFp = normalizeScrapeFingerprint(lastQueries);
+    return currentFp === lastFp;
+  }, [currentQueries, lastCompletedRun]);
+
+  // Reset acknowledgement when queries change
+  const currentFpForReset = normalizeScrapeFingerprint(currentQueries);
+  const [prevFp, setPrevFp] = useState(currentFpForReset);
+  if (currentFpForReset !== prevFp) {
+    setPrevFp(currentFpForReset);
+    setDuplicateAcknowledged(false);
+  }
+
   function handleStart() {
-    const allQueries = enabledCategories.map(
-      (c) => `${c.queries[0]} ${location}`.trim()
-    );
-    onStart(allQueries, Math.min(limit, remaining), headless);
+    if (isDuplicate && !duplicateAcknowledged) return;
+    onStart(currentQueries, Math.min(limit, remaining), headless);
   }
 
   // Summary of what will be scraped
@@ -99,7 +132,7 @@ export function ScrapeControl({ onStart, isStarting, isRunning }: Props) {
     return `${c.label}: ~${leads}`;
   });
 
-  const disabled = isStarting || isRunning || !location || enabledCategories.length === 0 || atTarget;
+  const disabled = isStarting || isRunning || !location || enabledCategories.length === 0 || atTarget || (isDuplicate && !duplicateAcknowledged);
 
   return (
     <Card className="shadow-md">
@@ -355,6 +388,37 @@ export function ScrapeControl({ onStart, isStarting, isRunning }: Props) {
           <Monitor className="h-4 w-4 text-muted-foreground" />
           Headless mode (hide browser window)
         </label>
+
+        {/* Duplicate parameters warning */}
+        {isDuplicate && !duplicateAcknowledged && (
+          <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 space-y-2">
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="h-4 w-4 text-amber-400 mt-0.5 shrink-0" />
+              <div className="space-y-1">
+                <p className="text-sm font-medium text-amber-400">
+                  Same parameters as last scrape
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  These queries are identical to your last completed run
+                  {lastCompletedRun?.started_at && (
+                    <> on {new Date(lastCompletedRun.started_at).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</>
+                  )}
+                  {lastCompletedRun?.leads_found != null && (
+                    <> ({lastCompletedRun.leads_found} leads found)</>
+                  )}. Running again may produce mostly duplicates.
+                </p>
+              </div>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setDuplicateAcknowledged(true)}
+              className="w-full border-amber-500/30 text-amber-400 hover:bg-amber-500/10"
+            >
+              I understand, run anyway
+            </Button>
+          </div>
+        )}
 
         {/* Start button */}
         <Button
