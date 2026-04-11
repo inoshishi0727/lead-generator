@@ -336,7 +336,7 @@ export function MessageCard({ message, inConversation }: Props) {
         {/* Follow-up context — show previous emails in the sequence */}
         {message.step_number > 1 && (leadMessages ?? []).length > 0 && (() => {
           const previousMessages = (leadMessages ?? [])
-            .filter((m) => m.step_number < message.step_number && m.id !== message.id)
+            .filter((m) => m.step_number < message.step_number && m.id !== message.id && m.status === "sent")
             .sort((a, b) => a.step_number - b.step_number);
           if (previousMessages.length === 0) return null;
           return (
