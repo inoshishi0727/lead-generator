@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import {
   FileText,
   CheckCheck,
@@ -9,6 +9,7 @@ import {
   RefreshCw,
   AlertTriangle,
   Reply,
+  Search,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -59,6 +60,7 @@ export default function OutreachPage() {
   const [statusFilter, setStatusFilter] = useState<string>("draft");
   const [categoryFilter, setCategoryFilter] = useState<string>("");
   const [showSendWarning, setShowSendWarning] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
 
   // Member auto-scopes to own messages
   const assignedTo = isMember ? user?.uid : undefined;
@@ -107,7 +109,18 @@ export default function OutreachPage() {
   const filteredByCategory = filteredByStatus.filter(
     (m) => !categoryFilter || m.venue_category === categoryFilter
   );
-  const allMessages = filteredByCategory;
+  const allMessages = useMemo(() => {
+    if (!searchQuery.trim()) return filteredByCategory;
+    const q = searchQuery.toLowerCase();
+    return filteredByCategory.filter(
+      (m) =>
+        m.business_name?.toLowerCase().includes(q) ||
+        m.contact_name?.toLowerCase().includes(q) ||
+        m.recipient_email?.toLowerCase().includes(q) ||
+        m.subject?.toLowerCase().includes(q) ||
+        m.content?.toLowerCase().includes(q)
+    );
+  }, [filteredByCategory, searchQuery]);
   const draftCount = allMessages.filter((m) => m.status === "draft").length;
   const approvedCount = allMessages.filter((m) => m.status === "approved").length;
   const sentCount = allMessages.filter((m) => m.status === "sent").length;
@@ -267,7 +280,7 @@ export default function OutreachPage() {
           {STATUS_FILTERS.map((s) => (
             <button
               key={s}
-              onClick={() => setStatusFilter(s)}
+              onClick={() => { setStatusFilter(s); setSearchQuery(""); }}
               className={`rounded-md px-3 py-1.5 text-sm font-medium capitalize transition-colors ${
                 statusFilter === s
                   ? "bg-primary text-primary-foreground shadow-sm"
@@ -289,6 +302,16 @@ export default function OutreachPage() {
             </option>
           ))}
         </select>
+        <div className="relative ml-auto">
+          <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+          <input
+            type="text"
+            placeholder="Search messages..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="h-8 w-64 rounded-md border border-input bg-background pl-8 pr-3 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          />
+        </div>
       </div>
 
       {/* Generation status */}
