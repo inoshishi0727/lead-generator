@@ -7,6 +7,7 @@ export interface LeadFilters {
   source?: string;
   stage?: string;
   search?: string;
+  assignedTo?: string | null;
 }
 
 export function useLeads(filters?: LeadFilters) {
@@ -20,7 +21,12 @@ export function useLeads(filters?: LeadFilters) {
   return useQuery({
     queryKey: ["leads", filters],
     queryFn: () =>
-      getLeads(filters),
+      getLeads({
+        source: filters?.source,
+        stage: filters?.stage,
+        search: filters?.search,
+        assignedTo: filters?.assignedTo,
+      }),
   });
 }
 

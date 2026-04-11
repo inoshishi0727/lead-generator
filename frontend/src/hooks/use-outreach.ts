@@ -11,6 +11,7 @@ export interface MessageFilters {
   status?: string;
   channel?: string;
   lead_id?: string;
+  assignedTo?: string;
 }
 
 export function useMessages(filters?: MessageFilters, limit: number = 200) {
@@ -27,7 +28,7 @@ export function useMessages(filters?: MessageFilters, limit: number = 200) {
     queryFn: () =>
       hasBackend
         ? api.get<OutreachMessage[]>(path)
-        : getOutreachMessages({ ...filters, limit }),
+        : getOutreachMessages({ ...filters, limit, assignedTo: filters?.assignedTo }),
   });
 }
 

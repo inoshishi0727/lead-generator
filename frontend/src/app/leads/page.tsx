@@ -1,13 +1,16 @@
 "use client";
 
 import { useState, useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { LeadsTable } from "@/components/leads-table";
 import { useLeads, useEnrichLeads } from "@/hooks/use-leads";
 import { QuickAddLeadDialog } from "@/components/quick-add-lead-dialog";
 import { SearchQueryManager } from "@/components/search-query-manager";
+import { AssignLeadsDialog } from "@/components/assign-leads-dialog";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/lib/auth-context";
+import { getTeamMembers } from "@/lib/auth-admin";
 import { Search, Sparkles, Loader2, Plus, Settings2 } from "lucide-react";
 
 const SOURCE_OPTIONS = [
@@ -29,17 +32,26 @@ const STAGE_OPTIONS = [
 ];
 
 export default function LeadsPage() {
-  const { isAdmin } = useAuth();
+  const { isAdmin, isMember, user, workspaceId } = useAuth();
   const [source, setSource] = useState("");
   const [stage, setStage] = useState("");
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("");
   const [fit, setFit] = useState("");
   const [postcode, setPostcode] = useState("");
+  const [assignedToFilter, setAssignedToFilter] = useState("");
   const [emailOnly, setEmailOnly] = useState(true);
   const [showQuickAdd, setShowQuickAdd] = useState(false);
   const [showQueries, setShowQueries] = useState(false);
+  const [selectedLeadIds, setSelectedLeadIds] = useState<string[]>([]);
   const enrichMutation = useEnrichLeads();
+
+  const teamQuery = useQuery({
+    queryKey: ["team", workspaceId],
+    queryFn: () => getTeamMembers(workspaceId ?? ""),
+    enabled: isAdmin && !!workspaceId,
+  });
+  const teamMembers = teamQuery.data ?? [];
 
   // Extract outward code (district) from a UK postcode, e.g. "SE26 5HS" -> "SE26"
   const getDistrict = (pc: string | null | undefined) =>
@@ -49,10 +61,18 @@ export default function LeadsPage() {
   const firestoreStage = stage === "pending_enrichment" ? undefined : stage;
   const firestoreSource = source === "manual" ? undefined : source;
 
+  // Member auto-scopes to own leads; admin can optionally filter by member
+  const effectiveAssignedTo = isMember
+    ? user?.uid
+    : assignedToFilter === "__unassigned__"
+      ? null
+      : assignedToFilter || undefined;
+
   const { data: rawLeads, isLoading } = useLeads({
     source: firestoreSource || undefined,
     stage: firestoreStage || undefined,
     search: search || undefined,
+    assignedTo: effectiveAssignedTo,
   });
 
   const allLeads = rawLeads ?? [];
@@ -237,6 +257,22 @@ export default function LeadsPage() {
           ))}
         </select>
 
+        {isAdmin && teamMembers.length > 1 && (
+          <select
+            value={assignedToFilter}
+            onChange={(e) => setAssignedToFilter(e.target.value)}
+            className="rounded-md border border-input bg-background px-3 py-2 text-sm"
+          >
+            <option value="">All Members</option>
+            <option value="__unassigned__">Unassigned</option>
+            {teamMembers.map((m) => (
+              <option key={m.uid} value={m.uid}>
+                {m.display_name || m.email}
+              </option>
+            ))}
+          </select>
+        )}
+
         <div className="relative max-w-sm flex-1">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
@@ -263,8 +299,26 @@ export default function LeadsPage() {
         </label>
       </div>
 
+      {isAdmin && selectedLeadIds.length > 0 && (
+        <div className="flex items-center gap-3 rounded-lg border border-border/60 bg-muted/30 px-4 py-2">
+          <span className="text-sm text-muted-foreground">
+            {selectedLeadIds.length} selected
+          </span>
+          <AssignLeadsDialog
+            leadIds={selectedLeadIds}
+            onDone={() => setSelectedLeadIds([])}
+          />
+        </div>
+      )}
+
       <div data-tour="leads-table">
-        <LeadsTable leads={leads} isLoading={isLoading} />
+        <LeadsTable
+          leads={leads}
+          isLoading={isLoading}
+          selectable={isAdmin}
+          selectedIds={selectedLeadIds}
+          onSelectionChange={setSelectedLeadIds}
+        />
       </div>
 
       <QuickAddLeadDialog
