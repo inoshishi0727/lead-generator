@@ -102,7 +102,7 @@ export default function OutreachPage() {
   const filteredByStatus = statusFilter === "conversations"
     ? (messages ?? []).filter((m) => m.has_reply)
     : statusFilter === "follow-ups"
-      ? (messages ?? []).filter((m) => ((m.step_number ?? 1) > 1) && m.status !== "sent")
+      ? (messages ?? []).filter((m) => ((m.step_number ?? 1) > 1) && m.status !== "sent" && !m.has_reply)
       : (statusFilter === "all")
         ? (messages ?? [])
         : (messages ?? []).filter((m) => m.status === statusFilter);
