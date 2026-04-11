@@ -119,6 +119,15 @@ export interface OutreachMessage {
   email_message_id?: string;
   reply_to_address?: string;
   variant?: "A" | "B" | null;
+  // Email tracking
+  opened?: boolean;
+  opened_at?: string | null;
+  open_count?: number;
+  last_opened_at?: string | null;
+  delivered?: boolean;
+  delivered_at?: string | null;
+  // Follow-up threading
+  parent_email_message_id?: string | null;
 }
 
 // --- Edit Feedback / Reflection ---
