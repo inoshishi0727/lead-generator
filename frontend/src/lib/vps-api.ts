@@ -4,6 +4,10 @@ export const hasVps = !!VPS_BASE;
 
 export function getVpsWsUrl(): string {
   if (!VPS_BASE) return "";
+  // Skip WebSocket on HTTPS pages connecting to non-SSL VPS (mixed content blocked)
+  if (typeof window !== "undefined" && window.location.protocol === "https:" && VPS_BASE.startsWith("http://")) {
+    return "";
+  }
   return VPS_BASE.replace(/^http/, "ws") + "/ws";
 }
 
