@@ -89,7 +89,7 @@ function rejectionLabel(reason: string): string {
 
 export function MessageCard({ message, inConversation }: Props) {
   const [editDialogOpen, setEditDialogOpen] = useState(false);
-  const [threadOpen, setThreadOpen] = useState(false);
+  const [threadOpen, setThreadOpen] = useState(inConversation && !!message.has_reply);
   const [menuOpen, setMenuOpen] = useState(false);
   const [flowingDraft, setFlowingDraft] = useState<{ subject: string | null; content: string } | null>(null);
   const [activeAction, setActiveAction] = useState<string | null>(null);
