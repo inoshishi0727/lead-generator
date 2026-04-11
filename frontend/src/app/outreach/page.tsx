@@ -98,7 +98,9 @@ export default function OutreachPage() {
     ? (messages ?? []).filter((m) => m.has_reply)
     : statusFilter === "follow-ups"
       ? (messages ?? []).filter((m) => ((m.step_number ?? 1) > 1) || m.status === "planned")
-      : (statusFilter === "all" ? (messages ?? []) : (messages ?? []).filter((m) => m.status === statusFilter));
+      : (statusFilter === "all" || statusFilter === "threads")
+        ? (messages ?? [])
+        : (messages ?? []).filter((m) => m.status === statusFilter);
   const filteredByCategory = filteredByStatus.filter(
     (m) => !categoryFilter || m.venue_category === categoryFilter
   );
@@ -343,8 +345,11 @@ export default function OutreachPage() {
                   threads.set(msg.lead_id, { businessName: msg.business_name, messages: [msg] });
                 }
               }
-              // Sort threads by latest activity
+              // Sort threads: drafts first, then by latest activity
               const sorted = [...threads.entries()].sort((a, b) => {
+                const hasDraftA = a[1].messages.some((m) => m.status === "draft") ? 1 : 0;
+                const hasDraftB = b[1].messages.some((m) => m.status === "draft") ? 1 : 0;
+                if (hasDraftA !== hasDraftB) return hasDraftB - hasDraftA;
                 const latestA = a[1].messages.reduce((max, m) => {
                   const t = m.sent_at || m.created_at || "";
                   return t > max ? t : max;
