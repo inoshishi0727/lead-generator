@@ -9,6 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ScrapeControl } from "@/components/scrape-control";
 import { ScrapeHistory } from "@/components/scrape-history";
 import { ScrapeStatus } from "@/components/scrape-status";
+import { UpcomingScrapeReview } from "@/components/upcoming-scrape-review";
 import { OutreachPlan } from "@/components/outreach-plan";
 import { LeadDetailDialog } from "@/components/lead-detail-dialog";
 import { useScrape } from "@/hooks/use-scrape";
@@ -59,10 +60,11 @@ function downloadTemplate() {
 }
 
 export default function DashboardPage() {
-  const { isAdmin } = useAuth();
+  const { isAdmin, isMember, user } = useAuth();
   const { startScrape, isStarting, status } = useScrape();
-  const { data: leads, isLoading: leadsLoading } = useLeads();
-  const { data: messages } = useMessages();
+  const assignedTo = isMember ? user?.uid : undefined;
+  const { data: leads, isLoading: leadsLoading } = useLeads({ assignedTo });
+  const { data: messages } = useMessages({ assignedTo } as any);
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
   const importMutation = useImportQueries();
   const csvInputRef = useRef<HTMLInputElement>(null);
@@ -334,6 +336,8 @@ export default function DashboardPage() {
               </CardContent>
             </Card>
           )}
+
+        <UpcomingScrapeReview />
 
         <div data-tour="scrape-controls" className="grid gap-6 lg:grid-cols-2">
           <ScrapeControl

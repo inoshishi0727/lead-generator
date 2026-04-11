@@ -469,6 +469,10 @@ export const generateDrafts = functions
       throw new HttpsError("unauthenticated", "Must be signed in.");
     }
 
+    // Check caller role for member-scoping
+    const callerSnap = await db.collection("users").doc(context.auth.uid).get();
+    const callerRole = callerSnap.exists ? callerSnap.data().role : "viewer";
+
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) {
       throw new HttpsError("failed-precondition", "ANTHROPIC_API_KEY not configured.");
@@ -499,6 +503,11 @@ export const generateDrafts = functions
           !leadsWithDrafts.has(d.id) &&
           !isSnoozedOrExcluded(d)
       );
+    }
+
+    // Member can only generate for their own assigned leads
+    if (callerRole === "member") {
+      docs = docs.filter((d) => d.assigned_to === context.auth.uid);
     }
 
     // Batch limit to avoid timeout
@@ -564,6 +573,7 @@ export const generateDrafts = functions
           recipient_email: leadDoc.email || leadDoc.contact_email || null,
           website: leadDoc.website || null,
           workspace_id: leadDoc.workspace_id || "",
+          assigned_to: leadDoc.assigned_to || null,
           original_content: content,
           original_subject: subject,
           was_edited: false,
@@ -753,6 +763,7 @@ export const regenerateAllDrafts = functions
           recipient_email: leadDoc.email || leadDoc.contact_email || null,
           website: leadDoc.website || null,
           workspace_id: leadDoc.workspace_id || "",
+          assigned_to: leadDoc.assigned_to || null,
           original_content: content,
           original_subject: subject,
           was_edited: false,
@@ -1126,8 +1137,9 @@ export const sendApproved = functions
     if (!context.auth) throw new HttpsError("unauthenticated", "Must be signed in.");
 
     const userSnap = await db.collection("users").doc(context.auth.uid).get();
-    if (!userSnap.exists || userSnap.data().role !== "admin") {
-      throw new HttpsError("permission-denied", "Admin only.");
+    const senderRole = userSnap.exists ? userSnap.data().role : "viewer";
+    if (!["admin", "member"].includes(senderRole)) {
+      throw new HttpsError("permission-denied", "Admin or member only.");
     }
 
     // Optimal window check
@@ -1173,6 +1185,11 @@ export const sendApproved = functions
       messages = approvedSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
     }
 
+    // Member can only send their own assigned messages
+    if (senderRole === "member") {
+      messages = messages.filter((m) => m.assigned_to === context.auth.uid);
+    }
+
     if (!messages.length) {
       return { status: "completed", sent: 0, failed: 0, total: 0 };
     }
@@ -1208,6 +1225,45 @@ export const sendApproved = functions
         // Encode lead_id in reply-to so inbound webhook can match replies
         const replyToAddress = `reply+${msg.lead_id}@${REPLY_DOMAIN}`;
 
+        // Thread follow-ups as replies in the same conversation
+        const sendHeaders = {};
+        if (msg.step_number > 1) {
+          // Strategy 1: Use inbound reply's RFC Message-ID (same approach as sendReply)
+          const repliesSnap = await db.collection("inbound_replies")
+            .where("lead_id", "==", msg.lead_id)
+            .get();
+          const inboundReplies = repliesSnap.docs
+            .map((d) => d.data())
+            .filter((d) => d.direction !== "outbound" && d.rfc_message_id)
+            .sort((a, b) => (b.created_at > a.created_at ? 1 : -1));
+
+          if (inboundReplies.length > 0) {
+            sendHeaders["In-Reply-To"] = inboundReplies[0].rfc_message_id;
+            sendHeaders["References"] = inboundReplies[0].rfc_message_id;
+            console.log("Threading follow-up (via inbound reply) for", lead.business_name, "with", inboundReplies[0].rfc_message_id);
+          } else {
+            // Strategy 2: No replies yet — use Resend API ID as Message-ID
+            let parentMsgId = msg.parent_email_message_id;
+            if (!parentMsgId) {
+              const parentSnap = await db.collection("outreach_messages")
+                .where("lead_id", "==", msg.lead_id)
+                .where("step_number", "==", 1)
+                .where("status", "==", "sent")
+                .limit(1)
+                .get();
+              if (!parentSnap.empty) {
+                parentMsgId = parentSnap.docs[0].data().email_message_id;
+              }
+            }
+            if (parentMsgId) {
+              const rfc = parentMsgId.includes("@") ? `<${parentMsgId}>` : `<${parentMsgId}@resend.dev>`;
+              sendHeaders["In-Reply-To"] = rfc;
+              sendHeaders["References"] = rfc;
+              console.log("Threading follow-up (via parent ID) for", lead.business_name, "with", rfc);
+            }
+          }
+        }
+
         const { data: resendData, error } = await resend.emails.send({
           from: `${SENDER_NAME} <${SENDER_EMAIL}>`,
           to: toEmail,
@@ -1215,6 +1271,7 @@ export const sendApproved = functions
           subject: msg.subject || "Asterley Bros",
           text: msg.content,
           html: buildHtmlEmail(msg.content),
+          ...(Object.keys(sendHeaders).length > 0 ? { headers: sendHeaders } : {}),
         });
 
         if (error) throw new Error(error.message);
@@ -1371,10 +1428,192 @@ export const deleteUser = functions
       // Continue to delete Firestore doc even if Auth delete fails
     }
 
+    // Unassign any leads assigned to this user
+    const assignedLeadsSnap = await db.collection("leads")
+      .where("assigned_to", "==", uid).get();
+    if (!assignedLeadsSnap.empty) {
+      const batch = db.batch();
+      assignedLeadsSnap.docs.forEach((d) => {
+        batch.update(d.ref, {
+          assigned_to: null,
+          assigned_to_name: null,
+          assigned_at: null,
+          assigned_by: null,
+        });
+      });
+      await batch.commit();
+
+      // Also unassign their messages and replies
+      for (const leadDoc of assignedLeadsSnap.docs) {
+        const msgsSnap = await db.collection("outreach_messages")
+          .where("lead_id", "==", leadDoc.id).get();
+        if (!msgsSnap.empty) {
+          const b = db.batch();
+          msgsSnap.docs.forEach((d) => b.update(d.ref, { assigned_to: null }));
+          await b.commit();
+        }
+        const repliesSnap = await db.collection("inbound_replies")
+          .where("lead_id", "==", leadDoc.id).get();
+        if (!repliesSnap.empty) {
+          const b = db.batch();
+          repliesSnap.docs.forEach((d) => b.update(d.ref, { assigned_to: null }));
+          await b.commit();
+        }
+      }
+    }
+
     // Delete Firestore user doc
     await db.collection("users").doc(uid).delete();
 
     return { status: "deleted", uid };
+  });
+
+// ---- Lead Assignment ----
+
+/**
+ * Assign leads to a team member. Admin-only.
+ * Input: { lead_ids: string[], assigned_to: string }
+ */
+export const assignLeads = functions
+  .runWith({ timeoutSeconds: 60, memory: "256MB" })
+  .https.onCall(async (data, context) => {
+    if (!context.auth) throw new HttpsError("unauthenticated", "Must be signed in.");
+
+    const callerSnap = await db.collection("users").doc(context.auth.uid).get();
+    if (!callerSnap.exists || callerSnap.data().role !== "admin") {
+      throw new HttpsError("permission-denied", "Admin only.");
+    }
+
+    const { lead_ids, assigned_to } = data;
+    if (!lead_ids || !Array.isArray(lead_ids) || lead_ids.length === 0) {
+      throw new HttpsError("invalid-argument", "lead_ids required.");
+    }
+    if (!assigned_to) {
+      throw new HttpsError("invalid-argument", "assigned_to required.");
+    }
+
+    // Look up target user
+    const targetSnap = await db.collection("users").doc(assigned_to).get();
+    if (!targetSnap.exists) {
+      throw new HttpsError("not-found", "Target user not found.");
+    }
+    const targetData = targetSnap.data();
+    const assignedToName = targetData.display_name || targetData.email;
+    const now = new Date().toISOString();
+
+    // Batch update leads
+    const BATCH_LIMIT = 500;
+    for (let i = 0; i < lead_ids.length; i += BATCH_LIMIT) {
+      const batch = db.batch();
+      const chunk = lead_ids.slice(i, i + BATCH_LIMIT);
+
+      for (const leadId of chunk) {
+        batch.update(db.collection("leads").doc(leadId), {
+          assigned_to,
+          assigned_to_name: assignedToName,
+          assigned_at: now,
+          assigned_by: context.auth.uid,
+        });
+      }
+      await batch.commit();
+    }
+
+    // Update outreach_messages for these leads
+    for (const leadId of lead_ids) {
+      const msgsSnap = await db.collection("outreach_messages")
+        .where("lead_id", "==", leadId).get();
+      if (!msgsSnap.empty) {
+        const batch = db.batch();
+        msgsSnap.docs.forEach((d) => batch.update(d.ref, { assigned_to }));
+        await batch.commit();
+      }
+
+      // Update inbound_replies for these leads
+      const repliesSnap = await db.collection("inbound_replies")
+        .where("lead_id", "==", leadId).get();
+      if (!repliesSnap.empty) {
+        const batch = db.batch();
+        repliesSnap.docs.forEach((d) => batch.update(d.ref, { assigned_to }));
+        await batch.commit();
+      }
+    }
+
+    // Audit log
+    await db.collection("activity_log").add({
+      action: "assign_leads",
+      lead_ids,
+      assigned_to,
+      assigned_to_name: assignedToName,
+      performed_by: context.auth.uid,
+      created_at: now,
+    });
+
+    return { status: "ok", assigned: lead_ids.length, assigned_to, assigned_to_name: assignedToName };
+  });
+
+/**
+ * Remove assignment from leads (return to admin pool). Admin-only.
+ * Input: { lead_ids: string[] }
+ */
+export const unassignLeads = functions
+  .runWith({ timeoutSeconds: 60, memory: "256MB" })
+  .https.onCall(async (data, context) => {
+    if (!context.auth) throw new HttpsError("unauthenticated", "Must be signed in.");
+
+    const callerSnap = await db.collection("users").doc(context.auth.uid).get();
+    if (!callerSnap.exists || callerSnap.data().role !== "admin") {
+      throw new HttpsError("permission-denied", "Admin only.");
+    }
+
+    const { lead_ids } = data;
+    if (!lead_ids || !Array.isArray(lead_ids) || lead_ids.length === 0) {
+      throw new HttpsError("invalid-argument", "lead_ids required.");
+    }
+
+    const now = new Date().toISOString();
+    const BATCH_LIMIT = 500;
+
+    for (let i = 0; i < lead_ids.length; i += BATCH_LIMIT) {
+      const batch = db.batch();
+      const chunk = lead_ids.slice(i, i + BATCH_LIMIT);
+      for (const leadId of chunk) {
+        batch.update(db.collection("leads").doc(leadId), {
+          assigned_to: null,
+          assigned_to_name: null,
+          assigned_at: null,
+          assigned_by: null,
+        });
+      }
+      await batch.commit();
+    }
+
+    // Update related messages and replies
+    for (const leadId of lead_ids) {
+      const msgsSnap = await db.collection("outreach_messages")
+        .where("lead_id", "==", leadId).get();
+      if (!msgsSnap.empty) {
+        const batch = db.batch();
+        msgsSnap.docs.forEach((d) => batch.update(d.ref, { assigned_to: null }));
+        await batch.commit();
+      }
+
+      const repliesSnap = await db.collection("inbound_replies")
+        .where("lead_id", "==", leadId).get();
+      if (!repliesSnap.empty) {
+        const batch = db.batch();
+        repliesSnap.docs.forEach((d) => batch.update(d.ref, { assigned_to: null }));
+        await batch.commit();
+      }
+    }
+
+    await db.collection("activity_log").add({
+      action: "unassign_leads",
+      lead_ids,
+      performed_by: context.auth.uid,
+      created_at: now,
+    });
+
+    return { status: "ok", unassigned: lead_ids.length };
   });
 
 // ---- Inbound Email Webhook (Resend) ----
@@ -1888,10 +2127,11 @@ async function runFollowUpGeneration() {
 
       const { nextStepNumber, followUpLabel, scheduledSendDate } = result;
 
-      // Find previous subject for "Re:" threading
+      // Find previous subject and message ID for email threading
       const initialMessage = leadMessages.find((m) => m.step_number === 1 && m.status === "sent");
       const lastSent = leadMessages.find((m) => m.status === "sent");
       const previousSubject = initialMessage?.subject || lastSent?.subject || "";
+      const parentEmailMessageId = initialMessage?.email_message_id || lastSent?.email_message_id || null;
 
       // Generate the follow-up draft
       const enrichment = lead.enrichment || {};
@@ -1948,9 +2188,11 @@ async function runFollowUpGeneration() {
         recipient_email: lead.email || lead.contact_email || null,
         website: lead.website || null,
         workspace_id: lead.workspace_id || "",
+        assigned_to: lead.assigned_to || null,
         original_content: content,
         original_subject: subject,
         was_edited: false,
+        parent_email_message_id: parentEmailMessageId,
       });
 
       // Update lead stage
@@ -2002,4 +2244,79 @@ export const scheduledFollowups = functions
     const result = await runFollowUpGeneration();
     console.log("Scheduled follow-up generation:", JSON.stringify(result));
     return null;
+  });
+
+// ── processEmailEvents: Resend webhook for open/delivery/bounce tracking ──
+export const processEmailEvents = functions
+  .runWith({ timeoutSeconds: 15, memory: "128MB" })
+  .https.onRequest(async (req, res) => {
+    if (req.method !== "POST") {
+      res.status(405).send("Method not allowed");
+      return;
+    }
+
+    try {
+      const { type, data } = req.body;
+
+      if (!type || !data?.email_id) {
+        res.status(400).json({ error: "Invalid event" });
+        return;
+      }
+
+      const emailId = data.email_id;
+
+      // Find outreach message by Resend email ID
+      const snap = await db
+        .collection("outreach_messages")
+        .where("email_message_id", "==", emailId)
+        .limit(1)
+        .get();
+
+      if (snap.empty) {
+        console.log("Email event for unknown message:", emailId, type);
+        res.status(200).json({ status: "ignored", reason: "message not found" });
+        return;
+      }
+
+      const docRef = snap.docs[0].ref;
+      const now = new Date().toISOString();
+
+      switch (type) {
+        case "email.opened":
+          await docRef.update({
+            opened: true,
+            open_count: FieldValue.increment(1),
+            last_opened_at: now,
+          });
+          console.log("Email opened:", emailId);
+          break;
+
+        case "email.delivered":
+          await docRef.update({
+            delivered: true,
+            delivered_at: now,
+          });
+          console.log("Email delivered:", emailId);
+          break;
+
+        case "email.bounced":
+          await docRef.update({
+            status: "bounced",
+          });
+          console.log("Email bounced:", emailId);
+          break;
+
+        case "email.clicked":
+          console.log("Email link clicked:", emailId);
+          break;
+
+        default:
+          console.log("Unhandled email event:", type, emailId);
+      }
+
+      res.status(200).json({ status: "ok" });
+    } catch (err) {
+      console.error("processEmailEvents error:", err.message);
+      res.status(500).json({ error: err.message });
+    }
   });

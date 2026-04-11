@@ -13,6 +13,7 @@ import type {
   SubjectLineStat,
   ReplyRateTrendPoint,
   ReplyRateByDimensionPoint,
+  OpenRateTrendPoint,
 } from "./types";
 
 const STAGE_ORDER = [
@@ -224,6 +225,66 @@ export async function getReplyRateTrend(lookback: number = 12): Promise<{ series
     week,
     sent: buckets[week].sent,
     replied: buckets[week].replied,
+    reply_rate:
+      buckets[week].sent > 0
+        ? Math.round((buckets[week].replied / buckets[week].sent) * 1000) / 10
+        : 0,
+  }));
+
+  return { series };
+}
+
+export async function getOpenRateTrend(lookback: number = 12): Promise<{ series: OpenRateTrendPoint[] }> {
+  const msgs = await getAllSentOutreachMessages();
+  if (!msgs.length) return { series: [] };
+
+  const now = new Date();
+  const dayOfWeek = now.getDay();
+  const mondayOffset = (dayOfWeek + 6) % 7;
+  const thisMondayMs = now.getTime() - mondayOffset * 24 * 60 * 60 * 1000;
+  const weekMs = 7 * 24 * 60 * 60 * 1000;
+
+  const buckets: Record<string, { sent: number; delivered: number; opened: number; replied: number }> = {};
+  const bucketKeys: string[] = [];
+
+  for (let i = 0; i < lookback; i++) {
+    const bucketStart = new Date(thisMondayMs - (lookback - 1 - i) * weekMs);
+    const key = bucketStart.toISOString().split("T")[0];
+    bucketKeys.push(key);
+    buckets[key] = { sent: 0, delivered: 0, opened: 0, replied: 0 };
+  }
+
+  for (const msg of msgs) {
+    const sentAt = msg.sent_at;
+    if (!sentAt) continue;
+    const dateStr = typeof sentAt === "string" ? sentAt.split("T")[0] : "";
+    if (!dateStr || isNaN(Date.parse(dateStr))) continue;
+
+    let assigned: string | null = null;
+    for (const bk of bucketKeys) {
+      if (dateStr >= bk) assigned = bk;
+    }
+
+    if (assigned && buckets[assigned]) {
+      buckets[assigned].sent++;
+      if (msg.delivered) buckets[assigned].delivered++;
+      if (msg.opened) buckets[assigned].opened++;
+      if (msg.has_reply || (msg.reply_count && msg.reply_count > 0)) {
+        buckets[assigned].replied++;
+      }
+    }
+  }
+
+  const series: OpenRateTrendPoint[] = bucketKeys.map((week) => ({
+    week,
+    sent: buckets[week].sent,
+    delivered: buckets[week].delivered,
+    opened: buckets[week].opened,
+    replied: buckets[week].replied,
+    open_rate:
+      buckets[week].sent > 0
+        ? Math.round((buckets[week].opened / buckets[week].sent) * 1000) / 10
+        : 0,
     reply_rate:
       buckets[week].sent > 0
         ? Math.round((buckets[week].replied / buckets[week].sent) * 1000) / 10
