@@ -24,7 +24,7 @@ export async function getLeads(filters?: {
   source?: string;
   stage?: string;
   search?: string;
-  assignedTo?: string | null;
+  assignedTo?: string;
 }): Promise<Lead[]> {
   const ref = collection(db, "leads");
   const constraints: any[] = [];
@@ -36,12 +36,8 @@ export async function getLeads(filters?: {
   if (filters?.stage && filters.stage !== "All") {
     constraints.push(where("stage", "==", filters.stage));
   }
-  if (filters?.assignedTo !== undefined) {
-    if (filters.assignedTo === null) {
-      constraints.push(where("assigned_to", "==", null));
-    } else if (filters.assignedTo) {
-      constraints.push(where("assigned_to", "==", filters.assignedTo));
-    }
+  if (filters?.assignedTo) {
+    constraints.push(where("assigned_to", "==", filters.assignedTo));
   }
 
   const q = constraints.length > 0 ? query(ref, ...constraints) : ref;
