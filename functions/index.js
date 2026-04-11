@@ -1208,6 +1208,30 @@ export const sendApproved = functions
         // Encode lead_id in reply-to so inbound webhook can match replies
         const replyToAddress = `reply+${msg.lead_id}@${REPLY_DOMAIN}`;
 
+        // Thread follow-ups as replies to the original email
+        const sendHeaders = {};
+        if (msg.step_number > 1) {
+          let parentMsgId = msg.parent_email_message_id;
+          if (!parentMsgId) {
+            // Fallback: look up the step 1 sent message for this lead
+            const parentSnap = await db.collection("outreach_messages")
+              .where("lead_id", "==", msg.lead_id)
+              .where("step_number", "==", 1)
+              .where("status", "==", "sent")
+              .limit(1)
+              .get();
+            if (!parentSnap.empty) {
+              parentMsgId = parentSnap.docs[0].data().email_message_id;
+            }
+          }
+          if (parentMsgId) {
+            const rfc = parentMsgId.includes("@") ? `<${parentMsgId}>` : `<${parentMsgId}@resend.dev>`;
+            sendHeaders["In-Reply-To"] = rfc;
+            sendHeaders["References"] = rfc;
+            console.log("Threading follow-up for", lead.business_name, "with", rfc);
+          }
+        }
+
         const { data: resendData, error } = await resend.emails.send({
           from: `${SENDER_NAME} <${SENDER_EMAIL}>`,
           to: toEmail,
@@ -1215,6 +1239,7 @@ export const sendApproved = functions
           subject: msg.subject || "Asterley Bros",
           text: msg.content,
           html: buildHtmlEmail(msg.content),
+          ...(Object.keys(sendHeaders).length > 0 ? { headers: sendHeaders } : {}),
         });
 
         if (error) throw new Error(error.message);
@@ -1888,10 +1913,11 @@ async function runFollowUpGeneration() {
 
       const { nextStepNumber, followUpLabel, scheduledSendDate } = result;
 
-      // Find previous subject for "Re:" threading
+      // Find previous subject and message ID for email threading
       const initialMessage = leadMessages.find((m) => m.step_number === 1 && m.status === "sent");
       const lastSent = leadMessages.find((m) => m.status === "sent");
       const previousSubject = initialMessage?.subject || lastSent?.subject || "";
+      const parentEmailMessageId = initialMessage?.email_message_id || lastSent?.email_message_id || null;
 
       // Generate the follow-up draft
       const enrichment = lead.enrichment || {};
@@ -1951,6 +1977,7 @@ async function runFollowUpGeneration() {
         original_content: content,
         original_subject: subject,
         was_edited: false,
+        parent_email_message_id: parentEmailMessageId,
       });
 
       // Update lead stage
