@@ -36,6 +36,7 @@ import {
   useInboundReplies,
   useDeleteReply,
   useGenerateFollowupForLead,
+  useMessages,
 } from "@/hooks/use-outreach";
 import { useGeneratingLeadId } from "@/hooks/use-live-updates";
 import { useAuth } from "@/lib/auth-context";
@@ -94,6 +95,7 @@ export function MessageCard({ message, inConversation }: Props) {
   const [flowingDraft, setFlowingDraft] = useState<{ subject: string | null; content: string } | null>(null);
   const [activeAction, setActiveAction] = useState<string | null>(null);
   const [replyContent, setReplyContent] = useState("");
+  const [originalExpanded, setOriginalExpanded] = useState(false);
 
   const { isAdmin, isMember } = useAuth();
   const canAct = isAdmin || isMember;
@@ -105,6 +107,16 @@ export function MessageCard({ message, inConversation }: Props) {
   const deleteReplyMutation = useDeleteReply();
   const generateFollowupMutation = useGenerateFollowupForLead();
   const generatingLeadId = useGeneratingLeadId();
+
+  // Fetch original email for follow-ups
+  const { data: leadMessages } = useMessages(
+    { lead_id: message.lead_id },
+    200,
+  );
+  const originalMessage = message.step_number > 1
+    ? (leadMessages ?? []).find((m) => m.step_number === 1 && m.status === "sent")
+      || (leadMessages ?? []).find((m) => m.step_number === 1)
+    : null;
 
   const repliesQuery = useInboundReplies(
     { lead_id: message.lead_id },
@@ -321,12 +333,42 @@ export function MessageCard({ message, inConversation }: Props) {
           </div>
         )}
 
-        {/* Follow-up context header */}
+        {/* Follow-up context — show original email */}
         {message.step_number > 1 && (
-          <div className="rounded-md bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
-            Follow-up #{message.step_number - 1}
-            {message.follow_up_label && (
-              <span className="ml-1 capitalize">({message.follow_up_label.replace(/_/g, " ")})</span>
+          <div className="rounded-md border border-border/30 bg-muted/20 overflow-hidden">
+            <button
+              onClick={() => setOriginalExpanded((o) => !o)}
+              className="w-full flex items-center justify-between px-3 py-2 text-xs text-muted-foreground hover:bg-muted/30 transition-colors"
+            >
+              <span>
+                Follow-up #{message.step_number - 1}
+                {originalMessage && (
+                  <span className="ml-1">
+                    · Original: <span className="font-medium text-foreground">{originalMessage.subject || "No subject"}</span>
+                    {originalMessage.status === "sent" && originalMessage.sent_at && (
+                      <span className="ml-1">· sent {formatDate(originalMessage.sent_at)}</span>
+                    )}
+                    {originalMessage.opened && (
+                      <span className="ml-1 text-emerald-400">· opened {originalMessage.open_count || 1}x</span>
+                    )}
+                  </span>
+                )}
+              </span>
+              {originalMessage && (
+                originalExpanded
+                  ? <ChevronUp className="h-3 w-3 shrink-0" />
+                  : <ChevronDown className="h-3 w-3 shrink-0" />
+              )}
+            </button>
+            {originalExpanded && originalMessage && (
+              <div className="border-t border-border/20 px-3 py-2 space-y-1">
+                {originalMessage.subject && (
+                  <p className="text-xs font-medium">Subject: {originalMessage.subject}</p>
+                )}
+                <div className="text-xs text-muted-foreground whitespace-pre-wrap bg-muted/30 rounded p-2 max-h-40 overflow-y-auto">
+                  {originalMessage.content}
+                </div>
+              </div>
             )}
           </div>
         )}
