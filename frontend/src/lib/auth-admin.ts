@@ -37,7 +37,7 @@ export interface InviteResult {
 export async function inviteUser(
   email: string,
   displayName: string,
-  role: "admin" | "viewer",
+  role: "admin" | "member" | "viewer",
   workspaceId: string
 ): Promise<InviteResult> {
   // Generate a temp password

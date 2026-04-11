@@ -65,6 +65,11 @@ export interface Lead {
   rejection_reason: string | null;
   rejection_notes: string | null;
   batch_id: string | null;
+  // Assignment
+  assigned_to: string | null;
+  assigned_to_name: string | null;
+  assigned_at: string | null;
+  assigned_by: string | null;
   // Reply tracking
   human_takeover: boolean;
   human_takeover_at: string | null;
@@ -119,6 +124,8 @@ export interface OutreachMessage {
   email_message_id?: string;
   reply_to_address?: string;
   variant?: "A" | "B" | null;
+  // Assignment
+  assigned_to?: string | null;
   // Email tracking
   opened?: boolean;
   opened_at?: string | null;
@@ -179,6 +186,7 @@ export interface InboundReply {
   forwarded_by: string | null;
   sentiment?: "positive" | "negative" | "neutral" | null;
   sentiment_reason?: string | null;
+  assigned_to?: string | null;
 }
 
 // --- Analytics ---

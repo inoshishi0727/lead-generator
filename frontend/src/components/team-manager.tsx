@@ -28,7 +28,7 @@ export function TeamManager() {
 
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
-  const [role, setRole] = useState<"admin" | "viewer">("viewer");
+  const [role, setRole] = useState<"admin" | "member" | "viewer">("member");
   const [tempPassword, setTempPassword] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
@@ -39,7 +39,7 @@ export function TeamManager() {
   });
 
   const inviteMutation = useMutation({
-    mutationFn: (data: { email: string; display_name: string; role: "admin" | "viewer" }) =>
+    mutationFn: (data: { email: string; display_name: string; role: "admin" | "member" | "viewer" }) =>
       inviteUser(data.email, data.display_name, data.role, workspaceId ?? ""),
     onSuccess: (data) => {
       setTempPassword(data.tempPassword);
@@ -138,11 +138,12 @@ export function TeamManager() {
             />
             <select
               value={role}
-              onChange={(e) => setRole(e.target.value as "admin" | "viewer")}
+              onChange={(e) => setRole(e.target.value as "admin" | "member" | "viewer")}
               className="rounded-md border border-input bg-background px-3 text-sm"
             >
-              <option value="viewer">Viewer</option>
+              <option value="member">Member</option>
               <option value="admin">Admin</option>
+              <option value="viewer">Viewer</option>
             </select>
             <Button
               type="submit"

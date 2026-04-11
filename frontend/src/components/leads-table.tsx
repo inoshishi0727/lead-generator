@@ -36,6 +36,9 @@ import type { Lead } from "@/lib/types";
 interface Props {
   leads: Lead[];
   isLoading: boolean;
+  selectable?: boolean;
+  selectedIds?: string[];
+  onSelectionChange?: (ids: string[]) => void;
 }
 
 const REJECTION_LABELS: Record<string, string> = {
@@ -50,7 +53,7 @@ const rejectionColors: Record<string, string> = {
   in_discussion: "border-sky-500/30 text-sky-400 bg-sky-500/10",
 };
 
-export function LeadsTable({ leads, isLoading }: Props) {
+export function LeadsTable({ leads, isLoading, selectable, selectedIds = [], onSelectionChange }: Props) {
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
   const [pendingLeads, setPendingLeads] = useState<Set<string>>(new Set());
   const [rejectDialog, setRejectDialog] = useState<{ leadId: string; reason: string } | null>(null);
@@ -181,6 +184,20 @@ export function LeadsTable({ leads, isLoading }: Props) {
           <Table className="w-full table-fixed">
             <TableHeader>
               <TableRow>
+                {selectable && (
+                  <TableHead className="w-10 px-2">
+                    <input
+                      type="checkbox"
+                      className="rounded accent-primary"
+                      checked={selectedIds.length === leads.length && leads.length > 0}
+                      onChange={(e) => {
+                        onSelectionChange?.(
+                          e.target.checked ? leads.map((l) => l.id) : []
+                        );
+                      }}
+                    />
+                  </TableHead>
+                )}
                 <TableHead className="w-20"></TableHead>
                 <TableHead className="w-[18%]">Business</TableHead>
                 <TableHead className="w-[14%]">Category</TableHead>
@@ -188,6 +205,7 @@ export function LeadsTable({ leads, isLoading }: Props) {
                 <TableHead className="w-[22%]">Email</TableHead>
                 <TableHead className="w-[14%]">Postcode</TableHead>
                 <TableHead className="w-[6%] text-right">Score</TableHead>
+                {selectable && <TableHead className="w-[10%]">Assigned</TableHead>}
                 <TableHead className="w-[8%] text-center">Actions</TableHead>
               </TableRow>
             </TableHeader>
@@ -200,6 +218,22 @@ export function LeadsTable({ leads, isLoading }: Props) {
                   } ${index % 2 === 1 ? "bg-muted/30" : ""}`}
                   onClick={() => setSelectedLead(lead)}
                 >
+                  {selectable && (
+                    <TableCell className="w-10 px-2" onClick={(e) => e.stopPropagation()}>
+                      <input
+                        type="checkbox"
+                        className="rounded accent-primary"
+                        checked={selectedIds.includes(lead.id)}
+                        onChange={(e) => {
+                          onSelectionChange?.(
+                            e.target.checked
+                              ? [...selectedIds, lead.id]
+                              : selectedIds.filter((id) => id !== lead.id)
+                          );
+                        }}
+                      />
+                    </TableCell>
+                  )}
                   {/* Status column */}
                   <TableCell className="w-20 px-2">
                     {lead.client_status === "approved" ? (
@@ -280,6 +314,11 @@ export function LeadsTable({ leads, isLoading }: Props) {
                   <TableCell className="text-right font-mono text-xs">
                     {lead.score ?? "\u2014"}
                   </TableCell>
+                  {selectable && (
+                    <TableCell className="text-xs text-muted-foreground truncate">
+                      {lead.assigned_to_name ?? "Unassigned"}
+                    </TableCell>
+                  )}
                   {/* Actions */}
                   <TableCell className="text-center">
                     <div className="flex items-center justify-center gap-1" onClick={(e) => e.stopPropagation()}>

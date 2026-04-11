@@ -55,15 +55,18 @@ const CATEGORY_OPTIONS = [
 ];
 
 export default function OutreachPage() {
-  const { isAdmin } = useAuth();
+  const { isAdmin, isMember, user } = useAuth();
   const [statusFilter, setStatusFilter] = useState<string>("draft");
   const [categoryFilter, setCategoryFilter] = useState<string>("");
   const [showSendWarning, setShowSendWarning] = useState(false);
 
+  // Member auto-scopes to own messages
+  const assignedTo = isMember ? user?.uid : undefined;
+
   // "replied" is a client-side filter (has_reply), not a Firestore status
   const firestoreFilter = statusFilter === "all" || statusFilter === "conversations"
-    ? undefined
-    : (statusFilter === "follow-ups" ? undefined : { status: statusFilter });
+    ? { assignedTo } as any
+    : (statusFilter === "follow-ups" ? { assignedTo } as any : { status: statusFilter, assignedTo });
 
   // Use API-backed messages by default, but when viewing Follow-ups, fetch directly
   // from Firestore client to avoid server-side cache delays (live functions write directly to Firestore).
@@ -75,7 +78,7 @@ export default function OutreachPage() {
     let mounted = true;
     if (statusFilter === "follow-ups") {
       setClientLoading(true);
-      getOutreachMessages({ limit: 500 })
+      getOutreachMessages({ limit: 500, assignedTo })
         .then((res) => { if (mounted) setClientMessages(res); })
         .catch((err) => { console.error("Failed to load follow-ups from client Firestore", err); if (mounted) setClientMessages([]); })
         .finally(() => { if (mounted) setClientLoading(false); });
@@ -178,7 +181,7 @@ export default function OutreachPage() {
               Approve All ({draftCount})
             </Button>
           )}
-          {isAdmin && approvedCount > 0 && (
+          {(isAdmin || isMember) && approvedCount > 0 && (
             <Button
               variant="outline"
               className="border-blue-500 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/20"

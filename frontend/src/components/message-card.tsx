@@ -95,7 +95,8 @@ export function MessageCard({ message, inConversation }: Props) {
   const [activeAction, setActiveAction] = useState<string | null>(null);
   const [replyContent, setReplyContent] = useState("");
 
-  const { isAdmin } = useAuth();
+  const { isAdmin, isMember } = useAuth();
+  const canAct = isAdmin || isMember;
   const updateMutation = useUpdateMessage();
   const regenerateMutation = useRegenerateMessage();
   const sendMutation = useSendMessage();
@@ -489,7 +490,7 @@ export function MessageCard({ message, inConversation }: Props) {
                             {reply.sentiment_reason || reply.sentiment}
                           </Badge>
                         )}
-                        {isAdmin && !isOutbound && (
+                        {canAct && !isOutbound && (
                           <Menu>
                             <MenuTrigger
                               render={
@@ -524,7 +525,7 @@ export function MessageCard({ message, inConversation }: Props) {
             )}
 
             {/* Reply input */}
-            {isAdmin && message.status === "sent" && (
+            {canAct && message.status === "sent" && (
               <div className="flex gap-2 pt-2 border-t border-border">
                 <textarea
                   className="flex-1 min-h-[80px] rounded-md border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring resize-y"
@@ -560,7 +561,7 @@ export function MessageCard({ message, inConversation }: Props) {
         )}
 
         {/* Action buttons */}
-        {message.status === "planned" && isAdmin && (
+        {message.status === "planned" && canAct && (
           <div className="flex items-center gap-2 pt-1">
             <Button
               size="sm"
@@ -575,7 +576,7 @@ export function MessageCard({ message, inConversation }: Props) {
         )}
         {message.status === "draft" && (
           <div className="flex items-center gap-2 pt-1">
-            {isAdmin && (
+            {canAct && (
               <Button
                 size="sm"
                 variant="default"
@@ -591,7 +592,7 @@ export function MessageCard({ message, inConversation }: Props) {
                 {activeAction === "approve" ? "Approving..." : "Approve"}
               </Button>
             )}
-            {isAdmin && (
+            {canAct && (
               <Button
                 size="sm"
                 variant="destructive"
@@ -641,7 +642,7 @@ export function MessageCard({ message, inConversation }: Props) {
               <Pencil className="mr-1 h-3.5 w-3.5" />
               Edit
             </Button>
-            {isAdmin && (
+            {canAct && (
               <Button
                 size="sm"
                 variant="ghost"
@@ -660,7 +661,7 @@ export function MessageCard({ message, inConversation }: Props) {
           </div>
         )}
         {/* Edit + Send + Unapprove buttons for approved messages */}
-        {message.status === "approved" && isAdmin && (
+        {message.status === "approved" && canAct && (
           <div className="flex items-center gap-2 pt-1">
             <Button
               size="sm"
@@ -701,7 +702,7 @@ export function MessageCard({ message, inConversation }: Props) {
           </div>
         )}
         {/* Back to draft button for rejected messages */}
-        {message.status === "rejected" && isAdmin && (
+        {message.status === "rejected" && canAct && (
           <div className="flex items-center gap-2 pt-1">
             <Button
               size="sm"
@@ -719,7 +720,7 @@ export function MessageCard({ message, inConversation }: Props) {
           </div>
         )}
         {/* View Replies + Reset for sent messages — hidden in conversation view */}
-        {message.status === "sent" && isAdmin && !inConversation && (
+        {message.status === "sent" && canAct && !inConversation && (
           <div className="flex items-center gap-2 pt-1">
             <Button
               size="sm"
