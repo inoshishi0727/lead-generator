@@ -1208,27 +1208,42 @@ export const sendApproved = functions
         // Encode lead_id in reply-to so inbound webhook can match replies
         const replyToAddress = `reply+${msg.lead_id}@${REPLY_DOMAIN}`;
 
-        // Thread follow-ups as replies to the original email
+        // Thread follow-ups as replies in the same conversation
         const sendHeaders = {};
         if (msg.step_number > 1) {
-          let parentMsgId = msg.parent_email_message_id;
-          if (!parentMsgId) {
-            // Fallback: look up the step 1 sent message for this lead
-            const parentSnap = await db.collection("outreach_messages")
-              .where("lead_id", "==", msg.lead_id)
-              .where("step_number", "==", 1)
-              .where("status", "==", "sent")
-              .limit(1)
-              .get();
-            if (!parentSnap.empty) {
-              parentMsgId = parentSnap.docs[0].data().email_message_id;
+          // Strategy 1: Use inbound reply's RFC Message-ID (same approach as sendReply)
+          const repliesSnap = await db.collection("inbound_replies")
+            .where("lead_id", "==", msg.lead_id)
+            .get();
+          const inboundReplies = repliesSnap.docs
+            .map((d) => d.data())
+            .filter((d) => d.direction !== "outbound" && d.rfc_message_id)
+            .sort((a, b) => (b.created_at > a.created_at ? 1 : -1));
+
+          if (inboundReplies.length > 0) {
+            sendHeaders["In-Reply-To"] = inboundReplies[0].rfc_message_id;
+            sendHeaders["References"] = inboundReplies[0].rfc_message_id;
+            console.log("Threading follow-up (via inbound reply) for", lead.business_name, "with", inboundReplies[0].rfc_message_id);
+          } else {
+            // Strategy 2: No replies yet — use Resend API ID as Message-ID
+            let parentMsgId = msg.parent_email_message_id;
+            if (!parentMsgId) {
+              const parentSnap = await db.collection("outreach_messages")
+                .where("lead_id", "==", msg.lead_id)
+                .where("step_number", "==", 1)
+                .where("status", "==", "sent")
+                .limit(1)
+                .get();
+              if (!parentSnap.empty) {
+                parentMsgId = parentSnap.docs[0].data().email_message_id;
+              }
             }
-          }
-          if (parentMsgId) {
-            const rfc = parentMsgId.includes("@") ? `<${parentMsgId}>` : `<${parentMsgId}@resend.dev>`;
-            sendHeaders["In-Reply-To"] = rfc;
-            sendHeaders["References"] = rfc;
-            console.log("Threading follow-up for", lead.business_name, "with", rfc);
+            if (parentMsgId) {
+              const rfc = parentMsgId.includes("@") ? `<${parentMsgId}>` : `<${parentMsgId}@resend.dev>`;
+              sendHeaders["In-Reply-To"] = rfc;
+              sendHeaders["References"] = rfc;
+              console.log("Threading follow-up (via parent ID) for", lead.business_name, "with", rfc);
+            }
           }
         }
 
