@@ -13,7 +13,6 @@ import {
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { MessageCard } from "@/components/message-card";
-import { useInboundReplies } from "@/hooks/use-outreach";
 import type { OutreachMessage } from "@/lib/types";
 
 interface Props {
@@ -35,7 +34,6 @@ function timeAgo(dateStr: string): string {
 
 export function ThreadCard({ leadId, businessName, messages }: Props) {
   const [expanded, setExpanded] = useState(false);
-  const { data: replies } = useInboundReplies({ lead_id: leadId }, { enabled: expanded });
 
   // Sort messages by step_number, then created_at
   const sorted = [...messages].sort((a, b) => {
@@ -133,51 +131,12 @@ export function ThreadCard({ leadId, businessName, messages }: Props) {
         </div>
       </button>
 
-      {/* Expanded: show all messages + replies */}
+      {/* Expanded: show all messages (replies shown via MessageCard's own thread view) */}
       {expanded && (
         <div className="border-t border-border/30 px-2 py-2 space-y-2">
           {sorted.map((msg) => (
             <MessageCard key={msg.id} message={msg} inConversation />
           ))}
-
-          {/* Replies thread */}
-          {replies && replies.length > 0 && (
-            <div className="mt-3 border-t border-border/20 pt-3">
-              <span className="text-xs font-medium text-muted-foreground px-2">Replies</span>
-              <div className="mt-2 space-y-2 pl-4 border-l-2 border-border/30">
-                {replies.map((reply) => (
-                  <div
-                    key={reply.id}
-                    className={`rounded-md px-3 py-2 text-sm ${
-                      reply.direction === "outbound"
-                        ? "bg-blue-950/10 border border-blue-500/20"
-                        : "bg-muted/30"
-                    }`}
-                  >
-                    <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1">
-                      <span className="font-medium text-foreground">
-                        {reply.direction === "outbound" ? "Rob" : reply.from_name || reply.from_email}
-                      </span>
-                      {reply.sentiment && (
-                        <Badge
-                          variant="outline"
-                          className={`text-[9px] ${
-                            reply.sentiment === "positive" ? "border-emerald-500/30 text-emerald-400" :
-                            reply.sentiment === "negative" ? "border-red-500/30 text-red-400" :
-                            "border-zinc-500/30 text-zinc-400"
-                          }`}
-                        >
-                          {reply.sentiment}
-                        </Badge>
-                      )}
-                      <span className="ml-auto">{timeAgo(reply.created_at)}</span>
-                    </div>
-                    <p className="text-xs whitespace-pre-wrap">{reply.body}</p>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
         </div>
       )}
     </div>
