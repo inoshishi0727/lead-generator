@@ -43,6 +43,7 @@ import { useLeadDetail } from "@/hooks/use-lead-detail";
 
 interface Props {
   message: OutreachMessage;
+  inConversation?: boolean;
 }
 
 const statusColors: Record<string, string> = {
@@ -86,7 +87,7 @@ function rejectionLabel(reason: string): string {
   return REJECTION_LABELS[reason] ?? "rejected";
 }
 
-export function MessageCard({ message }: Props) {
+export function MessageCard({ message, inConversation }: Props) {
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [threadOpen, setThreadOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -717,8 +718,8 @@ export function MessageCard({ message }: Props) {
             </Button>
           </div>
         )}
-        {/* View Replies + Reset for sent messages */}
-        {message.status === "sent" && isAdmin && (
+        {/* View Replies + Reset for sent messages — hidden in conversation view */}
+        {message.status === "sent" && isAdmin && !inConversation && (
           <div className="flex items-center gap-2 pt-1">
             <Button
               size="sm"
