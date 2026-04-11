@@ -1,6 +1,6 @@
 "use client";
 
-import { Users, TrendingUp, Target, BarChart3, MessageSquare, Send } from "lucide-react";
+import { Users, TrendingUp, Target, BarChart3, MessageSquare, Send, Eye, CheckCircle } from "lucide-react";
 import { StatCard } from "@/components/stat-card";
 import { FunnelChart } from "@/components/funnel-chart";
 import { CategoryBreakdown } from "@/components/category-breakdown";
@@ -10,12 +10,14 @@ import { AIRecommendations } from "@/components/ai-recommendations";
 import { SubjectLineChart } from "@/components/subject-line-chart";
 import { ReplyRateTrendChart } from "@/components/reply-rate-trend-chart";
 import { OutreachBreakdownChart } from "@/components/outreach-breakdown-chart";
-import { useFunnel, useCategories, useReplyRateTrend } from "@/hooks/use-analytics";
+import { EmailEngagementChart } from "@/components/email-engagement-chart";
+import { useFunnel, useCategories, useReplyRateTrend, useOpenRateTrend } from "@/hooks/use-analytics";
 
 export default function AnalyticsPage() {
   const { data: funnelData } = useFunnel();
   const { data: categoryData } = useCategories();
   const { data: replyTrendData } = useReplyRateTrend();
+  const { data: openTrendData } = useOpenRateTrend();
 
   const totalLeads = funnelData?.total_leads ?? 0;
   const stages = funnelData?.stages ?? [];
@@ -31,6 +33,14 @@ export default function AnalyticsPage() {
   const outreachReplied = replyTrendData?.series.reduce((sum, s) => sum + s.replied, 0) ?? 0;
   const overallReplyRate =
     outreachSent > 0 ? Math.round((outreachReplied / outreachSent) * 100) : 0;
+
+  const engagementSent = openTrendData?.series.reduce((sum, s) => sum + s.sent, 0) ?? 0;
+  const engagementOpened = openTrendData?.series.reduce((sum, s) => sum + s.opened, 0) ?? 0;
+  const engagementDelivered = openTrendData?.series.reduce((sum, s) => sum + s.delivered, 0) ?? 0;
+  const overallOpenRate =
+    engagementSent > 0 ? Math.round((engagementOpened / engagementSent) * 100) : 0;
+  const overallDeliveryRate =
+    engagementSent > 0 ? Math.round((engagementDelivered / engagementSent) * 100) : 0;
 
   const categories = categoryData?.categories ?? [];
   const avgScore =
@@ -52,9 +62,11 @@ export default function AnalyticsPage() {
         <StatCard icon={BarChart3} label="Avg Score" value={avgScore} />
       </div>
 
-      <div className="grid grid-cols-2 gap-4">
-        <StatCard icon={MessageSquare} label="Outreach Reply Rate (12wk)" value={`${overallReplyRate}%`} />
-        <StatCard icon={Send} label="Total Sent (12wk)" value={outreachSent} />
+      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+        <StatCard icon={MessageSquare} label="Reply Rate (12wk)" value={`${overallReplyRate}%`} />
+        <StatCard icon={Eye} label="Open Rate (12wk)" value={`${overallOpenRate}%`} />
+        <StatCard icon={CheckCircle} label="Delivery Rate (12wk)" value={`${overallDeliveryRate}%`} />
+        <StatCard icon={Send} label="Total Sent (12wk)" value={engagementSent} />
       </div>
 
       <div data-tour="funnel-chart">
@@ -73,7 +85,10 @@ export default function AnalyticsPage() {
           Outreach Performance
         </h2>
         <div className="grid gap-6 lg:grid-cols-2">
+          <EmailEngagementChart />
           <ReplyRateTrendChart />
+        </div>
+        <div className="grid gap-6 lg:grid-cols-2">
           <OutreachBreakdownChart />
         </div>
       </div>
