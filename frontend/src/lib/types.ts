@@ -95,7 +95,7 @@ export interface OutreachMessage {
   channel: "email" | "instagram_dm";
   subject: string | null;
   content: string;
-  status: "draft" | "approved" | "rejected" | "sent";
+  status: "draft" | "approved" | "rejected" | "sent" | "planned";
   step_number: number;
   follow_up_label: string | null;
   scheduled_send_date: string | null;
