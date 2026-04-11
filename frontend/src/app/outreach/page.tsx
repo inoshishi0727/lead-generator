@@ -28,7 +28,7 @@ import { getOutreachMessages } from "@/lib/firestore-api";
 import { EditReflectionBanner } from "@/components/edit-reflection-banner";
 import { ThreadCard } from "@/components/thread-card";
 
-const STATUS_FILTERS = ["threads", "draft", "approved", "sent", "replied", "rejected", "follow-ups", "all"] as const;
+const STATUS_FILTERS = ["draft", "approved", "sent", "conversations", "rejected", "follow-ups", "all"] as const;
 
 const CATEGORY_OPTIONS = [
   { value: "", label: "All Categories" },
@@ -56,12 +56,12 @@ const CATEGORY_OPTIONS = [
 
 export default function OutreachPage() {
   const { isAdmin } = useAuth();
-  const [statusFilter, setStatusFilter] = useState<string>("threads");
+  const [statusFilter, setStatusFilter] = useState<string>("draft");
   const [categoryFilter, setCategoryFilter] = useState<string>("");
   const [showSendWarning, setShowSendWarning] = useState(false);
 
   // "replied" is a client-side filter (has_reply), not a Firestore status
-  const firestoreFilter = statusFilter === "all" || statusFilter === "replied" || statusFilter === "threads"
+  const firestoreFilter = statusFilter === "all" || statusFilter === "conversations"
     ? undefined
     : (statusFilter === "follow-ups" ? undefined : { status: statusFilter });
 
@@ -94,11 +94,11 @@ export default function OutreachPage() {
   const sendMutation = useSendApproved();
   const followupsMutation = useGenerateFollowups();
 
-  const filteredByStatus = statusFilter === "replied"
+  const filteredByStatus = statusFilter === "conversations"
     ? (messages ?? []).filter((m) => m.has_reply)
     : statusFilter === "follow-ups"
-      ? (messages ?? []).filter((m) => ((m.step_number ?? 1) > 1) || m.status === "planned")
-      : (statusFilter === "all" || statusFilter === "threads")
+      ? (messages ?? []).filter((m) => (((m.step_number ?? 1) > 1) || m.status === "planned") && m.status !== "sent")
+      : (statusFilter === "all")
         ? (messages ?? [])
         : (messages ?? []).filter((m) => m.status === statusFilter);
   const filteredByCategory = filteredByStatus.filter(
@@ -332,10 +332,10 @@ export default function OutreachPage() {
               No messages yet. Generate drafts for your scored leads to get started.
             </p>
           </div>
-        ) : statusFilter === "threads" ? (
+        ) : statusFilter === "conversations" ? (
           <div className="space-y-3">
             {(() => {
-              // Group messages by lead_id
+              // Group replied messages by lead_id to show full conversation threads
               const threads = new Map<string, { businessName: string; messages: typeof allMessages }>();
               for (const msg of allMessages) {
                 const existing = threads.get(msg.lead_id);
@@ -345,11 +345,8 @@ export default function OutreachPage() {
                   threads.set(msg.lead_id, { businessName: msg.business_name, messages: [msg] });
                 }
               }
-              // Sort threads: drafts first, then by latest activity
+              // Sort by latest reply activity
               const sorted = [...threads.entries()].sort((a, b) => {
-                const hasDraftA = a[1].messages.some((m) => m.status === "draft") ? 1 : 0;
-                const hasDraftB = b[1].messages.some((m) => m.status === "draft") ? 1 : 0;
-                if (hasDraftA !== hasDraftB) return hasDraftB - hasDraftA;
                 const latestA = a[1].messages.reduce((max, m) => {
                   const t = m.sent_at || m.created_at || "";
                   return t > max ? t : max;
