@@ -233,6 +233,16 @@ export interface ReplyRateTrendPoint {
   reply_rate: number;
 }
 
+export interface OpenRateTrendPoint {
+  week: string;
+  sent: number;
+  delivered: number;
+  opened: number;
+  replied: number;
+  open_rate: number;
+  reply_rate: number;
+}
+
 export interface ReplyRateByDimensionPoint {
   label: string;
   sent: number;

@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import { getFunnel, getCategories, getRatios, getTrends, getSubjectLineStats, getReplyRateTrend, getReplyRateByDimension } from "@/lib/firestore-analytics";
+import { getFunnel, getCategories, getRatios, getTrends, getSubjectLineStats, getReplyRateTrend, getReplyRateByDimension, getOpenRateTrend } from "@/lib/firestore-analytics";
 import type {
   FunnelData,
   CategoryStat,
@@ -9,6 +9,7 @@ import type {
   SubjectLineStat,
   ReplyRateTrendPoint,
   ReplyRateByDimensionPoint,
+  OpenRateTrendPoint,
 } from "@/lib/types";
 
 const hasBackend = !!process.env.NEXT_PUBLIC_API_URL;
@@ -64,6 +65,13 @@ export function useReplyRateTrend() {
   return useQuery<{ series: ReplyRateTrendPoint[] }>({
     queryKey: ["analytics", "reply-rate-trend"],
     queryFn: () => getReplyRateTrend(),
+  });
+}
+
+export function useOpenRateTrend() {
+  return useQuery<{ series: OpenRateTrendPoint[] }>({
+    queryKey: ["analytics", "open-rate-trend"],
+    queryFn: () => getOpenRateTrend(),
   });
 }
 
