@@ -333,45 +333,55 @@ export function MessageCard({ message, inConversation }: Props) {
           </div>
         )}
 
-        {/* Follow-up context — show original email */}
-        {message.step_number > 1 && (
-          <div className="rounded-md border border-border/30 bg-muted/20 overflow-hidden">
-            <button
-              onClick={() => setOriginalExpanded((o) => !o)}
-              className="w-full flex items-center justify-between px-3 py-2 text-xs text-muted-foreground hover:bg-muted/30 transition-colors"
-            >
-              <span>
-                Follow-up #{message.step_number - 1}
-                {originalMessage && (
-                  <span className="ml-1">
-                    · Original: <span className="font-medium text-foreground">{originalMessage.subject || "No subject"}</span>
-                    {originalMessage.status === "sent" && originalMessage.sent_at && (
-                      <span className="ml-1">· sent {formatDate(originalMessage.sent_at)}</span>
-                    )}
-                    {originalMessage.opened && (
-                      <span className="ml-1 text-emerald-400">· opened {originalMessage.open_count || 1}x</span>
-                    )}
-                  </span>
-                )}
-              </span>
-              {originalMessage && (
-                originalExpanded
+        {/* Follow-up context — show previous emails in the sequence */}
+        {message.step_number > 1 && (leadMessages ?? []).length > 0 && (() => {
+          const previousMessages = (leadMessages ?? [])
+            .filter((m) => m.step_number < message.step_number && m.id !== message.id)
+            .sort((a, b) => a.step_number - b.step_number);
+          if (previousMessages.length === 0) return null;
+          return (
+            <div className="rounded-md border border-border/30 bg-muted/20 overflow-hidden">
+              <button
+                onClick={() => setOriginalExpanded((o) => !o)}
+                className="w-full flex items-center justify-between px-3 py-2 text-xs text-muted-foreground hover:bg-muted/30 transition-colors"
+              >
+                <span>
+                  Follow-up #{message.step_number - 1} · {previousMessages.length} previous email{previousMessages.length !== 1 ? "s" : ""}
+                </span>
+                {originalExpanded
                   ? <ChevronUp className="h-3 w-3 shrink-0" />
                   : <ChevronDown className="h-3 w-3 shrink-0" />
-              )}
-            </button>
-            {originalExpanded && originalMessage && (
-              <div className="border-t border-border/20 px-3 py-2 space-y-1">
-                {originalMessage.subject && (
-                  <p className="text-xs font-medium">Subject: {originalMessage.subject}</p>
-                )}
-                <div className="text-xs text-muted-foreground whitespace-pre-wrap bg-muted/30 rounded p-2 max-h-40 overflow-y-auto">
-                  {originalMessage.content}
+                }
+              </button>
+              {originalExpanded && (
+                <div className="border-t border-border/20">
+                  {previousMessages.map((prev, i) => (
+                    <div key={prev.id} className={`px-3 py-2 space-y-1 ${i > 0 ? "border-t border-border/10" : ""}`}>
+                      <div className="flex items-center gap-2 text-xs">
+                        <Badge variant="secondary" className="text-[9px]">
+                          {prev.step_number === 1 ? "Original" : `Follow-up #${prev.step_number - 1}`}
+                        </Badge>
+                        <span className="font-medium text-foreground text-xs">{prev.subject || "No subject"}</span>
+                        {prev.status === "sent" && prev.sent_at && (
+                          <span className="text-muted-foreground">sent {formatDate(prev.sent_at)}</span>
+                        )}
+                        {prev.opened && (
+                          <span className="text-emerald-400">opened {prev.open_count || 1}x</span>
+                        )}
+                        {prev.has_reply && (
+                          <span className="text-blue-400">{prev.reply_count || 1} reply</span>
+                        )}
+                      </div>
+                      <div className="text-xs text-muted-foreground whitespace-pre-wrap bg-muted/30 rounded p-2 max-h-32 overflow-y-auto">
+                        {prev.content}
+                      </div>
+                    </div>
+                  ))}
                 </div>
-              </div>
-            )}
-          </div>
-        )}
+              )}
+            </div>
+          );
+        })()}
 
         {/* Context row */}
         {(message.contact_name || message.context_notes || message.recipient_email || message.website) && (
