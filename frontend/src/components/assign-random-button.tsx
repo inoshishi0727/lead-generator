@@ -27,6 +27,7 @@ function shuffle<T>(arr: T[]): T[] {
 export function AssignRandomButton({ leads, onDone }: Props) {
   const { workspaceId } = useAuth();
   const [selectedUser, setSelectedUser] = useState("");
+  const [count, setCount] = useState(20);
   const assignMutation = useAssignLeads();
 
   const teamQuery = useQuery({
@@ -43,7 +44,7 @@ export function AssignRandomButton({ leads, onDone }: Props) {
 
   function handleAssignRandom() {
     if (!selectedUser || unassigned.length === 0) return;
-    const picked = shuffle(unassigned).slice(0, 20);
+    const picked = shuffle(unassigned).slice(0, count);
     const ids = picked.map((l) => l.id);
     const memberName = members.find((m) => m.uid === selectedUser)?.display_name ?? "member";
     assignMutation.mutate(
@@ -73,6 +74,14 @@ export function AssignRandomButton({ leads, onDone }: Props) {
           </option>
         ))}
       </select>
+      <input
+        type="number"
+        min={1}
+        max={unassigned.length}
+        value={count}
+        onChange={(e) => setCount(Math.max(1, parseInt(e.target.value) || 1))}
+        className="h-8 w-16 rounded-md border border-input bg-background px-2 text-center text-sm"
+      />
       <Button
         size="sm"
         variant="outline"
@@ -85,7 +94,7 @@ export function AssignRandomButton({ leads, onDone }: Props) {
         ) : (
           <Shuffle className="mr-1 h-3.5 w-3.5" />
         )}
-        Assign 20 Random ({Math.min(20, unassigned.length)} avail)
+        Assign Random ({Math.min(count, unassigned.length)} avail)
       </Button>
     </div>
   );
