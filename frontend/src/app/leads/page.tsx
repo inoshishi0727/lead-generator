@@ -308,6 +308,7 @@ export default function LeadsPage() {
           </span>
           <AssignLeadsDialog
             leadIds={selectedLeadIds}
+            leads={leads}
             onDone={() => setSelectedLeadIds([])}
           />
         </div>
