@@ -206,6 +206,14 @@ export async function getOutreachMessages(filters?: {
       has_reply: data.has_reply || false,
       reply_count: data.reply_count || 0,
       sent_at: data.sent_at || null,
+      email_message_id: data.email_message_id || undefined,
+      opened: data.opened || false,
+      opened_at: data.opened_at || null,
+      open_count: data.open_count || 0,
+      last_opened_at: data.last_opened_at || null,
+      delivered: data.delivered || false,
+      delivered_at: data.delivered_at || null,
+      parent_email_message_id: data.parent_email_message_id || null,
     };
   });
 

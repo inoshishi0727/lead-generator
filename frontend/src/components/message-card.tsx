@@ -17,6 +17,8 @@ import {
   User,
   MoreVertical,
   Trash2,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 import { EditMessageDialog } from "@/components/edit-message-dialog";
 import { RegenerateCompareDialog } from "@/components/regenerate-compare-dialog";
@@ -297,6 +299,35 @@ export function MessageCard({ message }: Props) {
             </span>
           )}
         </div>
+
+        {/* Email tracking stats — sent messages only */}
+        {message.status === "sent" && (
+          <div className="flex items-center gap-4 text-xs">
+            <div className={`flex items-center gap-1 ${message.opened ? "text-emerald-400" : "text-muted-foreground/50"}`}>
+              {message.opened ? <Eye className="h-3 w-3" /> : <EyeOff className="h-3 w-3" />}
+              <span>{message.opened ? `Opened ${message.open_count || 1}x` : "Not opened"}</span>
+            </div>
+            {message.last_opened_at && (
+              <div className="flex items-center gap-1 text-muted-foreground">
+                <Clock className="h-3 w-3" />
+                <span>Last {formatDate(message.last_opened_at)}</span>
+              </div>
+            )}
+            {message.delivered && (
+              <span className="text-muted-foreground/60">Delivered</span>
+            )}
+          </div>
+        )}
+
+        {/* Follow-up context header */}
+        {message.step_number > 1 && (
+          <div className="rounded-md bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+            Follow-up #{message.step_number - 1}
+            {message.follow_up_label && (
+              <span className="ml-1 capitalize">({message.follow_up_label.replace(/_/g, " ")})</span>
+            )}
+          </div>
+        )}
 
         {/* Context row */}
         {(message.contact_name || message.context_notes || message.recipient_email || message.website) && (

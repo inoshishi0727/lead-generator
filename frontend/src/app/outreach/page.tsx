@@ -26,8 +26,9 @@ import {
 } from "@/hooks/use-outreach";
 import { getOutreachMessages } from "@/lib/firestore-api";
 import { EditReflectionBanner } from "@/components/edit-reflection-banner";
+import { ThreadCard } from "@/components/thread-card";
 
-const STATUS_FILTERS = ["draft", "approved", "sent", "replied", "rejected", "follow-ups", "all"] as const;
+const STATUS_FILTERS = ["threads", "draft", "approved", "sent", "replied", "rejected", "follow-ups", "all"] as const;
 
 const CATEGORY_OPTIONS = [
   { value: "", label: "All Categories" },
@@ -55,12 +56,12 @@ const CATEGORY_OPTIONS = [
 
 export default function OutreachPage() {
   const { isAdmin } = useAuth();
-  const [statusFilter, setStatusFilter] = useState<string>("draft");
+  const [statusFilter, setStatusFilter] = useState<string>("threads");
   const [categoryFilter, setCategoryFilter] = useState<string>("");
   const [showSendWarning, setShowSendWarning] = useState(false);
 
   // "replied" is a client-side filter (has_reply), not a Firestore status
-  const firestoreFilter = statusFilter === "all" || statusFilter === "replied"
+  const firestoreFilter = statusFilter === "all" || statusFilter === "replied" || statusFilter === "threads"
     ? undefined
     : (statusFilter === "follow-ups" ? undefined : { status: statusFilter });
 
@@ -328,6 +329,41 @@ export default function OutreachPage() {
             <p className="text-sm text-muted-foreground">
               No messages yet. Generate drafts for your scored leads to get started.
             </p>
+          </div>
+        ) : statusFilter === "threads" ? (
+          <div className="space-y-3">
+            {(() => {
+              // Group messages by lead_id
+              const threads = new Map<string, { businessName: string; messages: typeof allMessages }>();
+              for (const msg of allMessages) {
+                const existing = threads.get(msg.lead_id);
+                if (existing) {
+                  existing.messages.push(msg);
+                } else {
+                  threads.set(msg.lead_id, { businessName: msg.business_name, messages: [msg] });
+                }
+              }
+              // Sort threads by latest activity
+              const sorted = [...threads.entries()].sort((a, b) => {
+                const latestA = a[1].messages.reduce((max, m) => {
+                  const t = m.sent_at || m.created_at || "";
+                  return t > max ? t : max;
+                }, "");
+                const latestB = b[1].messages.reduce((max, m) => {
+                  const t = m.sent_at || m.created_at || "";
+                  return t > max ? t : max;
+                }, "");
+                return latestB.localeCompare(latestA);
+              });
+              return sorted.map(([leadId, { businessName, messages: msgs }]) => (
+                <ThreadCard
+                  key={leadId}
+                  leadId={leadId}
+                  businessName={businessName}
+                  messages={msgs}
+                />
+              ));
+            })()}
           </div>
         ) : (
           <div className="space-y-4">
