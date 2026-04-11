@@ -7,7 +7,7 @@ export interface LeadFilters {
   source?: string;
   stage?: string;
   search?: string;
-  assignedTo?: string | null;
+  assignedTo?: string;
 }
 
 export function useLeads(filters?: LeadFilters) {

@@ -7,6 +7,7 @@ import { useLeads, useEnrichLeads } from "@/hooks/use-leads";
 import { QuickAddLeadDialog } from "@/components/quick-add-lead-dialog";
 import { SearchQueryManager } from "@/components/search-query-manager";
 import { AssignLeadsDialog } from "@/components/assign-leads-dialog";
+import { AssignRandomButton } from "@/components/assign-random-button";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/lib/auth-context";
@@ -61,11 +62,11 @@ export default function LeadsPage() {
   const firestoreStage = stage === "pending_enrichment" ? undefined : stage;
   const firestoreSource = source === "manual" ? undefined : source;
 
-  // Member auto-scopes to own leads; admin can optionally filter by member
+  // Member auto-scopes to own leads; admin uses client-side filter for unassigned
   const effectiveAssignedTo = isMember
     ? user?.uid
     : assignedToFilter === "__unassigned__"
-      ? null
+      ? undefined  // fetch all, filter client-side
       : assignedToFilter || undefined;
 
   const { data: rawLeads, isLoading } = useLeads({
@@ -126,8 +127,9 @@ export default function LeadsPage() {
     if (category) filtered = filtered.filter((l) => (l.venue_category || l.category) === category);
     if (fit) filtered = filtered.filter((l) => l.menu_fit === fit);
     if (postcode) filtered = filtered.filter((l) => getDistrict(l.location_postcode) === postcode);
+    if (assignedToFilter === "__unassigned__") filtered = filtered.filter((l) => !l.assigned_to);
     return filtered;
-  }, [allLeads, source, stage, emailOnly, category, fit, postcode]);
+  }, [allLeads, source, stage, emailOnly, category, fit, postcode, assignedToFilter]);
 
   const total = leads.length;
   const totalRaw = allLeads.length;
@@ -309,6 +311,10 @@ export default function LeadsPage() {
             onDone={() => setSelectedLeadIds([])}
           />
         </div>
+      )}
+
+      {isAdmin && teamMembers.length > 1 && (
+        <AssignRandomButton leads={leads} onDone={() => setSelectedLeadIds([])} />
       )}
 
       <div data-tour="leads-table">
