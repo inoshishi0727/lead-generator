@@ -54,9 +54,10 @@ export function determineFollowUpAction(messages, now) {
     return { action: "complete", reason: "sequence_exhausted", newStage: "no_response" };
   }
 
-  // Check if draft already exists for next step
+  // Check if draft, planned, or approved already exists for next step
   const existingDraft = messages.find(
-    (m) => m.step_number === nextStepNumber && (m.status === "draft" || m.status === "approved")
+    (m) => m.step_number === nextStepNumber &&
+      (m.status === "draft" || m.status === "approved" || m.status === "planned")
   );
   if (existingDraft) {
     return { action: "skip", reason: "draft_exists" };

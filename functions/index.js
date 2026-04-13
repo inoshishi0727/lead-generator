@@ -158,11 +158,12 @@ One line about English vermouth as a concept — don't explain, just intrigue.
 Coming from Rob as co-founder changes the dynamic. Lean into it: "My brother and I make English vermouth in South London."`,
 
   2: `STEP 2 — 1st Follow Up (The Value Touch). Under 100 words. New subject line (NOT "Re:").
-Angle: Social proof, data, or education. Rotate based on what's relevant:
-- "We just got listed at [notable venue] — their bar manager said it's changed their Negroni"
-- Share a vermouth trend stat or aperitivo insight they might find interesting
-- Reference a seasonal opportunity: "Summer menus are being built right now — English vermouth in a Spritz is turning heads"
-- Drop a specific stockist name they'll respect
+Angle: Social proof, data, or seasonal opportunity. Choose whichever is most relevant:
+- Social proof: "We just got listed at [notable venue] — their bar manager said it's changed their Negroni"
+- Data or trend: Share a vermouth trend stat or aperitivo insight they'd find interesting
+- Seasonal opportunity: Use the SEASON and Seasonal hook provided above. Lead with that moment — "Summer menus are being built right now — English vermouth in a Spritz is turning heads"
+- Credibility: Drop a specific stockist name they'll respect
+Prefer the seasonal angle when the hook is strong and timely.
 Do NOT re-introduce who we are. The reader should already know from the initial email.
 Restate CTA briefly: "Happy to send samples. Let me know."`,
 
@@ -1205,6 +1206,7 @@ export const sendApproved = functions
     let failed = 0;
 
     for (const msg of toSend) {
+      let sendFailed = false; // Track if actual send failed vs pre-send error (Bug #14)
       try {
         // Get lead to find recipient email
         const leadSnap = await db.collection("leads").doc(msg.lead_id).get();
@@ -1242,28 +1244,31 @@ export const sendApproved = functions
             sendHeaders["References"] = inboundReplies[0].rfc_message_id;
             console.log("Threading follow-up (via inbound reply) for", lead.business_name, "with", inboundReplies[0].rfc_message_id);
           } else {
-            // Strategy 2: No replies yet — use Resend API ID as Message-ID
-            let parentMsgId = msg.parent_email_message_id;
-            if (!parentMsgId) {
-              const parentSnap = await db.collection("outreach_messages")
-                .where("lead_id", "==", msg.lead_id)
-                .where("step_number", "==", 1)
-                .where("status", "==", "sent")
-                .limit(1)
-                .get();
-              if (!parentSnap.empty) {
-                parentMsgId = parentSnap.docs[0].data().email_message_id;
-              }
-            }
-            if (parentMsgId) {
-              const rfc = parentMsgId.includes("@") ? `<${parentMsgId}>` : `<${parentMsgId}@resend.dev>`;
-              sendHeaders["In-Reply-To"] = rfc;
-              sendHeaders["References"] = rfc;
-              console.log("Threading follow-up (via parent ID) for", lead.business_name, "with", rfc);
+            // Strategy 2: No replies yet — build References chain from all prior sent messages (Bug #9)
+            const priorMessagesSnap = await db.collection("outreach_messages")
+              .where("lead_id", "==", msg.lead_id)
+              .where("status", "==", "sent")
+              .get();
+            const priorMessages = priorMessagesSnap.docs
+              .map((d) => d.data())
+              .filter((m) => m.email_message_id && (m.step_number ?? 1) < (msg.step_number ?? 1))
+              .sort((a, b) => (a.step_number ?? 1) - (b.step_number ?? 1));
+
+            if (priorMessages.length > 0) {
+              const rfcChain = priorMessages
+                .map((m) => m.email_message_id.includes("@") ? `<${m.email_message_id}>` : `<${m.email_message_id}@resend.dev>`)
+                .join(" ");
+              const lastMessageId = priorMessages[priorMessages.length - 1].email_message_id;
+              const lastRfc = lastMessageId.includes("@") ? `<${lastMessageId}>` : `<${lastMessageId}@resend.dev>`;
+              sendHeaders["In-Reply-To"] = lastRfc;
+              sendHeaders["References"] = rfcChain;
+              console.log("Threading follow-up (via chain) for", lead.business_name, "with", rfcChain);
             }
           }
         }
 
+        // Mark that we're about to send, so errors after this are actual send failures (Bug #14)
+        sendFailed = true;
         const { data: resendData, error } = await resend.emails.send({
           from: `${SENDER_NAME} <${SENDER_EMAIL}>`,
           to: toEmail,
@@ -1284,17 +1289,70 @@ export const sendApproved = functions
           email_message_id: resendData?.id ?? null,
         });
 
+        // Set the correct stage based on step number
+        const sentStepNumber = msg.step_number ?? 1;
+        const newLeadStage = sentStepNumber === 1 ? "sent"
+          : sentStepNumber === 2 ? "follow_up_1"
+          : "follow_up_2";
         await db.collection("leads").doc(msg.lead_id).update({
-          stage: "sent",
+          stage: newLeadStage,
         });
+
+        // Create a planned card for the next step (guard against duplicates)
+        const nextStep = sentStepNumber + 1;
+        if (nextStep <= 4) {
+          const existingNextStep = await db.collection("outreach_messages")
+            .where("lead_id", "==", msg.lead_id)
+            .where("step_number", "==", nextStep)
+            .where("status", "in", ["planned", "draft", "approved", "sent"])
+            .limit(1)
+            .get();
+          if (!existingNextStep.empty) {
+            console.log(`Planned card for step ${nextStep} already exists for ${lead.business_name}, skipping`);
+          } else {
+          const sentDate = new Date(now);
+          const scheduledDate = new Date(sentDate);
+          scheduledDate.setDate(scheduledDate.getDate() + FOLLOW_UP_GAP_DAYS[nextStep]);
+          const scheduledSendDate = scheduledDate.toISOString().split("T")[0];
+          const plannedId = crypto.randomUUID();
+          await db.collection("outreach_messages").doc(plannedId).set({
+            id: plannedId,
+            lead_id: msg.lead_id,
+            business_name: msg.business_name,
+            venue_category: msg.venue_category || null,
+            channel: "email",
+            subject: null,
+            content: "",
+            status: "planned",
+            step_number: nextStep,
+            follow_up_label: FOLLOW_UP_LABELS[nextStep],
+            scheduled_send_date: scheduledSendDate,
+            created_at: new Date().toISOString(),
+            tone_tier: msg.tone_tier || null,
+            lead_products: msg.lead_products || [],
+            contact_name: msg.contact_name || null,
+            context_notes: msg.context_notes || null,
+            menu_fit: msg.menu_fit || null,
+            recipient_email: msg.recipient_email || lead.email || lead.contact_email || null,
+            website: msg.website || null,
+            workspace_id: msg.workspace_id || "",
+            assigned_to: msg.assigned_to || null,
+            was_edited: false,
+            parent_email_message_id: resendData?.id ?? null,
+          });
+          }
+        }
 
         sent++;
         console.log("Sent to", toEmail, "for", lead.business_name);
       } catch (err) {
         console.error("Send failed for", msg.id, err.message);
-        await db.collection("outreach_messages").doc(msg.id).update({
-          status: "bounced",
-        });
+        // Only mark bounced if the send itself failed, not pre-send validation (Bug #14)
+        if (sendFailed) {
+          await db.collection("outreach_messages").doc(msg.id).update({
+            status: "bounced",
+          });
+        }
         failed++;
       }
     }
@@ -1858,6 +1916,17 @@ export const processInboundEmail = functions
         }
 
         await db.collection("leads").doc(matchedLead.id).update(leadUpdate);
+
+        // Delete any pending planned follow-up card for this lead
+        const plannedSnap = await db.collection("outreach_messages")
+          .where("lead_id", "==", matchedLead.id)
+          .where("status", "==", "planned")
+          .get();
+        if (!plannedSnap.empty) {
+          const batch = db.batch();
+          plannedSnap.docs.forEach((d) => batch.delete(d.ref));
+          await batch.commit();
+        }
       }
 
       // Update message if matched
@@ -1943,6 +2012,17 @@ export const logReply = functions
       reply_count: FieldValue.increment(1),
       outcome: lead.outcome || "ongoing",
     });
+
+    // Delete any pending planned follow-up card for this lead
+    const plannedSnap = await db.collection("outreach_messages")
+      .where("lead_id", "==", lead_id)
+      .where("status", "==", "planned")
+      .get();
+    if (!plannedSnap.empty) {
+      const batch = db.batch();
+      plannedSnap.docs.forEach((d) => batch.delete(d.ref));
+      await batch.commit();
+    }
 
     if (message_id) {
       const msgSnap = await db.collection("outreach_messages").doc(message_id).get();
@@ -2043,6 +2123,17 @@ export const assignReplyToLead = functions
       outcome: lead.outcome || "ongoing",
     });
 
+    // Delete any pending planned follow-up card for this lead
+    const plannedSnap = await db.collection("outreach_messages")
+      .where("lead_id", "==", lead_id)
+      .where("status", "==", "planned")
+      .get();
+    if (!plannedSnap.empty) {
+      const batch = db.batch();
+      plannedSnap.docs.forEach((d) => batch.delete(d.ref));
+      await batch.commit();
+    }
+
     if (matchedMessageId) {
       await db.collection("outreach_messages").doc(matchedMessageId).update({
         has_reply: true,
@@ -2058,6 +2149,9 @@ export const assignReplyToLead = functions
 /**
  * Core follow-up generation logic, shared by the callable and the scheduled trigger.
  * Returns { generated, skipped, failed, total }.
+ *
+ * New approach: prioritize filling existing "planned" cards with content.
+ * Fallback: create planned cards for legacy leads that don't have them yet.
  */
 async function runFollowUpGeneration() {
   const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -2067,20 +2161,12 @@ async function runFollowUpGeneration() {
 
   const anthropic = new Anthropic({ apiKey });
 
-  // 1. Find all leads in follow-up eligible stages
-  const eligibleStages = ["sent", "follow_up_1", "follow_up_2"];
-  const leadsSnap = await db.collection("leads").get();
-  const allLeads = leadsSnap.docs
-    .map((d) => ({ id: d.id, ...d.data() }))
-    .filter((d) => eligibleStages.includes(d.stage));
-
-  if (allLeads.length === 0) {
-    return { generated: 0, skipped: 0, failed: 0, total: 0 };
-  }
-
-  // 2. Get all outreach messages and inbound replies for these leads
+  // Fetch all data upfront
   const msgsSnap = await db.collection("outreach_messages").get();
   const allMessages = msgsSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+
+  const leadsSnap = await db.collection("leads").get();
+  const allLeads = leadsSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
 
   const repliesSnap = await db.collection("inbound_replies")
     .where("matched", "==", true)
@@ -2090,25 +2176,148 @@ async function runFollowUpGeneration() {
   );
 
   const now = new Date();
+  const tomorrowDate = new Date(now);
+  tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+  const tomorrowStr = tomorrowDate.toISOString().split("T")[0];
+
   let generated = 0;
   let skipped = 0;
   let failed = 0;
+  let total = 0;
 
-  for (const lead of allLeads) {
+  // ---- STEP 1: Fill existing planned cards ----
+  const plannedDocs = allMessages.filter((m) => m.status === "planned");
+
+  for (const plannedDoc of plannedDocs) {
+    total++;
     try {
-      // STOP CHECKS using extracted logic
+      const lead = allLeads.find((l) => l.id === plannedDoc.lead_id);
+      if (!lead) {
+        console.log(`SKIP [${plannedDoc.business_name}]: lead not found`);
+        skipped++;
+        continue;
+      }
+
+      // Check if this planned card is ready to fill (scheduled_send_date <= tomorrow)
+      if (!plannedDoc.scheduled_send_date || plannedDoc.scheduled_send_date > tomorrowStr) {
+        console.log(`SKIP [${plannedDoc.business_name}]: planned card not due yet (${plannedDoc.scheduled_send_date})`);
+        skipped++;
+        continue;
+      }
+
+      // Run skip checks
+      const skipReason = shouldSkipLead(lead, leadsWithReplies.has(lead.id));
+      if (skipReason) {
+        console.log(`SKIP [${plannedDoc.business_name}]: ${skipReason}`);
+        skipped++;
+        continue;
+      }
+
+      // Lock for concurrency: use transaction to atomically check status="planned" then set to "generating" (Bug #10)
+      const locked = await db.runTransaction(async (transaction) => {
+        const docSnap = await transaction.get(db.collection("outreach_messages").doc(plannedDoc.id));
+        if (!docSnap.exists || docSnap.data().status !== "planned") {
+          return false; // Already being processed or status changed
+        }
+        transaction.update(db.collection("outreach_messages").doc(plannedDoc.id), { status: "generating" });
+        return true;
+      }).catch(() => false);
+
+      if (!locked) {
+        console.log(`SKIP [${plannedDoc.business_name}]: being processed by another instance`);
+        skipped++;
+        continue;
+      }
+
+      // Find previous subject and message ID for email threading
+      const leadMessages = allMessages.filter((m) => m.lead_id === lead.id);
+      const sentMessages = leadMessages.filter((m) => m.status === "sent").sort((a, b) => (a.step_number ?? 1) - (b.step_number ?? 1));
+      const initialMessage = sentMessages[0]; // First sent message (step 1)
+      const lastSent = sentMessages[sentMessages.length - 1]; // Last sent message
+      const previousSubject = initialMessage?.subject || lastSent?.subject || "";
+      // Bug #9: Build References chain from all prior sent messages
+      const allPriorMessageIds = sentMessages.map((m) => m.email_message_id).filter(Boolean);
+      const parentEmailMessageId = initialMessage?.email_message_id || null;
+
+      // Generate the follow-up content
+      const enrichment = lead.enrichment || {};
+      const venueCat = enrichment.venue_category || lead.category || "cocktail_bar";
+      const toneTier = enrichment.tone_tier || "bartender_casual";
+      const prompt = buildPrompt(lead, enrichment, plannedDoc.step_number, previousSubject);
+
+      const feedbackBlock = await getEditFeedback(venueCat, toneTier);
+      const systemPrompt = feedbackBlock
+        ? EMAIL_SYSTEM_PROMPT + feedbackBlock
+        : EMAIL_SYSTEM_PROMPT;
+
+      const response = await anthropic.messages.create({
+        model: CLAUDE_MODEL,
+        max_tokens: 1024,
+        system: systemPrompt,
+        messages: [{ role: "user", content: prompt }],
+      });
+
+      let content = response.content[0].text || "";
+      let subject = null;
+
+      if (content.includes("Subject:")) {
+        const lines = content.split("\n");
+        for (let i = 0; i < lines.length; i++) {
+          if (lines[i].trim().startsWith("Subject:")) {
+            subject = lines[i].trim().replace("Subject:", "").trim();
+            content = lines.slice(i + 1).join("\n").trim();
+            break;
+          }
+        }
+      }
+
+      // Update the planned doc: status -> draft, fill content/subject
+      await db.collection("outreach_messages").doc(plannedDoc.id).update({
+        status: "draft",
+        content,
+        subject,
+        original_content: content,
+        original_subject: subject,
+      });
+
+      // Update lead stage if needed (follow_up_1 for step 2, follow_up_2 for step 3+)
+      const newStage = plannedDoc.step_number === 2 ? "follow_up_1"
+        : plannedDoc.step_number >= 3 ? "follow_up_2"
+        : null;
+      if (newStage && newStage !== lead.stage) {
+        await db.collection("leads").doc(lead.id).update({ stage: newStage });
+      }
+
+      console.log(`GENERATE [${lead.business_name}]: step ${plannedDoc.step_number} (${plannedDoc.follow_up_label}), send on ${plannedDoc.scheduled_send_date}`);
+      generated++;
+    } catch (err) {
+      console.error("Follow-up draft failed for", plannedDoc.business_name, err.message);
+      // Unlock by setting status back to "planned" for retry
+      await db.collection("outreach_messages").doc(plannedDoc.id).update({
+        status: "planned",
+      }).catch(() => null);
+      failed++;
+    }
+  }
+
+  // ---- STEP 2: Backward-compat fallback for legacy leads ----
+  const eligibleStages = ["sent", "follow_up_1", "follow_up_2"];
+  const legacyLeads = allLeads.filter((l) => {
+    // Only process leads that don't already have a planned card
+    const hasPlannedCard = plannedDocs.some((p) => p.lead_id === l.id);
+    return !hasPlannedCard && eligibleStages.includes(l.stage);
+  });
+
+  for (const lead of legacyLeads) {
+    try {
       const skipReason = shouldSkipLead(lead, leadsWithReplies.has(lead.id));
       if (skipReason) {
         console.log(`SKIP [${lead.business_name}]: ${skipReason}`);
-        skipped++; continue;
+        skipped++;
+        continue;
       }
 
-      // Find messages for this lead
-      const leadMessages = allMessages
-        .filter((m) => m.lead_id === lead.id)
-        .sort((a, b) => (b.sent_at || b.created_at || "").localeCompare(a.sent_at || a.created_at || ""));
-
-      // Use extracted logic to determine action
+      const leadMessages = allMessages.filter((m) => m.lead_id === lead.id);
       const result = determineFollowUpAction(leadMessages, now);
 
       if (result.action === "complete") {
@@ -2120,18 +2329,20 @@ async function runFollowUpGeneration() {
 
       if (result.action === "skip") {
         console.log(`SKIP [${lead.business_name}]: ${result.reason}`);
-        skipped++; continue;
+        skipped++;
+        continue;
       }
-
-      console.log(`GENERATE [${lead.business_name}]: step ${result.nextStepNumber} (${result.followUpLabel}), send on ${result.scheduledSendDate}`);
 
       const { nextStepNumber, followUpLabel, scheduledSendDate } = result;
 
       // Find previous subject and message ID for email threading
-      const initialMessage = leadMessages.find((m) => m.step_number === 1 && m.status === "sent");
-      const lastSent = leadMessages.find((m) => m.status === "sent");
+      const sentMessages2 = leadMessages.filter((m) => m.status === "sent").sort((a, b) => (a.step_number ?? 1) - (b.step_number ?? 1));
+      const initialMessage = sentMessages2[0]; // First sent message (step 1)
+      const lastSent = sentMessages2[sentMessages2.length - 1]; // Last sent message
       const previousSubject = initialMessage?.subject || lastSent?.subject || "";
-      const parentEmailMessageId = initialMessage?.email_message_id || lastSent?.email_message_id || null;
+      // Bug #9: Build References chain from all prior sent messages
+      const allPriorMessageIds2 = sentMessages2.map((m) => m.email_message_id).filter(Boolean);
+      const parentEmailMessageId = initialMessage?.email_message_id || null;
 
       // Generate the follow-up draft
       const enrichment = lead.enrichment || {};
@@ -2200,14 +2411,17 @@ async function runFollowUpGeneration() {
         await db.collection("leads").doc(lead.id).update({ stage: result.newStage });
       }
 
+      console.log(`GENERATE [${lead.business_name}]: step ${nextStepNumber} (${followUpLabel}), send on ${scheduledSendDate}`);
+      total++;
       generated++;
     } catch (err) {
       console.error("Follow-up draft failed for", lead.business_name, err.message);
+      total++;
       failed++;
     }
   }
 
-  return { generated, skipped, failed, total: allLeads.length };
+  return { generated, skipped, failed, total };
 }
 
 /**
@@ -2244,6 +2458,299 @@ export const scheduledFollowups = functions
     const result = await runFollowUpGeneration();
     console.log("Scheduled follow-up generation:", JSON.stringify(result));
     return null;
+  });
+
+/**
+ * Scheduled trigger — runs Tue-Thu at 9am London time.
+ * Automatically sends approved follow-up emails (step 2+) whose scheduled_send_date is due.
+ * Respects blackout days, the daily cap, and only processes follow-up messages.
+ */
+export const scheduledSendFollowups = functions
+  .runWith({ timeoutSeconds: 540, memory: "512MB", secrets: ["RESEND_API_KEY"] })
+  .pubsub.schedule("0 9 * * 2-4")
+  .timeZone("Europe/London")
+  .onRun(async () => {
+    const now = new Date();
+    const london = new Date(now.toLocaleString("en-US", { timeZone: "Europe/London" }));
+
+    // Skip blackout days (bank holidays, Dec 24 - Jan 3)
+    if (isBlackoutDay(london)) {
+      console.log("Scheduled follow-up send skipped: blackout day");
+      return null;
+    }
+
+    const apiKey = process.env.RESEND_API_KEY;
+    if (!apiKey) {
+      console.error("RESEND_API_KEY not configured");
+      return null;
+    }
+
+    const todayStr = london.toISOString().split("T")[0];
+
+    // Daily cap check (shared with manual sends)
+    // Compute London midnight in UTC from london date components
+    const todayMidnight = new Date(Date.UTC(london.getFullYear(), london.getMonth(), london.getDate()));
+    const sentTodaySnap = await db.collection("outreach_messages")
+      .where("status", "==", "sent")
+      .where("sent_at", ">=", todayMidnight.toISOString())
+      .get();
+
+    if (sentTodaySnap.size >= DAILY_CAP) {
+      console.log(`Scheduled follow-up send skipped: daily cap of ${DAILY_CAP} reached`);
+      return null;
+    }
+
+    const remaining = DAILY_CAP - sentTodaySnap.size;
+
+    // Find approved follow-up messages (step 2+) that are due to send today
+    const approvedSnap = await db.collection("outreach_messages")
+      .where("status", "==", "approved")
+      .where("channel", "==", "email")
+      .get();
+
+    const dueMessages = approvedSnap.docs
+      .map((d) => ({ id: d.id, ...d.data() }))
+      .filter((m) => (m.step_number ?? 1) > 1 && m.scheduled_send_date && m.scheduled_send_date <= todayStr)
+      .slice(0, remaining);
+
+    if (!dueMessages.length) {
+      console.log("Scheduled follow-up send: no due messages");
+      return null;
+    }
+
+    const resend = new Resend(apiKey);
+    let sent = 0;
+    let failed = 0;
+
+    for (const msg of dueMessages) {
+      try {
+        const leadSnap = await db.collection("leads").doc(msg.lead_id).get();
+        if (!leadSnap.exists) { failed++; continue; }
+
+        const lead = leadSnap.data();
+        const toEmail = lead.contact_email || lead.email;
+        if (!toEmail) {
+          console.error("No email for lead", msg.lead_id, lead.business_name);
+          failed++;
+          continue;
+        }
+
+        const replyToAddress = `reply+${msg.lead_id}@${REPLY_DOMAIN}`;
+
+        // Thread as a reply in the same conversation
+        const sendHeaders = {};
+        const repliesSnap = await db.collection("inbound_replies")
+          .where("lead_id", "==", msg.lead_id)
+          .get();
+        const inboundReplies = repliesSnap.docs
+          .map((d) => d.data())
+          .filter((d) => d.direction !== "outbound" && d.rfc_message_id)
+          .sort((a, b) => (b.created_at > a.created_at ? 1 : -1));
+
+        if (inboundReplies.length > 0) {
+          sendHeaders["In-Reply-To"] = inboundReplies[0].rfc_message_id;
+          sendHeaders["References"] = inboundReplies[0].rfc_message_id;
+        } else {
+          // Build References chain from all prior sent messages (Bug #9)
+          const priorMessagesSnap = await db.collection("outreach_messages")
+            .where("lead_id", "==", msg.lead_id)
+            .where("status", "==", "sent")
+            .get();
+          const priorMessages = priorMessagesSnap.docs
+            .map((d) => d.data())
+            .filter((m) => m.email_message_id && (m.step_number ?? 1) < (msg.step_number ?? 1))
+            .sort((a, b) => (a.step_number ?? 1) - (b.step_number ?? 1));
+
+          if (priorMessages.length > 0) {
+            const rfcChain = priorMessages
+              .map((m) => m.email_message_id.includes("@") ? `<${m.email_message_id}>` : `<${m.email_message_id}@resend.dev>`)
+              .join(" ");
+            const lastMessageId = priorMessages[priorMessages.length - 1].email_message_id;
+            const lastRfc = lastMessageId.includes("@") ? `<${lastMessageId}>` : `<${lastMessageId}@resend.dev>`;
+            sendHeaders["In-Reply-To"] = lastRfc;
+            sendHeaders["References"] = rfcChain;
+          }
+        }
+
+        const { data: resendData, error } = await resend.emails.send({
+          from: `${SENDER_NAME} <${SENDER_EMAIL}>`,
+          to: toEmail,
+          replyTo: replyToAddress,
+          subject: msg.subject || "Asterley Bros",
+          text: msg.content,
+          html: buildHtmlEmail(msg.content),
+          ...(Object.keys(sendHeaders).length > 0 ? { headers: sendHeaders } : {}),
+        });
+
+        if (error) throw new Error(error.message);
+
+        const sentAt = new Date().toISOString();
+        await db.collection("outreach_messages").doc(msg.id).update({
+          status: "sent",
+          sent_at: sentAt,
+          reply_to_address: replyToAddress,
+          email_message_id: resendData?.id ?? null,
+        });
+
+        // Update lead stage based on which step was just sent
+        const sentStepNumber = msg.step_number ?? 1;
+        const newLeadStage = sentStepNumber === 1 ? "sent"
+          : sentStepNumber === 2 ? "follow_up_1"
+          : "follow_up_2";
+        await db.collection("leads").doc(msg.lead_id).update({ stage: newLeadStage });
+
+        // Create planned card for the next step
+        const nextStep = sentStepNumber + 1;
+        if (nextStep <= 4) {
+          // Check if a card already exists for this step
+          const existingNextStep = await db.collection("outreach_messages")
+            .where("lead_id", "==", msg.lead_id)
+            .where("step_number", "==", nextStep)
+            .where("status", "in", ["planned", "draft", "approved", "sent"])
+            .limit(1)
+            .get();
+
+          if (!existingNextStep.empty) {
+            console.log(`Planned card for step ${nextStep} already exists for lead ${msg.lead_id}`);
+          } else {
+            const scheduledDate = new Date(sentAt);
+            scheduledDate.setDate(scheduledDate.getDate() + FOLLOW_UP_GAP_DAYS[nextStep]);
+            const scheduledSendDate = scheduledDate.toISOString().split("T")[0];
+            const plannedId = crypto.randomUUID();
+            await db.collection("outreach_messages").doc(plannedId).set({
+              id: plannedId,
+              lead_id: msg.lead_id,
+              business_name: msg.business_name,
+              venue_category: msg.venue_category || null,
+              channel: "email",
+              subject: null,
+              content: "",
+              status: "planned",
+              step_number: nextStep,
+              follow_up_label: FOLLOW_UP_LABELS[nextStep],
+              scheduled_send_date: scheduledSendDate,
+              created_at: new Date().toISOString(),
+              tone_tier: msg.tone_tier || null,
+              lead_products: msg.lead_products || [],
+              contact_name: msg.contact_name || null,
+              context_notes: msg.context_notes || null,
+              menu_fit: msg.menu_fit || null,
+              recipient_email: toEmail,
+              website: msg.website || null,
+              workspace_id: msg.workspace_id || "",
+              assigned_to: msg.assigned_to || null,
+              was_edited: false,
+              parent_email_message_id: resendData?.id ?? null,
+            });
+          }
+        }
+
+        console.log(`Sent follow-up step ${msg.step_number} to ${lead.business_name} (${toEmail})`);
+        sent++;
+      } catch (err) {
+        console.error("Failed to send follow-up for", msg.lead_id, err.message);
+        failed++;
+      }
+    }
+
+    console.log("Scheduled follow-up send complete:", JSON.stringify({ sent, failed, total: dueMessages.length }));
+    return null;
+  });
+
+/**
+ * One-time migration — callable from admin UI.
+ * Creates planned cards for existing sent emails that don't have a next-step card yet.
+ * Safe to run multiple times (idempotent via duplicate check).
+ */
+export const backfillPlannedCards = functions
+  .runWith({ timeoutSeconds: 540, memory: "512MB" })
+  .https.onCall(async (data, context) => {
+    if (!context.auth) throw new HttpsError("unauthenticated", "Must be signed in.");
+    const userSnap = await db.collection("users").doc(context.auth.uid).get();
+    if (!userSnap.exists || userSnap.data().role !== "admin") {
+      throw new HttpsError("permission-denied", "Admin only.");
+    }
+
+    // Fetch all messages and replies upfront
+    const msgsSnap = await db.collection("outreach_messages").get();
+    const allMessages = msgsSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+
+    const repliesSnap = await db.collection("inbound_replies")
+      .where("matched", "==", true)
+      .get();
+    const leadsWithReplies = new Set(
+      repliesSnap.docs.map((d) => d.data().lead_id).filter(Boolean)
+    );
+
+    const sentMessages = allMessages.filter(
+      (m) => m.status === "sent" && m.sent_at && (m.step_number ?? 1) < 4
+    );
+
+    let created = 0;
+    let skipped = 0;
+
+    for (const msg of sentMessages) {
+      const nextStep = (msg.step_number ?? 1) + 1;
+
+      // Skip if lead has replied
+      if (leadsWithReplies.has(msg.lead_id)) {
+        skipped++;
+        continue;
+      }
+
+      // Query Firestore for duplicate check (Bug #13) — don't rely on stale snapshot
+      const existingSnap = await db.collection("outreach_messages")
+        .where("lead_id", "==", msg.lead_id)
+        .where("step_number", "==", nextStep)
+        .where("status", "in", ["planned", "draft", "approved", "sent"])
+        .limit(1)
+        .get();
+      if (!existingSnap.empty) {
+        skipped++;
+        continue;
+      }
+
+      // Anchor timing to step 1, not the current message (Bug #7)
+      const leadMessages = allMessages.filter((m) => m.lead_id === msg.lead_id && m.status === "sent");
+      const initialMessage = leadMessages.find((m) => m.step_number === 1);
+      const referenceMessage = initialMessage || leadMessages[0];
+      const sentDate = new Date(referenceMessage?.sent_at || msg.sent_at);
+      const scheduledDate = new Date(sentDate);
+      scheduledDate.setDate(scheduledDate.getDate() + FOLLOW_UP_GAP_DAYS[nextStep]);
+      const scheduledSendDate = scheduledDate.toISOString().split("T")[0];
+
+      const plannedId = crypto.randomUUID();
+      await db.collection("outreach_messages").doc(plannedId).set({
+        id: plannedId,
+        lead_id: msg.lead_id,
+        business_name: msg.business_name,
+        venue_category: msg.venue_category || null,
+        channel: "email",
+        subject: null,
+        content: "",
+        status: "planned",
+        step_number: nextStep,
+        follow_up_label: FOLLOW_UP_LABELS[nextStep],
+        scheduled_send_date: scheduledSendDate,
+        created_at: new Date().toISOString(),
+        tone_tier: msg.tone_tier || null,
+        lead_products: msg.lead_products || [],
+        contact_name: msg.contact_name || null,
+        context_notes: msg.context_notes || null,
+        menu_fit: msg.menu_fit || null,
+        recipient_email: msg.recipient_email || null,
+        website: msg.website || null,
+        workspace_id: msg.workspace_id || "",
+        assigned_to: msg.assigned_to || null,
+        was_edited: false,
+        parent_email_message_id: msg.email_message_id || null,
+      });
+
+      created++;
+    }
+
+    console.log("Backfill planned cards complete:", JSON.stringify({ created, skipped, total: sentMessages.length }));
+    return { created, skipped, total: sentMessages.length };
   });
 
 // ── processEmailEvents: Resend webhook for open/delivery/bounce tracking ──
