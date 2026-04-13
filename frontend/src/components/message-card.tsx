@@ -105,7 +105,7 @@ export function MessageCard({ message, inConversation }: Props) {
   const deleteMutation = useDeleteMessage();
   const sendReplyMutation = useSendReply();
   const deleteReplyMutation = useDeleteReply();
-  const generateFollowupMutation = useGenerateFollowups();
+  const generateFollowupMutation = useGenerateFollowupForLead();
   const generatingLeadId = useGeneratingLeadId();
 
   // Fetch original email for follow-ups

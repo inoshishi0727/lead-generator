@@ -28,6 +28,8 @@ import {
 import { getOutreachMessages } from "@/lib/firestore-api";
 import { EditReflectionBanner } from "@/components/edit-reflection-banner";
 import { ThreadCard } from "@/components/thread-card";
+import { httpsCallable } from "firebase/functions";
+import { functions } from "@/lib/firebase";
 
 const STATUS_FILTERS = ["draft", "approved", "sent", "conversations", "rejected", "follow-ups", "all"] as const;
 
@@ -98,6 +100,22 @@ export default function OutreachPage() {
   const batchApproveMutation = useBatchApprove();
   const sendMutation = useSendApproved();
   const followupsMutation = useGenerateFollowups();
+  const [backfillLoading, setBackfillLoading] = useState(false);
+
+  async function handleBackfillPlannedCards() {
+    setBackfillLoading(true);
+    try {
+      const backfill = httpsCallable(functions, "backfillPlannedCards");
+      const result = await backfill({});
+      const data = result.data as any;
+      alert(`Backfill complete!\nCreated: ${data.created}\nSkipped: ${data.skipped}\nTotal: ${data.total}`);
+    } catch (err: any) {
+      alert(`Backfill failed: ${err.message}`);
+      console.error(err);
+    } finally {
+      setBackfillLoading(false);
+    }
+  }
 
   const filteredByStatus = statusFilter === "conversations"
     ? (messages ?? []).filter((m) => m.has_reply)
@@ -207,6 +225,20 @@ export default function OutreachPage() {
                 <Send className="mr-1.5 h-4 w-4" />
               )}
               Send Approved ({approvedCount})
+            </Button>
+          )}
+          {isAdmin && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleBackfillPlannedCards}
+              disabled={backfillLoading}
+              className="text-xs text-gray-500"
+            >
+              {backfillLoading ? (
+                <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+              ) : null}
+              Backfill Planned
             </Button>
           )}
         </div>
