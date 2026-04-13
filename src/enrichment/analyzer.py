@@ -3,10 +3,19 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 
 import structlog
 from google import genai
+from google.genai import errors as genai_errors
+from tenacity import (
+    before_sleep_log,
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 from src.config.loader import EnrichmentConfig
 from src.db.models import (
@@ -19,6 +28,24 @@ from src.db.models import (
 )
 
 log = structlog.get_logger()
+_stdlib_log = logging.getLogger(__name__)
+
+
+@retry(
+    stop=stop_after_attempt(4),
+    wait=wait_exponential(multiplier=2, min=2, max=30),
+    retry=retry_if_exception_type(genai_errors.ServerError),
+    before_sleep=before_sleep_log(_stdlib_log, logging.WARNING),
+    reraise=True,
+)
+def call_gemini_with_retry(client: genai.Client, **kwargs):
+    """Call Gemini generate_content with retry on transient server errors.
+
+    Retries up to 4 times with exponential backoff (2s → 4s → 8s → 16s, capped
+    at 30s) on ServerError (5xx — overloaded, unavailable, internal). Client
+    errors (4xx invalid prompts) raise immediately on the first attempt.
+    """
+    return client.models.generate_content(**kwargs)
 
 # Deterministic product mapping per venue category (from brand system prompt)
 CATEGORY_PRODUCTS: dict[VenueCategory, list[str]] = {
@@ -74,8 +101,8 @@ Return a JSON object with ALL of these fields:
   "why_asterley_fits": "MAX 20 words. Concrete reason. e.g. 'Already stocks Campari for Negronis — DISPENSE is a direct swap. Spritz menu would suit ASTERLEY ORIGINAL.'",
   "context_notes": "MAX 15 words. One specific hook for the email. e.g. 'Saw the Calvados Negroni on your Apéritif Hour menu.'",
   "tone_tier": one of ["bartender_casual", "warm_professional", "b2b_commercial", "corporate_formal"],
-  "contact_name": "owner or manager name if found, or null",
-  "contact_role": "their role (Owner, Bar Manager, Head Bartender, Buyer, etc.) or null",
+  "contact_name": "owner, founder, manager, head bartender, buyer, or chef if clearly identified as venue operations staff. NEVER use names from privacy policies, GDPR notices, cookie banners, or legal disclaimers. Return null if only compliance/legal/HR roles are found.",
+  "contact_role": "their role (Owner, Founder, Bar Manager, Head Bartender, Buyer, Chef, etc.) or null",
   "contact_confidence": one of ["verified", "likely", "uncertain", null],
   "opening_hours_summary": "brief summary of opening hours if found, e.g. 'Mon-Sat 5pm-midnight, closed Sun' or null",
   "price_tier": one of ["budget", "mid_range", "premium", "luxury", null],
@@ -88,6 +115,7 @@ CRITICAL RULES:
 - If the website doesn't mention drinks, cocktails, or a bar, say "No drinks programme visible on website" — do NOT invent one.
 - If you can't determine something, use null. Do NOT write "likely" or "probably" or "potentially".
 - Every claim must be traceable to specific text from the website.
+- contact_name MUST be a venue operator. Data Privacy Managers, DPOs, Compliance Officers, Legal Counsel, HR Managers, and anyone named only in a privacy policy or GDPR notice are NOT valid contacts — return null in that case.
 
 Business: {business_name}
 Google Maps category: {google_category}
@@ -147,7 +175,93 @@ def _parse_gemini_response(raw: str) -> dict | None:
         except json.JSONDecodeError:
             pass
 
-    return None
+    # Truncation-tolerant fallback: response was cut off mid-generation
+    # (hit max_output_tokens). Walk back to the last complete key-value pair,
+    # strip any dangling partial string/number, and close the braces.
+    return _parse_truncated_json(raw[start:])
+
+
+def _parse_truncated_json(partial: str) -> dict | None:
+    """Best-effort parse of a JSON object whose output was truncated.
+
+    Strategy: find the last comma or colon-value pair that is clearly complete,
+    cut there, close any open strings/brackets/braces, and attempt to parse.
+    """
+    if not partial or partial[0] != "{":
+        return None
+
+    # Walk forward tracking string state and bracket depth. Record the last
+    # position where we were outside a string and had just finished a value
+    # (i.e. just saw a `,` or a `}`/`]` that closed a nested container).
+    in_string = False
+    escape = False
+    stack: list[str] = []  # tracks '{' and '['
+    last_safe = -1  # position just after the last completed value
+
+    for i, ch in enumerate(partial):
+        if escape:
+            escape = False
+            continue
+        if ch == "\\" and in_string:
+            escape = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == "{" or ch == "[":
+            stack.append(ch)
+        elif ch == "}" or ch == "]":
+            if stack:
+                stack.pop()
+            # A closed nested container counts as a completed value
+            if len(stack) >= 1:
+                last_safe = i + 1
+        elif ch == "," and len(stack) == 1:
+            # Top-level comma in the outer object — everything before is safe
+            last_safe = i
+
+    if last_safe <= 0:
+        return None
+
+    # Truncate at the last safe point and close any still-open containers.
+    truncated = partial[:last_safe].rstrip().rstrip(",")
+    # Count open braces/brackets in the truncated prefix to close them
+    open_count = {"{": 0, "[": 0}
+    in_str = False
+    esc = False
+    for ch in truncated:
+        if esc:
+            esc = False
+            continue
+        if ch == "\\" and in_str:
+            esc = True
+            continue
+        if ch == '"':
+            in_str = not in_str
+            continue
+        if in_str:
+            continue
+        if ch == "{":
+            open_count["{"] += 1
+        elif ch == "}":
+            open_count["{"] -= 1
+        elif ch == "[":
+            open_count["["] += 1
+        elif ch == "]":
+            open_count["["] -= 1
+
+    closing = ""
+    # Close in reverse order — can't know exact nesting without tracking a stack,
+    # but for Gemini's flat-ish schema this works in practice. Prefer ] before }.
+    closing += "]" * max(0, open_count["["])
+    closing += "}" * max(0, open_count["{"])
+
+    try:
+        return json.loads(truncated + closing)
+    except json.JSONDecodeError:
+        return None
 
 
 def _safe_enum(enum_cls, value, default=None):
@@ -184,7 +298,8 @@ async def analyze_website(
 
     try:
         client = genai.Client()
-        response = client.models.generate_content(
+        response = call_gemini_with_retry(
+            client,
             model=config.gemini_model,
             contents=prompt,
             config={
