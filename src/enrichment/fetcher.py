@@ -33,6 +33,15 @@ IMAGE_MENU_PATTERNS = re.compile(
     re.IGNORECASE,
 )
 
+# Legal/privacy/compliance documents we never want to fetch.
+# Matches against URL path AND anchor text. Privacy PDFs were polluting the
+# contact field (e.g. "Data Privacy Manager" being picked up as the venue
+# contact) and allergen docs add noise without helping menu fit.
+EXCLUDED_DOC_PATTERN = re.compile(
+    r"privacy|gdpr|cookie|terms|t-?and-?c|legal|policy|disclaimer|imprint|allergen",
+    re.IGNORECASE,
+)
+
 # Selectors for common popups (cookie consent, location gates, age gates)
 POPUP_SELECTORS = [
     # Cookie consent
@@ -122,6 +131,10 @@ async def _discover_links(
             # (Squarespace, Wix, Wixstatic, Strikingly, etc.). We collect these
             # regardless of domain and fetch them via direct HTTP download.
             if full_url.lower().endswith(".pdf"):
+                # Drop privacy/legal/allergen PDFs — they pollute contact info
+                if EXCLUDED_DOC_PATTERN.search(parsed.path) or EXCLUDED_DOC_PATTERN.search(text):
+                    log.debug("doc_excluded", url=full_url, kind="pdf", text=text[:60])
+                    continue
                 if full_url not in seen:
                     seen.add(full_url)
                     pdfs.append(full_url)
@@ -130,6 +143,9 @@ async def _discover_links(
             # --- Image menu check BEFORE domain guard ---
             # Only collect images whose URL or anchor text looks like a menu.
             if any(full_url.lower().endswith(ext) for ext in (".jpg", ".jpeg", ".png", ".webp")):
+                if EXCLUDED_DOC_PATTERN.search(parsed.path) or EXCLUDED_DOC_PATTERN.search(text):
+                    log.debug("doc_excluded", url=full_url, kind="image", text=text[:60])
+                    continue
                 if IMAGE_MENU_PATTERNS.search(text) or IMAGE_MENU_PATTERNS.search(parsed.path):
                     if full_url not in seen:
                         seen.add(full_url)
@@ -274,6 +290,8 @@ async def _extract_text_via_vision(
         from google import genai
         from google.genai import types
 
+        from src.enrichment.analyzer import call_gemini_with_retry
+
         client = genai.Client()
 
         prompt = (
@@ -286,7 +304,8 @@ async def _extract_text_via_vision(
             "return exactly: NO_MENU_TEXT"
         )
 
-        response = client.models.generate_content(
+        response = call_gemini_with_retry(
+            client,
             model=config.gemini_model,
             contents=[
                 types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
