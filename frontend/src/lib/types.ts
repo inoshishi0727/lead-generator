@@ -137,6 +137,8 @@ export interface OutreachMessage {
   delivered_at?: string | null;
   // Follow-up threading
   parent_email_message_id?: string | null;
+  // Channel escalation
+  is_channel_escalation?: boolean;
 }
 
 // --- Edit Feedback / Reflection ---

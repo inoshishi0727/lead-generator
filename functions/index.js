@@ -5,7 +5,7 @@ import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { GoogleGenAI } from "@google/genai";
 import Anthropic from "@anthropic-ai/sdk";
 import { Resend } from "resend";
-import { FOLLOW_UP_LABELS, FOLLOW_UP_GAP_DAYS, shouldSkipLead, determineFollowUpAction } from "./followup-logic.js";
+import { FOLLOW_UP_LABELS, FOLLOW_UP_GAP_DAYS, shouldSkipLead, determineFollowUpAction, shouldGenerateEscalationDm } from "./followup-logic.js";
 
 const HttpsError = functions.https.HttpsError;
 
@@ -142,7 +142,7 @@ const SEASONAL_PRODUCTS = {
 // ---- Step instructions ----
 
 const STEP_INSTRUCTIONS = {
-  1: `STEP 1 — Initial (The Opener). Under 120 words. New thread.
+  1: `STEP 1 — Initial (The Opener). Under 80 words. New thread.
 Structure:
 1. Greeting
 2. 1-2 sentences: Who we are + why we're writing. Direct, warm, genuine.
@@ -183,7 +183,26 @@ This is the LAST email in the sequence. Keep it very short and respectful.
 - No pressure language
 - Leave the door open: "We'll be back in touch when we've got something seasonal to share"
 Never guilt-trip. No "I haven't heard back" or "I'm sure you're busy." Tone: gracious.`,
+
+  5: `STEP 5 — Re-engagement (After 90 Days). Under 100 words. Fresh subject line (NOT "Re:").
+It's been 3 months since we last touched base. Warm, low-pressure tone. Acknowledge the silence naturally.
+- Brief re-introduction: "We caught up a few months back about Asterley Bros — wanted to check in as things have evolved"
+- Something genuinely new: New seasonal product, recent stockist win, updated menu concept, or timely angle
+- Frictionless CTA: "If you're curious, happy to send samples over. Let me know."
+- No guilt or apology language
+- Tone: friendly peer reconnecting, not sales pressure
+Signal that this is a fresh start, not a continuation of the previous thread.`,
 };
+
+// ---- Instagram Escalation Prompt ----
+
+const INSTAGRAM_ESCALATION_PROMPT = `INSTAGRAM DM — Channel Escalation. Under 80 words.
+You emailed them a few days ago but haven't heard back. This is a short, casual DM — not a sales pitch.
+- Reference the email very briefly: "Dropped you an email recently about Asterley Bros vermouth"
+- Keep it warm and low-friction: "Thought I'd try here in case email got buried!"
+- Short CTA: "Happy to chat or send samples over. Just drop me a line."
+- Sound like a real person sliding into DMs, not a bot.
+- No formal sign-off needed. Conversational tone.`;
 
 // ---- Email system prompt ----
 
@@ -1208,6 +1227,12 @@ export const sendApproved = functions
     let failed = 0;
 
     for (const msg of toSend) {
+      // Skip non-email channels (e.g., instagram_dm) — manual send only
+      if (msg.channel !== "email") {
+        console.log(`SKIP [${msg.business_name}]: channel "${msg.channel}" is not auto-sent`);
+        continue;
+      }
+
       let sendFailed = false; // Track if actual send failed vs pre-send error (Bug #14)
       try {
         // Get lead to find recipient email
@@ -1302,7 +1327,7 @@ export const sendApproved = functions
 
         // Create a planned card for the next step (guard against duplicates)
         const nextStep = sentStepNumber + 1;
-        if (nextStep <= 4) {
+        if (nextStep <= 5) {
           const existingNextStep = await db.collection("outreach_messages")
             .where("lead_id", "==", msg.lead_id)
             .where("step_number", "==", nextStep)
@@ -2423,6 +2448,96 @@ async function runFollowUpGeneration() {
     }
   }
 
+  // ---- STEP 3: Channel escalation — Instagram DM if email unopened ----
+  for (const lead of allLeads) {
+    try {
+      const skipReason = shouldSkipLead(lead, leadsWithReplies.has(lead.id));
+      if (skipReason) {
+        continue; // Silent skip for escalation checks
+      }
+
+      if (!lead.instagram_handle) {
+        continue; // No Instagram handle, can't escalate
+      }
+
+      const leadMessages = allMessages.filter((m) => m.lead_id === lead.id);
+
+      if (!shouldGenerateEscalationDm(leadMessages, now)) {
+        continue;
+      }
+
+      // Check if escalation DM already exists (planned, draft, approved, or sent)
+      const existingDm = leadMessages.find(
+        (m) => m.is_channel_escalation === true &&
+          (m.status === "planned" || m.status === "draft" || m.status === "approved" || m.status === "sent")
+      );
+      if (existingDm) {
+        continue; // Already handled
+      }
+
+      // Generate Instagram DM draft using Claude
+      const enrichment = lead.enrichment || {};
+      let dmContent = "";
+      try {
+        const dmPrompt = `${INSTAGRAM_ESCALATION_PROMPT}
+
+RECIPIENT: ${lead.business_name}
+INSTAGRAM: ${lead.instagram_handle}
+CONTEXT: ${enrichment.context_notes || "No additional context"}`;
+
+        const dmResponse = await claudeClient.messages.create({
+          model: CLAUDE_MODEL,
+          max_tokens: 200,
+          messages: [
+            {
+              role: "user",
+              content: dmPrompt,
+            },
+          ],
+        });
+
+        dmContent = dmResponse.content[0]?.type === "text" ? dmResponse.content[0].text : "";
+      } catch (err) {
+        console.warn(`Failed to generate DM content for ${lead.business_name}:`, err.message);
+        dmContent = "Hey! Saw your venue and thought you'd love Asterley Bros. Mind if I reach out?";
+      }
+
+      // Create draft for approval
+      const dmId = crypto.randomUUID();
+      await db.collection("outreach_messages").doc(dmId).set({
+        id: dmId,
+        lead_id: lead.id,
+        business_name: lead.business_name,
+        venue_category: enrichment.venue_category || null,
+        channel: "instagram_dm",
+        subject: null,
+        content: dmContent,
+        status: "draft",
+        step_number: 2,
+        follow_up_label: null,
+        is_channel_escalation: true,
+        scheduled_send_date: tomorrowStr,
+        created_at: new Date().toISOString(),
+        tone_tier: enrichment.tone_tier || null,
+        lead_products: enrichment.lead_products || [],
+        contact_name: lead.contact_name || null,
+        context_notes: enrichment.context_notes || null,
+        menu_fit: enrichment.menu_fit || null,
+        recipient_email: lead.instagram_handle || null,
+        website: lead.website || null,
+        workspace_id: lead.workspace_id || "",
+        assigned_to: lead.assigned_to || null,
+        was_edited: false,
+      });
+
+      console.log(`ESCALATE [${lead.business_name}]: Instagram DM draft created for approval`);
+      generated++;
+    } catch (err) {
+      console.error("Escalation DM creation failed for", lead.business_name, err.message);
+      failed++;
+    }
+  }
+
   return { generated, skipped, failed, total };
 }
 
@@ -2525,6 +2640,13 @@ export const scheduledSendFollowups = functions
     let failed = 0;
 
     for (const msg of dueMessages) {
+      // Skip non-email channels (e.g., instagram_dm) — manual send only
+      if (msg.channel !== "email") {
+        console.log(`SKIP [${msg.business_name}]: channel "${msg.channel}" is not auto-sent`);
+        failed++;
+        continue;
+      }
+
       try {
         const leadSnap = await db.collection("leads").doc(msg.lead_id).get();
         if (!leadSnap.exists) { failed++; continue; }
@@ -2603,7 +2725,7 @@ export const scheduledSendFollowups = functions
 
         // Create planned card for the next step
         const nextStep = sentStepNumber + 1;
-        if (nextStep <= 4) {
+        if (nextStep <= 5) {
           // Check if a card already exists for this step
           const existingNextStep = await db.collection("outreach_messages")
             .where("lead_id", "==", msg.lead_id)

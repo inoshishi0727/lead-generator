@@ -16,6 +16,7 @@ import {
   FOLLOW_UP_GAP_DAYS,
   shouldSkipLead,
   determineFollowUpAction,
+  shouldGenerateEscalationDm,
 } from "./followup-logic.js";
 
 // ---- Emulator setup ----
@@ -53,6 +54,7 @@ async function seedLead(id, overrides = {}) {
     client_status: null,
     human_takeover: false,
     category: "cocktail_bar",
+    instagram_handle: null,
     enrichment: {
       venue_category: "cocktail_bar",
       tone_tier: "bartender_casual",
@@ -83,6 +85,8 @@ async function seedMessage(id, leadId, stepNumber, status, sentDaysAgo, override
     lead_products: ["Dispense"],
     contact_name: null,
     recipient_email: "test@bar.com",
+    opened: false,
+    is_channel_escalation: false,
     ...overrides,
   };
   await db.collection("outreach_messages").doc(id).set(msg);
@@ -152,6 +156,8 @@ async function runFollowUpForLead(leadId) {
       scheduled_send_date: result.scheduledSendDate,
       created_at: new Date().toISOString(),
       sent_at: null,
+      opened: false,
+      is_channel_escalation: false,
     });
 
     if (result.newStage && result.newStage !== lead.stage) {
@@ -160,6 +166,19 @@ async function runFollowUpForLead(leadId) {
   }
 
   return result;
+}
+
+/**
+ * Check if an escalation DM should be created for this lead.
+ * This simulates the escalation phase of generateFollowups.
+ */
+async function checkEscalation(leadId) {
+  const msgsSnap = await db.collection("outreach_messages")
+    .where("lead_id", "==", leadId)
+    .get();
+  const messages = msgsSnap.docs.map((d) => d.data());
+
+  return shouldGenerateEscalationDm(messages, new Date());
 }
 
 // ---- Tests ----
@@ -171,9 +190,9 @@ describe("Firestore integration: follow-up generation", () => {
     await clearCollection("inbound_replies");
   });
 
-  it("generates 1st follow up draft when initial was sent 7 days ago", async () => {
+  it("generates 1st follow up draft when initial was sent 4 days ago", async () => {
     await seedLead("lead-1");
-    await seedMessage("msg-1", "lead-1", 1, "sent", 7);
+    await seedMessage("msg-1", "lead-1", 1, "sent", 4);
 
     const result = await runFollowUpForLead("lead-1");
 
@@ -197,9 +216,9 @@ describe("Firestore integration: follow-up generation", () => {
     assert.equal(leadSnap.data().stage, "follow_up_1");
   });
 
-  it("skips if initial was sent only 3 days ago", async () => {
+  it("skips if initial was sent only 2 days ago", async () => {
     await seedLead("lead-1");
-    await seedMessage("msg-1", "lead-1", 1, "sent", 3);
+    await seedMessage("msg-1", "lead-1", 1, "sent", 2);
 
     const result = await runFollowUpForLead("lead-1");
 
@@ -252,12 +271,13 @@ describe("Firestore integration: follow-up generation", () => {
     assert.equal(result.reason, "draft_exists");
   });
 
-  it("moves lead to no_response after all 4 steps exhausted", async () => {
+  it("moves lead to no_response after all 5 steps exhausted", async () => {
     await seedLead("lead-1");
-    await seedMessage("msg-1", "lead-1", 1, "sent", 20);
-    await seedMessage("msg-2", "lead-1", 2, "sent", 13);
-    await seedMessage("msg-3", "lead-1", 3, "sent", 6);
-    await seedMessage("msg-4", "lead-1", 4, "sent", 2);
+    await seedMessage("msg-1", "lead-1", 1, "sent", 104);
+    await seedMessage("msg-2", "lead-1", 2, "sent", 100);
+    await seedMessage("msg-3", "lead-1", 3, "sent", 96);
+    await seedMessage("msg-4", "lead-1", 4, "sent", 92);
+    await seedMessage("msg-5", "lead-1", 5, "sent", 1);
 
     const result = await runFollowUpForLead("lead-1");
     assert.equal(result.action, "complete");
@@ -267,56 +287,53 @@ describe("Firestore integration: follow-up generation", () => {
     assert.equal(leadSnap.data().stage, "no_response");
   });
 
-  it("walks through the full 4-step sequence progressively", async () => {
-    // Step 1: initial sent 18 days ago
+  it("walks through the full 5-step sequence progressively with 4-day gaps", async () => {
+    // Step 1: initial sent 13 days ago
     await seedLead("lead-1");
-    await seedMessage("msg-1", "lead-1", 1, "sent", 18);
+    await seedMessage("msg-1", "lead-1", 1, "sent", 13);
 
-    // Generate 1st follow up
+    // Generate 1st follow up (due at day 4, draft at day 3, so day 10 from now)
     let result = await runFollowUpForLead("lead-1");
     assert.equal(result.action, "generate");
     assert.equal(result.followUpLabel, "1st follow up");
 
-    // Simulate: approve + send the 1st follow up (update the draft to sent)
+    // Simulate: approve + send the 1st follow up (sent 9 days ago = day 4 from initial)
     const step2Snap = await db.collection("outreach_messages")
       .where("lead_id", "==", "lead-1")
       .where("step_number", "==", 2)
       .get();
-    await step2Snap.docs[0].ref.update({ status: "sent", sent_at: daysAgo(11) });
+    await step2Snap.docs[0].ref.update({ status: "sent", sent_at: daysAgo(9) });
 
-    // Generate 2nd follow up
+    // Generate 2nd follow up (due at day 8, draft at day 7)
     result = await runFollowUpForLead("lead-1");
     assert.equal(result.action, "generate");
     assert.equal(result.followUpLabel, "2nd follow up");
 
-    // Simulate: send the 2nd follow up
+    // Simulate: send the 2nd follow up (sent 5 days ago = day 8 from initial)
     const step3Snap = await db.collection("outreach_messages")
       .where("lead_id", "==", "lead-1")
       .where("step_number", "==", 3)
       .get();
-    await step3Snap.docs[0].ref.update({ status: "sent", sent_at: daysAgo(4) });
+    await step3Snap.docs[0].ref.update({ status: "sent", sent_at: daysAgo(5) });
 
-    // Generate 3rd follow up
+    // Generate 3rd follow up (due at day 12, draft at day 11)
     result = await runFollowUpForLead("lead-1");
     assert.equal(result.action, "generate");
     assert.equal(result.followUpLabel, "3rd follow up");
 
-    // Simulate: send the 3rd follow up
+    // Simulate: send the 3rd follow up (sent 1 day ago = day 12 from initial)
     const step4Snap = await db.collection("outreach_messages")
       .where("lead_id", "==", "lead-1")
       .where("step_number", "==", 4)
       .get();
     await step4Snap.docs[0].ref.update({ status: "sent", sent_at: daysAgo(1) });
 
-    // Sequence complete
+    // Too early for re-engagement (step 5 due at day 102)
     result = await runFollowUpForLead("lead-1");
-    assert.equal(result.action, "complete");
-    assert.equal(result.newStage, "no_response");
+    assert.equal(result.action, "skip");
+    assert.equal(result.reason, "too_early");
 
-    // Verify final state
-    const leadSnap = await db.collection("leads").doc("lead-1").get();
-    assert.equal(leadSnap.data().stage, "no_response");
-
+    // Verify final state has 4 messages
     const allMsgs = await db.collection("outreach_messages")
       .where("lead_id", "==", "lead-1")
       .get();
@@ -325,8 +342,8 @@ describe("Firestore integration: follow-up generation", () => {
 
   it("mid-sequence reply stops further follow ups", async () => {
     await seedLead("lead-1");
-    await seedMessage("msg-1", "lead-1", 1, "sent", 14);
-    await seedMessage("msg-2", "lead-1", 2, "sent", 7);
+    await seedMessage("msg-1", "lead-1", 1, "sent", 9);
+    await seedMessage("msg-2", "lead-1", 2, "sent", 5);
 
     // Reply comes in after 1st follow up
     await seedReply("reply-1", "lead-1");
@@ -341,5 +358,83 @@ describe("Firestore integration: follow-up generation", () => {
       .where("step_number", "==", 3)
       .get();
     assert.equal(msgsSnap.size, 0);
+  });
+
+  it("triggers escalation DM when step 2 email unopened 3+ days", async () => {
+    await seedLead("lead-1", { instagram_handle: "@testbar_london" });
+    await seedMessage("msg-1", "lead-1", 1, "sent", 9);
+    await seedMessage("msg-2", "lead-1", 2, "sent", 5, {
+      opened: false,
+      channel: "email",
+    });
+
+    const messages = await db.collection("outreach_messages")
+      .where("lead_id", "==", "lead-1")
+      .get();
+    const messagesList = messages.docs.map((d) => d.data());
+
+    // Check if escalation should be triggered
+    const shouldEscalate = shouldGenerateEscalationDm(messagesList, new Date());
+    assert.equal(shouldEscalate, true);
+  });
+
+  it("does not trigger escalation when step 2 email was opened", async () => {
+    await seedLead("lead-1", { instagram_handle: "@testbar_london" });
+    await seedMessage("msg-1", "lead-1", 1, "sent", 9);
+    await seedMessage("msg-2", "lead-1", 2, "sent", 5, {
+      opened: true,
+      channel: "email",
+    });
+
+    const messages = await db.collection("outreach_messages")
+      .where("lead_id", "==", "lead-1")
+      .get();
+    const messagesList = messages.docs.map((d) => d.data());
+
+    // Check if escalation should be triggered
+    const shouldEscalate = shouldGenerateEscalationDm(messagesList, new Date());
+    assert.equal(shouldEscalate, false);
+  });
+
+  it("does not trigger escalation when step 2 less than 3 days old", async () => {
+    await seedLead("lead-1", { instagram_handle: "@testbar_london" });
+    await seedMessage("msg-1", "lead-1", 1, "sent", 7);
+    await seedMessage("msg-2", "lead-1", 2, "sent", 2, {
+      opened: false,
+      channel: "email",
+    });
+
+    const messages = await db.collection("outreach_messages")
+      .where("lead_id", "==", "lead-1")
+      .get();
+    const messagesList = messages.docs.map((d) => d.data());
+
+    // Check if escalation should be triggered (should be false - too early)
+    const shouldEscalate = shouldGenerateEscalationDm(messagesList, new Date());
+    assert.equal(shouldEscalate, false);
+  });
+
+  it("does not trigger escalation when DM already exists", async () => {
+    await seedLead("lead-1", { instagram_handle: "@testbar_london" });
+    await seedMessage("msg-1", "lead-1", 1, "sent", 9);
+    await seedMessage("msg-2", "lead-1", 2, "sent", 5, {
+      opened: false,
+      channel: "email",
+    });
+    // Existing escalation DM
+    await seedMessage("msg-3", "lead-1", 2, "planned", 0, {
+      channel: "instagram_dm",
+      is_channel_escalation: true,
+      subject: null,
+    });
+
+    const messages = await db.collection("outreach_messages")
+      .where("lead_id", "==", "lead-1")
+      .get();
+    const messagesList = messages.docs.map((d) => d.data());
+
+    // Check if escalation should be triggered (should be false - already exists)
+    const shouldEscalate = shouldGenerateEscalationDm(messagesList, new Date());
+    assert.equal(shouldEscalate, false);
   });
 });

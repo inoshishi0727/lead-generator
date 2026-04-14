@@ -231,6 +231,7 @@ export async function getOutreachMessages(filters?: {
       delivered: data.delivered || false,
       delivered_at: data.delivered_at || null,
       parent_email_message_id: data.parent_email_message_id || null,
+      is_channel_escalation: data.is_channel_escalation || false,
       assigned_to: data.assigned_to || null,
     };
   });
