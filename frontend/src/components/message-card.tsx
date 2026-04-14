@@ -214,9 +214,15 @@ export function MessageCard({ message }: Props) {
               {message.venue_category.replace(/_/g, " ")}
             </Badge>
           )}
-          {message.step_number > 1 && (
-            <Badge variant="secondary" className="text-xs">
-              Step {message.step_number}
+          {message.follow_up_label && message.follow_up_label !== "initial" && (
+            <Badge variant="secondary" className="text-xs bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400">
+              {message.follow_up_label}
+            </Badge>
+          )}
+          {message.scheduled_send_date && message.status === "draft" && (
+            <Badge variant="outline" className="text-xs gap-1">
+              <Clock className="h-2.5 w-2.5" />
+              Send by {message.scheduled_send_date}
             </Badge>
           )}
           {message.tone_tier && (
@@ -571,9 +577,18 @@ export function MessageCard({ message }: Props) {
             )}
           </div>
         )}
-        {/* Send + Unapprove buttons for approved messages */}
+        {/* Edit + Send + Unapprove buttons for approved messages */}
         {message.status === "approved" && isAdmin && (
           <div className="flex items-center gap-2 pt-1">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setEditDialogOpen(true)}
+              disabled={sendMutation.isPending || updateMutation.isPending}
+            >
+              <Pencil className="mr-1 h-3.5 w-3.5" />
+              Edit
+            </Button>
             <Button
               size="sm"
               variant="default"
@@ -590,7 +605,7 @@ export function MessageCard({ message }: Props) {
             </Button>
             <Button
               size="sm"
-              variant="outline"
+              variant="ghost"
               onClick={handleUnapprove}
               disabled={updateMutation.isPending || sendMutation.isPending}
             >
@@ -600,15 +615,6 @@ export function MessageCard({ message }: Props) {
                 <X className="mr-1 h-3.5 w-3.5" />
               )}
               {activeAction === "unapprove" ? "Unapproving..." : "Unapprove"}
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => setEditDialogOpen(true)}
-              disabled={sendMutation.isPending || updateMutation.isPending}
-            >
-              <Pencil className="mr-1 h-3.5 w-3.5" />
-              Edit
             </Button>
           </div>
         )}

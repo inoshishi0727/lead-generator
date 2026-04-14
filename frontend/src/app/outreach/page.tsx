@@ -24,8 +24,9 @@ import {
   useSendApproved,
   useGenerateFollowups,
 } from "@/hooks/use-outreach";
+import { EditReflectionBanner } from "@/components/edit-reflection-banner";
 
-const STATUS_FILTERS = ["draft", "approved", "sent", "replied", "rejected", "all"] as const;
+const STATUS_FILTERS = ["draft", "approved", "sent", "replied", "rejected", "follow-ups", "all"] as const;
 
 const CATEGORY_OPTIONS = [
   { value: "", label: "All Categories" },
@@ -58,7 +59,7 @@ export default function OutreachPage() {
   const [showSendWarning, setShowSendWarning] = useState(false);
 
   // "replied" is a client-side filter (has_reply), not a Firestore status
-  const firestoreFilter = statusFilter === "all" || statusFilter === "replied"
+  const firestoreFilter = statusFilter === "all" || statusFilter === "replied" || statusFilter === "follow-ups"
     ? undefined
     : { status: statusFilter };
   const { data: messages, isLoading } = useMessages(firestoreFilter);
@@ -71,7 +72,9 @@ export default function OutreachPage() {
 
   const filteredByStatus = statusFilter === "replied"
     ? (messages ?? []).filter((m) => m.has_reply)
-    : (messages ?? []);
+    : statusFilter === "follow-ups"
+      ? (messages ?? []).filter((m) => m.step_number > 1)
+      : (messages ?? []);
   const filteredByCategory = filteredByStatus.filter(
     (m) => !categoryFilter || m.venue_category === categoryFilter
   );
@@ -164,21 +167,6 @@ export default function OutreachPage() {
               Send Approved ({approvedCount})
             </Button>
           )}
-          {isAdmin && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={handleFollowups}
-              disabled={followupsMutation.isPending}
-            >
-              {followupsMutation.isPending ? (
-                <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-              ) : (
-                <RefreshCw className="mr-1.5 h-4 w-4" />
-              )}
-              Follow-ups
-            </Button>
-          )}
         </div>
       </div>
 
@@ -212,6 +200,9 @@ export default function OutreachPage() {
         </div>
       )}
 
+      {/* Edit reflection banner */}
+      <EditReflectionBanner />
+
       {/* Stats */}
       <div className="grid grid-cols-5 gap-4">
         <StatCard
@@ -243,17 +234,19 @@ export default function OutreachPage() {
 
       {/* Filters */}
       <div className="flex items-center gap-3">
-        <div className="flex gap-1.5">
+        <div className="inline-flex rounded-lg bg-muted p-1 gap-1">
           {STATUS_FILTERS.map((s) => (
-            <Button
+            <button
               key={s}
-              size="sm"
-              variant={statusFilter === s ? "default" : "outline"}
               onClick={() => setStatusFilter(s)}
-              className="capitalize"
+              className={`rounded-md px-3 py-1.5 text-sm font-medium capitalize transition-colors ${
+                statusFilter === s
+                  ? "bg-primary text-primary-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground hover:bg-muted-foreground/10"
+              }`}
             >
               {s}
-            </Button>
+            </button>
           ))}
         </div>
         <select
@@ -284,9 +277,9 @@ export default function OutreachPage() {
       )}
 
       {/* Followup status */}
-      {followupsMutation.isSuccess && (
+      {followupsMutation.isSuccess && followupsMutation.data && (
         <div className="rounded-lg border border-purple-200 bg-purple-50 p-3 text-sm text-purple-800 dark:border-purple-800 dark:bg-purple-950/20 dark:text-purple-400">
-          Follow-up generation started. Refresh to see new drafts.
+          Follow-ups: {followupsMutation.data.generated} drafted, {followupsMutation.data.skipped} skipped, {followupsMutation.data.failed} failed.
         </div>
       )}
 
