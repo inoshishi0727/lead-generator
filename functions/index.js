@@ -142,7 +142,7 @@ const SEASONAL_PRODUCTS = {
 // ---- Step instructions ----
 
 const STEP_INSTRUCTIONS = {
-  1: `STEP 1 — Initial (The Opener). Under 120 words. New thread.
+  1: `STEP 1 — Initial (The Opener). Under 80 words. New thread.
 Structure:
 1. Greeting
 2. 1-2 sentences: Who we are + why we're writing. Direct, warm, genuine.
@@ -183,6 +183,15 @@ This is the LAST email in the sequence. Keep it very short and respectful.
 - No pressure language
 - Leave the door open: "We'll be back in touch when we've got something seasonal to share"
 Never guilt-trip. No "I haven't heard back" or "I'm sure you're busy." Tone: gracious.`,
+
+  5: `STEP 5 — Re-engagement (After 90 Days). Under 100 words. Fresh subject line (NOT "Re:").
+It's been 3 months since we last touched base. Warm, low-pressure tone. Acknowledge the silence naturally.
+- Brief re-introduction: "We caught up a few months back about Asterley Bros — wanted to check in as things have evolved"
+- Something genuinely new: New seasonal product, recent stockist win, updated menu concept, or timely angle
+- Frictionless CTA: "If you're curious, happy to send samples over. Let me know."
+- No guilt or apology language
+- Tone: friendly peer reconnecting, not sales pressure
+Signal that this is a fresh start, not a continuation of the previous thread.`,
 };
 
 // ---- Email system prompt ----
@@ -1300,7 +1309,7 @@ export const sendApproved = functions
 
         // Create a planned card for the next step (guard against duplicates)
         const nextStep = sentStepNumber + 1;
-        if (nextStep <= 4) {
+        if (nextStep <= 5) {
           const existingNextStep = await db.collection("outreach_messages")
             .where("lead_id", "==", msg.lead_id)
             .where("step_number", "==", nextStep)
@@ -2601,7 +2610,7 @@ export const scheduledSendFollowups = functions
 
         // Create planned card for the next step
         const nextStep = sentStepNumber + 1;
-        if (nextStep <= 4) {
+        if (nextStep <= 5) {
           // Check if a card already exists for this step
           const existingNextStep = await db.collection("outreach_messages")
             .where("lead_id", "==", msg.lead_id)

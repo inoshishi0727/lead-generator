@@ -8,12 +8,14 @@ export const FOLLOW_UP_LABELS = {
   2: "1st follow up",
   3: "2nd follow up",
   4: "3rd follow up",
+  5: "re-engagement",
 };
 
 export const FOLLOW_UP_GAP_DAYS = {
-  2: 7,   // 1st follow up: 7 days after initial
-  3: 14,  // 2nd follow up: 14 days after initial
-  4: 18,  // 3rd follow up: 18 days after initial
+  2: 4,    // 1st follow up: 4 days after initial
+  3: 8,    // 2nd follow up: 8 days after initial
+  4: 12,   // 3rd follow up: 12 days after initial
+  5: 102,  // re-engagement: 102 days after initial (90 days after step 4)
 };
 
 const DRAFT_LEAD_DAYS = 1;
@@ -50,7 +52,7 @@ export function determineFollowUpAction(messages, now) {
   const nextStepNumber = lastStepNumber + 1;
 
   // Sequence complete
-  if (nextStepNumber > 4) {
+  if (nextStepNumber > 5) {
     return { action: "complete", reason: "sequence_exhausted", newStage: "no_response" };
   }
 
@@ -89,7 +91,8 @@ export function determineFollowUpAction(messages, now) {
 
   // Determine new lead stage
   const newStage = nextStepNumber === 2 ? "follow_up_1"
-    : nextStepNumber >= 3 ? "follow_up_2"
+    : nextStepNumber >= 3 && nextStepNumber <= 4 ? "follow_up_2"
+    : nextStepNumber === 5 ? "follow_up_2"
     : null;
 
   return {
