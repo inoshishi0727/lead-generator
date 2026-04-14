@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import {
   X,
   MapPin,
@@ -9,8 +9,11 @@ import {
   Globe,
   Star,
   Sparkles,
+  RefreshCw,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { useEnrichLeads } from "@/hooks/use-leads";
 import type { Lead } from "@/lib/types";
 
 interface Props {
@@ -38,6 +41,9 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 }
 
 export function LeadDetailDialog({ lead, onClose }: Props) {
+  const enrichMutation = useEnrichLeads();
+  const [enrichDone, setEnrichDone] = useState(false);
+
   useEffect(() => {
     function handleKey(e: KeyboardEvent) {
       if (e.key === "Escape") onClose();
@@ -45,6 +51,15 @@ export function LeadDetailDialog({ lead, onClose }: Props) {
     document.addEventListener("keydown", handleKey);
     return () => document.removeEventListener("keydown", handleKey);
   }, [onClose]);
+
+  function handleReEnrich() {
+    if (!lead) return;
+    setEnrichDone(false);
+    enrichMutation.mutate(
+      { lead_ids: [lead.id] },
+      { onSuccess: () => setEnrichDone(true) },
+    );
+  }
 
   if (!lead) return null;
 
@@ -201,6 +216,34 @@ export function LeadDetailDialog({ lead, onClose }: Props) {
               </span>
             )}
           </Row>
+          {lead.menu_url && (
+            <Row label="Menu">
+              <a href={lead.menu_url} target="_blank" rel="noopener noreferrer"
+                className="text-emerald-400 hover:underline flex items-center gap-1">
+                <Globe className="h-3 w-3" />
+                {lead.menu_url.replace(/^https?:\/\/(www\.)?/, "").slice(0, 45)}
+              </a>
+            </Row>
+          )}
+        </div>
+
+        <div className="border-t" />
+
+        {/* Re-enrich footer */}
+        <div className="flex items-center justify-between p-4">
+          <p className="text-xs text-muted-foreground">
+            Re-enriching captures a fresh menu URL and updates the drinks programme.
+          </p>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={handleReEnrich}
+            disabled={enrichMutation.isPending}
+            className="shrink-0 ml-3"
+          >
+            <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${enrichMutation.isPending ? "animate-spin" : ""}`} />
+            {enrichMutation.isPending ? "Enriching..." : enrichDone ? "Done!" : "Re-enrich"}
+          </Button>
         </div>
       </div>
     </div>

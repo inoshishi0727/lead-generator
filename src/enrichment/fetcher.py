@@ -33,6 +33,15 @@ IMAGE_MENU_PATTERNS = re.compile(
     re.IGNORECASE,
 )
 
+# Legal/privacy/compliance documents we never want to fetch.
+# Matches against URL path AND anchor text. Privacy PDFs were polluting the
+# contact field (e.g. "Data Privacy Manager" being picked up as the venue
+# contact) and allergen docs add noise without helping menu fit.
+EXCLUDED_DOC_PATTERN = re.compile(
+    r"privacy|gdpr|cookie|terms|t-?and-?c|legal|policy|disclaimer|imprint|allergen",
+    re.IGNORECASE,
+)
+
 # Selectors for common popups (cookie consent, location gates, age gates)
 POPUP_SELECTORS = [
     # Cookie consent
@@ -122,6 +131,10 @@ async def _discover_links(
             # (Squarespace, Wix, Wixstatic, Strikingly, etc.). We collect these
             # regardless of domain and fetch them via direct HTTP download.
             if full_url.lower().endswith(".pdf"):
+                # Drop privacy/legal/allergen PDFs — they pollute contact info
+                if EXCLUDED_DOC_PATTERN.search(parsed.path) or EXCLUDED_DOC_PATTERN.search(text):
+                    log.debug("doc_excluded", url=full_url, kind="pdf", text=text[:60])
+                    continue
                 if full_url not in seen:
                     seen.add(full_url)
                     pdfs.append(full_url)
@@ -130,6 +143,9 @@ async def _discover_links(
             # --- Image menu check BEFORE domain guard ---
             # Only collect images whose URL or anchor text looks like a menu.
             if any(full_url.lower().endswith(ext) for ext in (".jpg", ".jpeg", ".png", ".webp")):
+                if EXCLUDED_DOC_PATTERN.search(parsed.path) or EXCLUDED_DOC_PATTERN.search(text):
+                    log.debug("doc_excluded", url=full_url, kind="image", text=text[:60])
+                    continue
                 if IMAGE_MENU_PATTERNS.search(text) or IMAGE_MENU_PATTERNS.search(parsed.path):
                     if full_url not in seen:
                         seen.add(full_url)
@@ -274,6 +290,8 @@ async def _extract_text_via_vision(
         from google import genai
         from google.genai import types
 
+        from src.enrichment.analyzer import call_gemini_with_retry
+
         client = genai.Client()
 
         prompt = (
@@ -286,7 +304,8 @@ async def _extract_text_via_vision(
             "return exactly: NO_MENU_TEXT"
         )
 
-        response = client.models.generate_content(
+        response = call_gemini_with_retry(
+            client,
             model=config.gemini_model,
             contents=[
                 types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
@@ -336,10 +355,16 @@ def _sort_parts_by_relevance(parts: list[str]) -> list[str]:
     return sorted(parts, key=priority)
 
 
+MENU_PATH_PATTERN = re.compile(
+    r"menu|drink|cocktail|wine|bar|beverage",
+    re.IGNORECASE,
+)
+
+
 async def fetch_website_text(
     url: str,
     config: EnrichmentConfig,
-) -> str:
+) -> tuple[str, str | None]:
     """Fetch text content from a venue website.
 
     Strategy:
@@ -354,12 +379,14 @@ async def fetch_website_text(
     7. Sort parts so menu content comes first before truncation
     8. Concatenate all text for Gemini analysis
 
-    Returns empty string on total failure.
+    Returns (text, menu_url) where menu_url is the best menu asset URL found
+    (priority: menu PDF > image menu > menu HTML page), or None if not found.
+    Returns ("", None) on total failure.
     """
     from src.scrapers.browser import close_browser, get_proxy_config, launch_browser
 
     if not url:
-        return ""
+        return "", None
 
     if not url.startswith(("http://", "https://")):
         url = f"https://{url}"
@@ -368,6 +395,7 @@ async def fetch_website_text(
     visited: set[str] = set()
     browser = None
     engine = "camoufox"
+    discovered_html_links: list[str] = []
 
     try:
         browser, engine = await launch_browser(headless=config.headless)
@@ -409,6 +437,7 @@ async def fetch_website_text(
 
         # Step 2: Discover links from homepage
         discovered, pdf_links, image_links = await _discover_links(page, url)
+        discovered_html_links = list(discovered)
         log.debug(
             "links_discovered",
             url=url,
@@ -468,7 +497,7 @@ async def fetch_website_text(
 
     except Exception as e:
         log.warning("browser_fetch_failed", url=url, engine=engine, error=str(e))
-        return ""
+        return "", None
     finally:
         if browser:
             await close_browser(browser, engine)
@@ -499,10 +528,23 @@ async def fetch_website_text(
     if len(full_text) > config.gemini_max_input_chars:
         full_text = full_text[: config.gemini_max_input_chars]
 
+    # Determine best menu URL (PDF first, then image, then HTML menu page)
+    menu_url: str | None = None
+    if pdf_links:
+        menu_url = pdf_links[0]
+    elif image_links:
+        menu_url = image_links[0]
+    else:
+        for link in discovered_html_links:
+            if MENU_PATH_PATTERN.search(urlparse(link).path):
+                menu_url = link
+                break
+
     log.info(
         "website_text_fetched",
         url=url,
         pages=len(collected_parts),
         total_chars=len(full_text),
+        menu_url=menu_url,
     )
-    return full_text
+    return full_text, menu_url

@@ -21,15 +21,35 @@ const SOURCE_OPTIONS = [
   { value: "manual", label: "Manual" },
 ];
 
-const STAGE_OPTIONS = [
-  { value: "", label: "All Stages" },
-  { value: "pending_enrichment", label: "Queued for Scrape" },
-  { value: "scraped", label: "Scraped" },
-  { value: "needs_email", label: "Needs Email" },
-  { value: "scored", label: "Scored" },
-  { value: "draft_generated", label: "Draft Generated" },
-  { value: "approved", label: "Approved" },
-  { value: "sent", label: "Sent" },
+const STAGE_GROUPS = [
+  {
+    label: "Pre-send",
+    options: [
+      { value: "pending_enrichment", label: "Queued for Scrape" },
+      { value: "scraped", label: "Scraped" },
+      { value: "needs_email", label: "Needs Email" },
+      { value: "enriched", label: "Enriched" },
+      { value: "scored", label: "Scored" },
+      { value: "draft_generated", label: "Draft Generated" },
+      { value: "approved", label: "Approved" },
+    ],
+  },
+  {
+    label: "Active Outreach",
+    options: [
+      { value: "sent", label: "Sent" },
+      { value: "follow_up_1", label: "Follow-up 1" },
+      { value: "follow_up_2", label: "Follow-up 2" },
+    ],
+  },
+  {
+    label: "Outcomes",
+    options: [
+      { value: "responded", label: "Responded" },
+      { value: "converted", label: "Converted" },
+      { value: "declined", label: "Declined" },
+    ],
+  },
 ];
 
 export default function LeadsPage() {
@@ -213,10 +233,15 @@ export default function LeadsPage() {
           onChange={(e) => setStage(e.target.value)}
           className="rounded-md border border-input bg-background px-3 py-2 text-sm"
         >
-          {STAGE_OPTIONS.map((opt) => (
-            <option key={opt.value} value={opt.value}>
-              {opt.label}
-            </option>
+          <option value="">All Stages</option>
+          {STAGE_GROUPS.map((group) => (
+            <optgroup key={group.label} label={group.label}>
+              {group.options.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </optgroup>
           ))}
         </select>
 
