@@ -8,12 +8,14 @@ export const FOLLOW_UP_LABELS = {
   2: "1st follow up",
   3: "2nd follow up",
   4: "3rd follow up",
+  5: "re-engagement",
 };
 
 export const FOLLOW_UP_GAP_DAYS = {
-  2: 7,   // 1st follow up: 7 days after initial
-  3: 14,  // 2nd follow up: 14 days after initial
-  4: 18,  // 3rd follow up: 18 days after initial
+  2: 4,    // 1st follow up: 4 days after initial
+  3: 8,    // 2nd follow up: 8 days after initial
+  4: 12,   // 3rd follow up: 12 days after initial
+  5: 102,  // re-engagement: 102 days after initial (90 days after step 4)
 };
 
 const DRAFT_LEAD_DAYS = 1;
@@ -50,7 +52,7 @@ export function determineFollowUpAction(messages, now) {
   const nextStepNumber = lastStepNumber + 1;
 
   // Sequence complete
-  if (nextStepNumber > 4) {
+  if (nextStepNumber > 5) {
     return { action: "complete", reason: "sequence_exhausted", newStage: "no_response" };
   }
 
@@ -89,7 +91,8 @@ export function determineFollowUpAction(messages, now) {
 
   // Determine new lead stage
   const newStage = nextStepNumber === 2 ? "follow_up_1"
-    : nextStepNumber >= 3 ? "follow_up_2"
+    : nextStepNumber >= 3 && nextStepNumber <= 4 ? "follow_up_2"
+    : nextStepNumber === 5 ? "follow_up_2"
     : null;
 
   return {
@@ -99,4 +102,35 @@ export function determineFollowUpAction(messages, now) {
     scheduledSendDate: scheduledSendDate.toISOString().split("T")[0],
     newStage,
   };
+}
+
+/**
+ * Determine if an Instagram DM escalation should be generated.
+ * Returns true if step 2 email was sent, has no opens, is at least 3 days old,
+ * and no escalation DM already exists.
+ *
+ * @param {Array} messages - All outreach messages for this lead
+ * @param {Date} now - Current date/time
+ * @returns {boolean}
+ */
+export function shouldGenerateEscalationDm(messages, now) {
+  const step2Email = messages.find(
+    (m) => m.step_number === 2 && m.channel === "email" && m.status === "sent"
+  );
+  if (!step2Email) return false;
+
+  // Already have an escalation DM (planned, draft, approved, or sent)
+  const existingDm = messages.find(
+    (m) => m.is_channel_escalation === true &&
+      (m.status === "planned" || m.status === "draft" || m.status === "approved" || m.status === "sent")
+  );
+  if (existingDm) return false;
+
+  // Wait at least 3 days after step 2 send before escalating
+  const step2SentAt = new Date(step2Email.sent_at);
+  const daysSinceSent = (now - step2SentAt) / (1000 * 60 * 60 * 24);
+  if (daysSinceSent < 3) return false;
+
+  // Escalate only if not opened
+  return !step2Email.opened;
 }

@@ -778,20 +778,33 @@ export function MessageCard({ message, inConversation }: Props) {
               <Pencil className="mr-1 h-3.5 w-3.5" />
               Edit
             </Button>
-            <Button
-              size="sm"
-              variant="default"
-              className="bg-blue-600 hover:bg-blue-700"
-              onClick={() => sendMutation.mutate(message.id)}
-              disabled={sendMutation.isPending || updateMutation.isPending}
-            >
-              {sendMutation.isPending ? (
-                <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
-              ) : (
+            {message.channel === "instagram_dm" ? (
+              <Button
+                size="sm"
+                variant="default"
+                className="bg-amber-600 hover:bg-amber-700"
+                disabled
+                title="Instagram DMs must be sent manually. Copy the message and send via Instagram."
+              >
                 <Send className="mr-1 h-3.5 w-3.5" />
-              )}
-              {sendMutation.isPending ? "Sending..." : "Send"}
-            </Button>
+                Send Manually
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                variant="default"
+                className="bg-blue-600 hover:bg-blue-700"
+                onClick={() => sendMutation.mutate(message.id)}
+                disabled={sendMutation.isPending || updateMutation.isPending}
+              >
+                {sendMutation.isPending ? (
+                  <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Send className="mr-1 h-3.5 w-3.5" />
+                )}
+                {sendMutation.isPending ? "Sending..." : "Send"}
+              </Button>
+            )}
             <Button
               size="sm"
               variant="ghost"

@@ -5,6 +5,7 @@ import {
   FOLLOW_UP_GAP_DAYS,
   shouldSkipLead,
   determineFollowUpAction,
+  shouldGenerateEscalationDm,
 } from "./followup-logic.js";
 
 // ---- Helpers ----
@@ -47,14 +48,16 @@ describe("FOLLOW_UP_LABELS", () => {
     assert.equal(FOLLOW_UP_LABELS[2], "1st follow up");
     assert.equal(FOLLOW_UP_LABELS[3], "2nd follow up");
     assert.equal(FOLLOW_UP_LABELS[4], "3rd follow up");
+    assert.equal(FOLLOW_UP_LABELS[5], "re-engagement");
   });
 });
 
 describe("FOLLOW_UP_GAP_DAYS", () => {
-  it("has correct timing gaps", () => {
-    assert.equal(FOLLOW_UP_GAP_DAYS[2], 7);
-    assert.equal(FOLLOW_UP_GAP_DAYS[3], 14);
-    assert.equal(FOLLOW_UP_GAP_DAYS[4], 18);
+  it("has correct timing gaps (4-day spacing)", () => {
+    assert.equal(FOLLOW_UP_GAP_DAYS[2], 4);    // 1st follow up: 4 days
+    assert.equal(FOLLOW_UP_GAP_DAYS[3], 8);    // 2nd follow up: 8 days
+    assert.equal(FOLLOW_UP_GAP_DAYS[4], 12);   // 3rd follow up: 12 days
+    assert.equal(FOLLOW_UP_GAP_DAYS[5], 102);  // re-engagement: 102 days
   });
 });
 
@@ -112,8 +115,8 @@ describe("determineFollowUpAction", () => {
     assert.equal(result.reason, "no_sent_message");
   });
 
-  it("generates 1st follow up after 6+ days (draft 1 day early)", () => {
-    const messages = [makeMessage(1, "sent", 6)];
+  it("generates 1st follow up after 4+ days (draft 1 day early)", () => {
+    const messages = [makeMessage(1, "sent", 4)];
     const result = determineFollowUpAction(messages, new Date());
     assert.equal(result.action, "generate");
     assert.equal(result.nextStepNumber, 2);
@@ -121,17 +124,17 @@ describe("determineFollowUpAction", () => {
     assert.equal(result.newStage, "follow_up_1");
   });
 
-  it("skips 1st follow up if only 3 days since initial send", () => {
-    const messages = [makeMessage(1, "sent", 3)];
+  it("skips 1st follow up if only 2 days since initial send", () => {
+    const messages = [makeMessage(1, "sent", 2)];
     const result = determineFollowUpAction(messages, new Date());
     assert.equal(result.action, "skip");
     assert.equal(result.reason, "too_early");
   });
 
-  it("generates 2nd follow up after 13+ days from initial", () => {
+  it("generates 2nd follow up after 8+ days from initial", () => {
     const messages = [
-      makeMessage(1, "sent", 14),
-      makeMessage(2, "sent", 7),
+      makeMessage(1, "sent", 9),
+      makeMessage(2, "sent", 5),
     ];
     const result = determineFollowUpAction(messages, new Date());
     assert.equal(result.action, "generate");
@@ -140,11 +143,11 @@ describe("determineFollowUpAction", () => {
     assert.equal(result.newStage, "follow_up_2");
   });
 
-  it("generates 3rd follow up after 17+ days from initial", () => {
+  it("generates 3rd follow up after 12+ days from initial", () => {
     const messages = [
-      makeMessage(1, "sent", 18),
-      makeMessage(2, "sent", 11),
-      makeMessage(3, "sent", 4),
+      makeMessage(1, "sent", 13),
+      makeMessage(2, "sent", 9),
+      makeMessage(3, "sent", 5),
     ];
     const result = determineFollowUpAction(messages, new Date());
     assert.equal(result.action, "generate");
@@ -153,12 +156,27 @@ describe("determineFollowUpAction", () => {
     assert.equal(result.newStage, "follow_up_2");
   });
 
-  it("completes sequence after all 4 steps sent", () => {
+  it("generates re-engagement (step 5) after 102+ days from initial", () => {
     const messages = [
-      makeMessage(1, "sent", 20),
-      makeMessage(2, "sent", 13),
-      makeMessage(3, "sent", 6),
-      makeMessage(4, "sent", 2),
+      makeMessage(1, "sent", 103),
+      makeMessage(2, "sent", 99),
+      makeMessage(3, "sent", 95),
+      makeMessage(4, "sent", 91),
+    ];
+    const result = determineFollowUpAction(messages, new Date());
+    assert.equal(result.action, "generate");
+    assert.equal(result.nextStepNumber, 5);
+    assert.equal(result.followUpLabel, "re-engagement");
+    assert.equal(result.newStage, "follow_up_2");
+  });
+
+  it("completes sequence after all 5 steps sent", () => {
+    const messages = [
+      makeMessage(1, "sent", 104),
+      makeMessage(2, "sent", 100),
+      makeMessage(3, "sent", 96),
+      makeMessage(4, "sent", 92),
+      makeMessage(5, "sent", 1),
     ];
     const result = determineFollowUpAction(messages, new Date());
     assert.equal(result.action, "complete");
@@ -193,24 +211,25 @@ describe("determineFollowUpAction", () => {
   });
 
   it("calculates timing from initial send, not latest send", () => {
-    // Initial sent 15 days ago, step 3 sent 3 days ago
-    // Step 4 due at day 18 from initial = 3 days from now
-    // Draft generated at day 17 = 2 days from now → too early
+    // Initial sent 13 days ago, step 3 sent 1 day ago
+    // Step 4 due at day 12 from initial = already happened (day 12 - 13 = -1, so 1 day past due)
+    // This tests that timing is based on initial send, not latest send
     const messages = [
-      makeMessage(1, "sent", 15),
-      makeMessage(2, "sent", 8),
-      makeMessage(3, "sent", 3),
+      makeMessage(1, "sent", 13),
+      makeMessage(2, "sent", 9),
+      makeMessage(3, "sent", 1),
     ];
     const result = determineFollowUpAction(messages, new Date());
-    assert.equal(result.action, "skip");
-    assert.equal(result.reason, "too_early");
+    assert.equal(result.action, "generate");
+    assert.equal(result.nextStepNumber, 4);
   });
 
-  it("generates step 4 when initial sent 17+ days ago", () => {
-    // Initial sent 17 days ago → step 4 due day 18, draft at day 17 = today
+  it("generates step 4 when initial sent 11+ days ago", () => {
+    // Initial sent 11 days ago → step 4 due day 12 = 1 day from now
+    // Draft due day 11 = today → ready to generate
     const messages = [
-      makeMessage(1, "sent", 17),
-      makeMessage(2, "sent", 10),
+      makeMessage(1, "sent", 11),
+      makeMessage(2, "sent", 7),
       makeMessage(3, "sent", 3),
     ];
     const result = determineFollowUpAction(messages, new Date());
@@ -220,42 +239,246 @@ describe("determineFollowUpAction", () => {
 
   it("uses last sent date as fallback when no step 1 found", () => {
     // Edge case: step 1 message missing, only step 2 exists as sent
+    // Step 2 sent 8 days ago, step 3 due 8 days after = today
+    // Draft due 1 day early = yesterday = overdue, should generate
     const messages = [
       makeMessage(2, "sent", 8),
     ];
     const result = determineFollowUpAction(messages, new Date());
-    assert.equal(result.action, "skip");
-    assert.equal(result.reason, "too_early");
-    // step 3 due 14 days from step 2 sent, so 6 more days
+    assert.equal(result.action, "generate");
+    assert.equal(result.nextStepNumber, 3);
+  });
+});
+
+// ---- shouldGenerateEscalationDm ----
+
+describe("shouldGenerateEscalationDm", () => {
+  it("returns true when step 2 unopened 3+ days, no existing DM", () => {
+    const messages = [
+      makeMessage(1, "sent", 7),
+      {
+        ...makeMessage(2, "sent", 4),
+        opened: false,
+        channel: "email",
+      },
+    ];
+    const result = shouldGenerateEscalationDm(messages, new Date());
+    assert.equal(result, true);
+  });
+
+  it("returns true when step 2 unopened 5+ days, no existing DM", () => {
+    const messages = [
+      makeMessage(1, "sent", 9),
+      {
+        ...makeMessage(2, "sent", 6),
+        opened: false,
+        channel: "email",
+      },
+    ];
+    const result = shouldGenerateEscalationDm(messages, new Date());
+    assert.equal(result, true);
+  });
+
+  it("returns false when no step 2 sent message", () => {
+    const messages = [
+      makeMessage(1, "sent", 8),
+      makeMessage(2, "draft", 0),
+    ];
+    const result = shouldGenerateEscalationDm(messages, new Date());
+    assert.equal(result, false);
+  });
+
+  it("returns false when step 2 opened", () => {
+    const messages = [
+      makeMessage(1, "sent", 7),
+      {
+        ...makeMessage(2, "sent", 4),
+        opened: true,
+        channel: "email",
+      },
+    ];
+    const result = shouldGenerateEscalationDm(messages, new Date());
+    assert.equal(result, false);
+  });
+
+  it("returns false when step 2 sent less than 3 days ago", () => {
+    const messages = [
+      makeMessage(1, "sent", 7),
+      {
+        ...makeMessage(2, "sent", 2),
+        opened: false,
+        channel: "email",
+      },
+    ];
+    const result = shouldGenerateEscalationDm(messages, new Date());
+    assert.equal(result, false);
+  });
+
+  it("returns false when exactly 3 days - boundary check", () => {
+    // At exactly 3 days, it should be true (>= 3)
+    const messages = [
+      makeMessage(1, "sent", 7),
+      {
+        ...makeMessage(2, "sent", 3),
+        opened: false,
+        channel: "email",
+      },
+    ];
+    const result = shouldGenerateEscalationDm(messages, new Date());
+    assert.equal(result, true);
+  });
+
+  it("returns false when escalation DM already exists (planned)", () => {
+    const messages = [
+      makeMessage(1, "sent", 7),
+      {
+        ...makeMessage(2, "sent", 4),
+        opened: false,
+        channel: "email",
+      },
+      {
+        id: "dm-1",
+        lead_id: "lead-1",
+        step_number: 2,
+        status: "planned",
+        channel: "instagram_dm",
+        is_channel_escalation: true,
+        created_at: daysAgo(3),
+        sent_at: null,
+      },
+    ];
+    const result = shouldGenerateEscalationDm(messages, new Date());
+    assert.equal(result, false);
+  });
+
+  it("returns false when escalation DM already exists (draft)", () => {
+    const messages = [
+      makeMessage(1, "sent", 7),
+      {
+        ...makeMessage(2, "sent", 4),
+        opened: false,
+        channel: "email",
+      },
+      {
+        id: "dm-1",
+        lead_id: "lead-1",
+        step_number: 2,
+        status: "draft",
+        channel: "instagram_dm",
+        is_channel_escalation: true,
+        created_at: daysAgo(3),
+        sent_at: null,
+      },
+    ];
+    const result = shouldGenerateEscalationDm(messages, new Date());
+    assert.equal(result, false);
+  });
+
+  it("returns false when escalation DM already exists (approved)", () => {
+    const messages = [
+      makeMessage(1, "sent", 7),
+      {
+        ...makeMessage(2, "sent", 4),
+        opened: false,
+        channel: "email",
+      },
+      {
+        id: "dm-1",
+        lead_id: "lead-1",
+        step_number: 2,
+        status: "approved",
+        channel: "instagram_dm",
+        is_channel_escalation: true,
+        created_at: daysAgo(3),
+        sent_at: null,
+      },
+    ];
+    const result = shouldGenerateEscalationDm(messages, new Date());
+    assert.equal(result, false);
+  });
+
+  it("returns false when escalation DM already sent", () => {
+    const messages = [
+      makeMessage(1, "sent", 7),
+      {
+        ...makeMessage(2, "sent", 4),
+        opened: false,
+        channel: "email",
+      },
+      {
+        id: "dm-1",
+        lead_id: "lead-1",
+        step_number: 2,
+        status: "sent",
+        channel: "instagram_dm",
+        is_channel_escalation: true,
+        created_at: daysAgo(3),
+        sent_at: daysAgo(1),
+      },
+    ];
+    const result = shouldGenerateEscalationDm(messages, new Date());
+    assert.equal(result, false);
+  });
+
+  it("ignores non-escalation DMs when checking for existing", () => {
+    const messages = [
+      makeMessage(1, "sent", 7),
+      {
+        ...makeMessage(2, "sent", 4),
+        opened: false,
+        channel: "email",
+      },
+      {
+        id: "dm-1",
+        lead_id: "lead-1",
+        step_number: 3,
+        status: "draft",
+        channel: "instagram_dm",
+        is_channel_escalation: false,
+        created_at: daysAgo(2),
+        sent_at: null,
+      },
+    ];
+    const result = shouldGenerateEscalationDm(messages, new Date());
+    assert.equal(result, true);
   });
 });
 
 // ---- Timing edge cases ----
 
 describe("timing edge cases", () => {
-  it("day 5: too early for 1st follow up", () => {
-    const messages = [makeMessage(1, "sent", 5)];
+  it("day 2: too early for 1st follow up (due day 4, draft day 3)", () => {
+    const messages = [makeMessage(1, "sent", 2)];
     const result = determineFollowUpAction(messages, new Date());
     assert.equal(result.action, "skip");
     assert.equal(result.reason, "too_early");
   });
 
-  it("day 6: exactly 1 day before due date, should generate", () => {
-    const messages = [makeMessage(1, "sent", 6)];
+  it("day 3: ready for draft (1 day before due date day 4)", () => {
+    // Initial sent 3 days ago, step 2 due day 4, draft generated day 3 = today
+    const messages = [makeMessage(1, "sent", 3)];
     const result = determineFollowUpAction(messages, new Date());
     assert.equal(result.action, "generate");
     assert.equal(result.nextStepNumber, 2);
   });
 
-  it("day 7: on due date, should generate", () => {
-    const messages = [makeMessage(1, "sent", 7)];
+  it("day 4: on due date for draft generation", () => {
+    // Initial sent 4 days ago, step 2 due day 4, draft generated day 3 = yesterday (overdue)
+    const messages = [makeMessage(1, "sent", 4)];
     const result = determineFollowUpAction(messages, new Date());
     assert.equal(result.action, "generate");
     assert.equal(result.nextStepNumber, 2);
   });
 
-  it("day 10: overdue but still generates", () => {
-    const messages = [makeMessage(1, "sent", 10)];
+  it("day 5: overdue, still generates", () => {
+    const messages = [makeMessage(1, "sent", 5)];
+    const result = determineFollowUpAction(messages, new Date());
+    assert.equal(result.action, "generate");
+    assert.equal(result.nextStepNumber, 2);
+  });
+
+  it("day 8: well overdue, still generates", () => {
+    const messages = [makeMessage(1, "sent", 8)];
     const result = determineFollowUpAction(messages, new Date());
     assert.equal(result.action, "generate");
     assert.equal(result.nextStepNumber, 2);
@@ -265,38 +488,57 @@ describe("timing edge cases", () => {
 // ---- Full sequence simulation ----
 
 describe("full sequence simulation", () => {
-  it("walks through entire 4-step sequence", () => {
+  it("walks through entire 5-step sequence with 4-day gaps", () => {
     const now = new Date();
 
-    // Day 0: initial sent
-    let messages = [makeMessage(1, "sent", 18)];
+    // Day 0: initial sent 13 days ago
+    let messages = [makeMessage(1, "sent", 13)];
 
-    // Day 6: generate 1st follow up
+    // Day 12 (1 day before due): generate 1st follow up
     let result = determineFollowUpAction(messages, now);
     assert.equal(result.action, "generate");
     assert.equal(result.followUpLabel, "1st follow up");
 
-    // Simulate: 1st follow up was sent
-    messages.push(makeMessage(2, "sent", 11));
+    // Simulate: 1st follow up was sent 9 days ago
+    messages.push(makeMessage(2, "sent", 9));
 
-    // Day 13: generate 2nd follow up
+    // Day 8 (1 day before due): generate 2nd follow up
     result = determineFollowUpAction(messages, now);
     assert.equal(result.action, "generate");
     assert.equal(result.followUpLabel, "2nd follow up");
 
-    // Simulate: 2nd follow up was sent
-    messages.push(makeMessage(3, "sent", 4));
+    // Simulate: 2nd follow up was sent 5 days ago
+    messages.push(makeMessage(3, "sent", 5));
 
-    // Day 17: generate 3rd follow up
+    // Day 4 (1 day before due): generate 3rd follow up
     result = determineFollowUpAction(messages, now);
     assert.equal(result.action, "generate");
     assert.equal(result.followUpLabel, "3rd follow up");
 
-    // Simulate: 3rd follow up was sent
+    // Simulate: 3rd follow up was sent 1 day ago
     messages.push(makeMessage(4, "sent", 1));
 
-    // Sequence complete
+    // Day 1 (3 days before step 5 due): not yet ready for re-engagement
     result = determineFollowUpAction(messages, now);
+    assert.equal(result.action, "skip");
+    assert.equal(result.reason, "too_early");
+
+    // Simulate time passing: initial now 103 days ago
+    const futureMessages = [
+      makeMessage(1, "sent", 103),
+      makeMessage(2, "sent", 99),
+      makeMessage(3, "sent", 95),
+      makeMessage(4, "sent", 91),
+    ];
+    result = determineFollowUpAction(futureMessages, now);
+    assert.equal(result.action, "generate");
+    assert.equal(result.followUpLabel, "re-engagement");
+
+    // Simulate: re-engagement sent
+    futureMessages.push(makeMessage(5, "sent", 1));
+
+    // Sequence complete
+    result = determineFollowUpAction(futureMessages, now);
     assert.equal(result.action, "complete");
     assert.equal(result.newStage, "no_response");
   });
