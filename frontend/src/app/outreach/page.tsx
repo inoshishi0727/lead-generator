@@ -99,10 +99,22 @@ export default function OutreachPage() {
   const sendMutation = useSendApproved();
   const followupsMutation = useGenerateFollowups();
 
+  // Build set of lead_ids that have a sent step 1 message
+  const leadsWithSentEmail = new Set(
+    (messages ?? [])
+      .filter((m) => m.step_number === 1 && m.status === "sent")
+      .map((m) => m.lead_id)
+  );
+
   const filteredByStatus = statusFilter === "conversations"
     ? (messages ?? []).filter((m) => m.has_reply)
     : statusFilter === "follow-ups"
-      ? (messages ?? []).filter((m) => ((m.step_number ?? 1) > 1) && m.status !== "sent" && !m.has_reply)
+      ? (messages ?? []).filter((m) =>
+          ((m.step_number ?? 1) > 1)
+          && m.status !== "sent"
+          && !m.has_reply
+          && leadsWithSentEmail.has(m.lead_id)
+        )
       : (statusFilter === "all")
         ? (messages ?? [])
         : (messages ?? []).filter((m) => m.status === statusFilter);
