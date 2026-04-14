@@ -103,3 +103,34 @@ export function determineFollowUpAction(messages, now) {
     newStage,
   };
 }
+
+/**
+ * Determine if an Instagram DM escalation should be generated.
+ * Returns true if step 2 email was sent, has no opens, is at least 3 days old,
+ * and no escalation DM already exists.
+ *
+ * @param {Array} messages - All outreach messages for this lead
+ * @param {Date} now - Current date/time
+ * @returns {boolean}
+ */
+export function shouldGenerateEscalationDm(messages, now) {
+  const step2Email = messages.find(
+    (m) => m.step_number === 2 && m.channel === "email" && m.status === "sent"
+  );
+  if (!step2Email) return false;
+
+  // Already have an escalation DM (planned, draft, approved, or sent)
+  const existingDm = messages.find(
+    (m) => m.is_channel_escalation === true &&
+      (m.status === "planned" || m.status === "draft" || m.status === "approved" || m.status === "sent")
+  );
+  if (existingDm) return false;
+
+  // Wait at least 3 days after step 2 send before escalating
+  const step2SentAt = new Date(step2Email.sent_at);
+  const daysSinceSent = (now - step2SentAt) / (1000 * 60 * 60 * 24);
+  if (daysSinceSent < 3) return false;
+
+  // Escalate only if not opened
+  return !step2Email.opened;
+}
