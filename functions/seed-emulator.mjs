@@ -568,8 +568,20 @@ async function seed() {
   console.log("  [H] The Fresh Bar — sent 2 days ago, too early for follow-up");
 
   // ──────────────────────────────────────────────
+  // Seed admin user for analytics summary email testing
+  console.log("\nSeeding users collection for analytics email testing...");
+  await db.collection("users").doc("test-admin").set({
+    email: "admin@example.com",
+    role: "admin",
+    display_name: "Test Admin",
+    created_at: new Date().toISOString(),
+  });
+  console.log("  Admin user seeded: admin@example.com");
+
+  // ──────────────────────────────────────────────
   console.log("\n--- Summary ---");
   console.log("8 leads seeded across leads, outreach_messages, inbound_replies");
+  console.log("1 admin user seeded for analytics email testing");
   console.log("\nExpected generateFollowups behaviour:");
   console.log("  [A] The Cocktail Club    → skip (draft_exists — step 2 already approved)");
   console.log("  [B] Bar Valentino        → skip (draft_exists — step 3 already approved)");
