@@ -98,6 +98,8 @@ export interface OutreachMessage {
   content: string;
   status: "draft" | "approved" | "rejected" | "sent";
   step_number: number;
+  follow_up_label: string | null;
+  scheduled_send_date: string | null;
   created_at: string | null;
   tone_tier: string | null;
   lead_products: string[];
@@ -119,6 +121,36 @@ export interface OutreachMessage {
   email_message_id?: string;
   reply_to_address?: string;
   variant?: "A" | "B" | null;
+}
+
+// --- Edit Feedback / Reflection ---
+
+export type ReflectionCategory =
+  | "tone"
+  | "product_focus"
+  | "length"
+  | "personalization"
+  | "factual_error"
+  | "structure"
+  | "other";
+
+export interface EditFeedback {
+  id: string;
+  message_id: string;
+  lead_id: string | null;
+  channel: string | null;
+  venue_category: string | null;
+  tone_tier: string | null;
+  step_number: number | null;
+  lead_products: string[];
+  original_content: string;
+  edited_content: string;
+  original_subject: string | null;
+  edited_subject: string | null;
+  created_at: string;
+  reflection_category: ReflectionCategory | null;
+  reflection_note: string | null;
+  reflected_at: string | null;
 }
 
 // --- Reply Tracking ---

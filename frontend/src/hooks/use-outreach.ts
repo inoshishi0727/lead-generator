@@ -3,7 +3,6 @@ import { httpsCallable } from "firebase/functions";
 import { functions } from "@/lib/firebase";
 import { api } from "@/lib/api";
 import { getOutreachMessages, updateOutreachMessage, restoreOriginalEmail, getInboundReplies, deleteInboundReply, deleteOutreachMessage } from "@/lib/firestore-api";
-import { addJob } from "@/lib/job-store";
 import type { OutreachMessage, InboundReply } from "@/lib/types";
 
 const hasBackend = !!process.env.NEXT_PUBLIC_API_URL;
@@ -218,13 +217,21 @@ export function useSendMessage() {
 export function useGenerateFollowups() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: () =>
-      api.post<{ run_id: string; status: string }>(
-        "/api/outreach/generate-followups",
-        {}
-      ),
-    onSuccess: (data) => {
-      addJob("followups", data.run_id);
+    mutationFn: async () => {
+      if (hasBackend) {
+        return api.post<{ generated: number; skipped: number; failed: number; total: number }>(
+          "/api/outreach/generate-followups",
+          {}
+        );
+      }
+      const fn = httpsCallable<
+        Record<string, never>,
+        { generated: number; skipped: number; failed: number; total: number }
+      >(functions, "generateFollowups");
+      const result = await fn({});
+      return result.data;
+    },
+    onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["outreach"] });
     },
   });

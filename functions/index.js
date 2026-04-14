@@ -5,6 +5,7 @@ import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { GoogleGenAI } from "@google/genai";
 import Anthropic from "@anthropic-ai/sdk";
 import { Resend } from "resend";
+import { FOLLOW_UP_LABELS, FOLLOW_UP_GAP_DAYS, shouldSkipLead, determineFollowUpAction } from "./followup-logic.js";
 
 const HttpsError = functions.https.HttpsError;
 
@@ -141,7 +142,7 @@ const SEASONAL_PRODUCTS = {
 // ---- Step instructions ----
 
 const STEP_INSTRUCTIONS = {
-  1: `STEP 1 (First touch). 120-160 words. New thread.
+  1: `STEP 1 — Initial (The Opener). Under 120 words. New thread.
 Structure:
 1. Greeting
 2. 1-2 sentences: Who we are + why we're writing. Direct, warm, genuine.
@@ -151,25 +152,36 @@ Structure:
 6. 1 sentence: Closing CTA. "When's a good time to catch you?" / "When's good?"
 7. [blank line] Sign-off only ("Cheers," or "All the best,"). Do NOT add name, company, or URL — the HTML signature handles that.
 
-Two CTAs: soft early ("Can I send samples?") + direct close ("When's good?").`,
+Two CTAs: soft early ("Can I send samples?") + direct close ("When's good?").
+Reference something specific about their venue: a cocktail on their menu, a recent Instagram post, their vibe, their approach to aperitivo.
+One line about English vermouth as a concept — don't explain, just intrigue.
+Coming from Rob as co-founder changes the dynamic. Lean into it: "My brother and I make English vermouth in South London."`,
 
-  2: `STEP 2 (Add value). 80-100 words. Same thread. Subject: "Re: {previous_subject}"
-Do NOT re-introduce who we are. The thread provides context.
-Add a SECOND product, a new serve, or a specific angle not mentioned in step 1.
-Shorter, punchier. New information only.
-CTA: "Happy to send samples of both. Let me know."`,
+  2: `STEP 2 — 1st Follow Up (The Value Touch). Under 100 words. New subject line (NOT "Re:").
+Angle: Social proof, data, or education. Rotate based on what's relevant:
+- "We just got listed at [notable venue] — their bar manager said it's changed their Negroni"
+- Share a vermouth trend stat or aperitivo insight they might find interesting
+- Reference a seasonal opportunity: "Summer menus are being built right now — English vermouth in a Spritz is turning heads"
+- Drop a specific stockist name they'll respect
+Do NOT re-introduce who we are. The reader should already know from the initial email.
+Restate CTA briefly: "Happy to send samples. Let me know."`,
 
-  3: `STEP 3 (Seasonal/social proof). 80-110 words. Same thread. Subject: "Re: {previous_subject}"
-Do NOT re-introduce who we are.
-Use seasonality ("Spring menus are being finalised across London right now") or social proof ("several independent bars have picked it up this season").
-Can mention BiB here if relevant to high-volume venues.
-CTA: "Offer is always open. Happy to send samples whenever works."`,
+  3: `STEP 3 — 2nd Follow Up (The Content Share). Under 80 words. Same thread. Subject: "Re: {previous_subject}"
+Angle: Give, don't ask. Share something genuinely useful — NOT an Asterley sales doc.
+Options:
+- A piece about aperitivo trends in the UK
+- A cocktail recipe featuring English vermouth
+- An article about vermouth's role in modern menus
+The message is 2 lines max: "Thought you might find this interesting. No ask — just sharing."
+Do NOT re-introduce who we are. Do NOT pitch product.`,
 
-  4: `STEP 4 (Soft close). 50-90 words. Subject: "Re: {previous_subject}" (or NEW subject if they never opened previous emails).
-Very short. Respectful. No new product info. Door left open.
-CTA: "Just reply to this email and I'll get samples sent." / "Just let me know."
-Never guilt-trip. No "I haven't heard back" or "I'm sure you're busy."
-Tone: gracious.`,
+  4: `STEP 4 — 3rd Follow Up (The Soft Close). Under 80 words. Subject: "Re: {previous_subject}"
+This is the LAST email in the sequence. Keep it very short and respectful.
+- Acknowledge this is the last message for now
+- Make the CTA frictionless: "I'll have a sample box sent to [venue name] this week if you text me the delivery address. No commitment."
+- No pressure language
+- Leave the door open: "We'll be back in touch when we've got something seasonal to share"
+Never guilt-trip. No "I haven't heard back" or "I'm sure you're busy." Tone: gracious.`,
 };
 
 // ---- Email system prompt ----
@@ -392,7 +404,12 @@ async function getEditFeedback(venueCat, toneTier, limit = 3) {
     const toneMatched = docs.filter((d) => d.tone_tier === toneTier);
     const examples = matched.length >= 2 ? matched : toneMatched.length >= 2 ? toneMatched : docs;
 
-    const selected = examples.slice(0, limit);
+    // Prioritize reflected edits (those with a reason note) over unreflected ones
+    const reflected = examples.filter((d) => d.reflection_note);
+    const unreflected = examples.filter((d) => !d.reflection_note);
+    const selected = reflected.length >= limit
+      ? reflected.slice(0, limit)
+      : [...reflected, ...unreflected].slice(0, limit);
     if (selected.length === 0) return "";
 
     let block = `\nHUMAN EDIT EXAMPLES (learn from these corrections — the human edited Claude's draft to improve it):\n`;
@@ -404,7 +421,11 @@ async function getEditFeedback(venueCat, toneTier, limit = 3) {
         block += `\nCorrected subject: ${fb.edited_subject}`;
       }
       block += `\nOriginal:\n${fb.original_content}`;
-      block += `\nCorrected:\n${fb.edited_content}\n`;
+      block += `\nCorrected:\n${fb.edited_content}`;
+      if (fb.reflection_note) {
+        block += `\nReason for edit: ${fb.reflection_note}`;
+      }
+      block += "\n";
     }
     return block;
   } catch (err) {
@@ -533,6 +554,8 @@ export const generateDrafts = functions
           content,
           status: "draft",
           step_number: 1,
+          follow_up_label: "initial",
+          scheduled_send_date: null,
           created_at: new Date().toISOString(),
           tone_tier: enrichment.tone_tier || null,
           lead_products: enrichment.lead_products || [],
@@ -720,6 +743,8 @@ export const regenerateAllDrafts = functions
           content,
           status: "draft",
           step_number: 1,
+          follow_up_label: "initial",
+          scheduled_send_date: null,
           created_at: new Date().toISOString(),
           tone_tier: enrichment.tone_tier || null,
           lead_products: enrichment.lead_products || [],
@@ -1044,13 +1069,54 @@ function buildHtmlEmail(content) {
   return `<div style="font-family: Arial, sans-serif; font-size: 14px; color: #333; line-height: 1.5;"><div style="white-space: pre-wrap;">${escaped}</div><br>${EMAIL_SIGNATURE_HTML}</div>`;
 }
 
+// UK bank holidays (England & Wales) for 2026-2027.
+// Update annually or fetch from https://www.gov.uk/bank-holidays.json
+const UK_BANK_HOLIDAYS = new Set([
+  // 2026
+  "2026-01-01", "2026-04-03", "2026-04-06", "2026-05-04", "2026-05-25",
+  "2026-08-31", "2026-12-25", "2026-12-28",
+  // 2027
+  "2027-01-01", "2027-03-26", "2027-03-29", "2027-05-03", "2027-05-31",
+  "2027-08-30", "2027-12-27", "2027-12-28",
+]);
+
+/**
+ * Check if a given date (London time) is a blackout day for outreach.
+ * Blackout = weekends, UK bank holidays, Dec 24 - Jan 3.
+ */
+function isBlackoutDay(londonDate) {
+  const day = londonDate.getDay(); // 0=Sun, 6=Sat
+  if (day === 0 || day === 6) return true;
+
+  const month = londonDate.getMonth(); // 0-indexed
+  const date = londonDate.getDate();
+
+  // Dec 24-31
+  if (month === 11 && date >= 24) return true;
+  // Jan 1-3
+  if (month === 0 && date <= 3) return true;
+
+  // Bank holidays
+  const iso = londonDate.toISOString().split("T")[0];
+  if (UK_BANK_HOLIDAYS.has(iso)) return true;
+
+  return false;
+}
+
+/**
+ * Is now within the optimal send window?
+ * Per proposal: Tue-Thu, 9-11am London time, no blackout days.
+ */
 function isOptimalWindow() {
   const now = new Date();
   const london = new Date(now.toLocaleString("en-US", { timeZone: "Europe/London" }));
-  const day = london.getDay(); // 0=Sun
+
+  if (isBlackoutDay(london)) return false;
+
+  const day = london.getDay();
   const hour = london.getHours();
   const isBestDay = [2, 3, 4].includes(day); // Tue, Wed, Thu
-  const isBestTime = hour >= 10 && hour < 13;
+  const isBestTime = hour >= 9 && hour < 11; // 9-11am per proposal
   return isBestDay && isBestTime;
 }
 
@@ -1748,4 +1814,194 @@ export const assignReplyToLead = functions
     }
 
     return { status: "ok" };
+  });
+
+// ---- Generate Follow-Up Drafts ----
+
+/**
+ * Core follow-up generation logic, shared by the callable and the scheduled trigger.
+ * Returns { generated, skipped, failed, total }.
+ */
+async function runFollowUpGeneration() {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    throw new Error("ANTHROPIC_API_KEY not configured.");
+  }
+
+  const anthropic = new Anthropic({ apiKey });
+
+  // 1. Find all leads in follow-up eligible stages
+  const eligibleStages = ["sent", "follow_up_1", "follow_up_2"];
+  const leadsSnap = await db.collection("leads").get();
+  const allLeads = leadsSnap.docs
+    .map((d) => ({ id: d.id, ...d.data() }))
+    .filter((d) => eligibleStages.includes(d.stage));
+
+  if (allLeads.length === 0) {
+    return { generated: 0, skipped: 0, failed: 0, total: 0 };
+  }
+
+  // 2. Get all outreach messages and inbound replies for these leads
+  const msgsSnap = await db.collection("outreach_messages").get();
+  const allMessages = msgsSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+
+  const repliesSnap = await db.collection("inbound_replies")
+    .where("matched", "==", true)
+    .get();
+  const leadsWithReplies = new Set(
+    repliesSnap.docs.map((d) => d.data().lead_id).filter(Boolean)
+  );
+
+  const now = new Date();
+  let generated = 0;
+  let skipped = 0;
+  let failed = 0;
+
+  for (const lead of allLeads) {
+    try {
+      // STOP CHECKS using extracted logic
+      const skipReason = shouldSkipLead(lead, leadsWithReplies.has(lead.id));
+      if (skipReason) {
+        console.log(`SKIP [${lead.business_name}]: ${skipReason}`);
+        skipped++; continue;
+      }
+
+      // Find messages for this lead
+      const leadMessages = allMessages
+        .filter((m) => m.lead_id === lead.id)
+        .sort((a, b) => (b.sent_at || b.created_at || "").localeCompare(a.sent_at || a.created_at || ""));
+
+      // Use extracted logic to determine action
+      const result = determineFollowUpAction(leadMessages, now);
+
+      if (result.action === "complete") {
+        console.log(`COMPLETE [${lead.business_name}]: marking no_response`);
+        await db.collection("leads").doc(lead.id).update({ stage: "no_response" });
+        skipped++;
+        continue;
+      }
+
+      if (result.action === "skip") {
+        console.log(`SKIP [${lead.business_name}]: ${result.reason}`);
+        skipped++; continue;
+      }
+
+      console.log(`GENERATE [${lead.business_name}]: step ${result.nextStepNumber} (${result.followUpLabel}), send on ${result.scheduledSendDate}`);
+
+      const { nextStepNumber, followUpLabel, scheduledSendDate } = result;
+
+      // Find previous subject for "Re:" threading
+      const initialMessage = leadMessages.find((m) => m.step_number === 1 && m.status === "sent");
+      const lastSent = leadMessages.find((m) => m.status === "sent");
+      const previousSubject = initialMessage?.subject || lastSent?.subject || "";
+
+      // Generate the follow-up draft
+      const enrichment = lead.enrichment || {};
+      const venueCat = enrichment.venue_category || lead.category || "cocktail_bar";
+      const toneTier = enrichment.tone_tier || "bartender_casual";
+      const prompt = buildPrompt(lead, enrichment, nextStepNumber, previousSubject);
+
+      const feedbackBlock = await getEditFeedback(venueCat, toneTier);
+      const systemPrompt = feedbackBlock
+        ? EMAIL_SYSTEM_PROMPT + feedbackBlock
+        : EMAIL_SYSTEM_PROMPT;
+
+      const response = await anthropic.messages.create({
+        model: CLAUDE_MODEL,
+        max_tokens: 1024,
+        system: systemPrompt,
+        messages: [{ role: "user", content: prompt }],
+      });
+
+      let content = response.content[0].text || "";
+      let subject = null;
+
+      if (content.includes("Subject:")) {
+        const lines = content.split("\n");
+        for (let i = 0; i < lines.length; i++) {
+          if (lines[i].trim().startsWith("Subject:")) {
+            subject = lines[i].trim().replace("Subject:", "").trim();
+            content = lines.slice(i + 1).join("\n").trim();
+            break;
+          }
+        }
+      }
+
+      const contact = enrichment.contact || {};
+      const msgId = crypto.randomUUID();
+      await db.collection("outreach_messages").doc(msgId).set({
+        id: msgId,
+        lead_id: lead.id,
+        business_name: lead.business_name,
+        venue_category: enrichment.venue_category || null,
+        channel: "email",
+        subject,
+        content,
+        status: "draft",
+        step_number: nextStepNumber,
+        follow_up_label: followUpLabel,
+        scheduled_send_date: scheduledSendDate,
+        created_at: new Date().toISOString(),
+        tone_tier: enrichment.tone_tier || null,
+        lead_products: enrichment.lead_products || [],
+        contact_name: lead.contact_name || contact.name || null,
+        context_notes: enrichment.context_notes || null,
+        menu_fit: enrichment.menu_fit || null,
+        recipient_email: lead.email || lead.contact_email || null,
+        website: lead.website || null,
+        workspace_id: lead.workspace_id || "",
+        original_content: content,
+        original_subject: subject,
+        was_edited: false,
+      });
+
+      // Update lead stage
+      if (result.newStage && result.newStage !== lead.stage) {
+        await db.collection("leads").doc(lead.id).update({ stage: result.newStage });
+      }
+
+      generated++;
+    } catch (err) {
+      console.error("Follow-up draft failed for", lead.business_name, err.message);
+      failed++;
+    }
+  }
+
+  return { generated, skipped, failed, total: allLeads.length };
+}
+
+/**
+ * Manual trigger — callable from frontend.
+ */
+export const generateFollowups = functions
+  .runWith({ timeoutSeconds: 540, memory: "512MB", secrets: ["ANTHROPIC_API_KEY"] })
+  .https.onCall(async (_data, context) => {
+    if (!context.auth) {
+      throw new HttpsError("unauthenticated", "Must be signed in.");
+    }
+    return runFollowUpGeneration();
+  });
+
+/**
+ * Scheduled trigger — runs Mon-Fri at 8am London time.
+ * Skips weekends, bank holidays, and Dec 24 - Jan 3.
+ * Generates follow-up drafts so they're ready for review
+ * before the optimal send window (Tue-Thu 9-11am).
+ */
+export const scheduledFollowups = functions
+  .runWith({ timeoutSeconds: 540, memory: "512MB", secrets: ["ANTHROPIC_API_KEY"] })
+  .pubsub.schedule("0 8 * * 1-5")
+  .timeZone("Europe/London")
+  .onRun(async () => {
+    // Skip blackout days (bank holidays, Dec 24 - Jan 3)
+    const now = new Date();
+    const london = new Date(now.toLocaleString("en-US", { timeZone: "Europe/London" }));
+    if (isBlackoutDay(london)) {
+      console.log("Scheduled follow-ups skipped: blackout day");
+      return null;
+    }
+
+    const result = await runFollowUpGeneration();
+    console.log("Scheduled follow-up generation:", JSON.stringify(result));
+    return null;
   });

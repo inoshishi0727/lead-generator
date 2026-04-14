@@ -136,6 +136,18 @@ export async function POST(req: NextRequest) {
     const force = body?.force === true;
     const limit = body?.limit || 50;
 
+    // Proxy to VPS if configured (server-side, avoids mixed content)
+    const vpsUrl = process.env.NEXT_PUBLIC_VPS_URL;
+    if (vpsUrl) {
+      const vpsRes = await fetch(`${vpsUrl}/api/enrich`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ force, limit }),
+      });
+      const vpsData = await vpsRes.json();
+      return NextResponse.json(vpsData, { status: vpsRes.status });
+    }
+
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
       return NextResponse.json({ error: "GEMINI_API_KEY not configured." }, { status: 500 });

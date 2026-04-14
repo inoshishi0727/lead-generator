@@ -197,12 +197,15 @@ pipeline:
     - sent
     - follow_up_1
     - follow_up_2
+    - no_response
     - responded
     - converted
     - declined
   follow_up_days:
-    first: 5
-    second: 12
+    first: 7
+    second: 14
+    third: 18
+  draft_lead_days: 1
 
 lead_ratios:
   cocktail_bar: 0.20

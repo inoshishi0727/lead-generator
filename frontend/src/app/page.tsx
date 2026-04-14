@@ -24,6 +24,7 @@ import {
   Download,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
+import { EditReflectionBanner } from "@/components/edit-reflection-banner";
 import { useImportQueries, type SearchQueries } from "@/hooks/use-search-queries";
 import { toast } from "sonner";
 import type { Lead } from "@/lib/types";
@@ -150,6 +151,9 @@ export default function DashboardPage() {
           </Link>
         </div>
       </div>
+
+      {/* Edit reflection banner */}
+      <EditReflectionBanner />
 
       {/* Key Metrics */}
       <div data-tour="metrics" className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
