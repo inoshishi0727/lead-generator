@@ -24,6 +24,7 @@ export async function getLeads(filters?: {
   source?: string;
   stage?: string;
   search?: string;
+  assignedTo?: string;
 }): Promise<Lead[]> {
   const ref = collection(db, "leads");
   const constraints: any[] = [];
@@ -34,6 +35,9 @@ export async function getLeads(filters?: {
   }
   if (filters?.stage && filters.stage !== "All") {
     constraints.push(where("stage", "==", filters.stage));
+  }
+  if (filters?.assignedTo) {
+    constraints.push(where("assigned_to", "==", filters.assignedTo));
   }
 
   const q = constraints.length > 0 ? query(ref, ...constraints) : ref;
@@ -85,6 +89,10 @@ export async function getLeads(filters?: {
       rejection_reason: data.rejection_reason || null,
       rejection_notes: data.rejection_notes || null,
       batch_id: data.batch_id || null,
+      assigned_to: data.assigned_to || null,
+      assigned_to_name: data.assigned_to_name || null,
+      assigned_at: data.assigned_at || null,
+      assigned_by: data.assigned_by || null,
       human_takeover: data.human_takeover || false,
       human_takeover_at: data.human_takeover_at || null,
       outcome: data.outcome || null,
@@ -150,6 +158,10 @@ export async function getLeadById(id: string): Promise<Lead | null> {
     rejection_reason: data.rejection_reason || null,
     rejection_notes: data.rejection_notes || null,
     batch_id: data.batch_id || null,
+    assigned_to: data.assigned_to || null,
+    assigned_to_name: data.assigned_to_name || null,
+    assigned_at: data.assigned_at || null,
+    assigned_by: data.assigned_by || null,
     human_takeover: data.human_takeover || false,
     human_takeover_at: data.human_takeover_at || null,
     outcome: data.outcome || null,
@@ -165,6 +177,7 @@ export async function getOutreachMessages(filters?: {
   channel?: string;
   lead_id?: string;
   limit?: number;
+  assignedTo?: string;
 }): Promise<OutreachMessage[]> {
   const ref = collection(db, "outreach_messages");
   const constraints: any[] = [];
@@ -172,6 +185,7 @@ export async function getOutreachMessages(filters?: {
   if (filters?.status) constraints.push(where("status", "==", filters.status));
   if (filters?.channel) constraints.push(where("channel", "==", filters.channel));
   if (filters?.lead_id) constraints.push(where("lead_id", "==", filters.lead_id));
+  if (filters?.assignedTo) constraints.push(where("assigned_to", "==", filters.assignedTo));
 
   const q = constraints.length > 0 ? query(ref, ...constraints) : ref;
   const snap = await getDocs(q);
@@ -206,6 +220,15 @@ export async function getOutreachMessages(filters?: {
       has_reply: data.has_reply || false,
       reply_count: data.reply_count || 0,
       sent_at: data.sent_at || null,
+      email_message_id: data.email_message_id || undefined,
+      opened: data.opened || false,
+      opened_at: data.opened_at || null,
+      open_count: data.open_count || 0,
+      last_opened_at: data.last_opened_at || null,
+      delivered: data.delivered || false,
+      delivered_at: data.delivered_at || null,
+      parent_email_message_id: data.parent_email_message_id || null,
+      assigned_to: data.assigned_to || null,
     };
   });
 
@@ -400,6 +423,7 @@ export async function getInboundReplies(filters?: {
       forwarded_by: data.forwarded_by || null,
       sentiment: data.sentiment || null,
       sentiment_reason: data.sentiment_reason || null,
+      assigned_to: data.assigned_to || null,
     };
   });
 
