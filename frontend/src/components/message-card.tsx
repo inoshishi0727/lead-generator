@@ -263,6 +263,11 @@ export function MessageCard({ message }: Props) {
                 Venue: <a href={message.website} target="_blank" rel="noopener noreferrer" className="font-medium text-blue-600 hover:underline dark:text-blue-400">{message.website.replace(/^https?:\/\/(www\.)?/, "").replace(/\/$/, "")}</a>
               </p>
             )}
+            {message.menu_url && (
+              <p>
+                Menu: <a href={message.menu_url} target="_blank" rel="noopener noreferrer" className="font-medium text-emerald-600 hover:underline dark:text-emerald-400">{message.menu_url.replace(/^https?:\/\/(www\.)?/, "").replace(/\/$/, "")}</a>
+              </p>
+            )}
             {message.contact_name && (
               <p>
                 Contact: <span className="font-medium text-foreground">{message.contact_name}</span>

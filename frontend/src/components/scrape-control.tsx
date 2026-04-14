@@ -1,13 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { useConfig } from "@/hooks/use-config";
 import { useOutreachPlan } from "@/hooks/use-outreach-plan";
-import { Play, Monitor, MapPin, Search, ChevronDown, ChevronUp, Plus, X, Sparkles, Target } from "lucide-react";
+import { useScrapeHistory } from "@/hooks/use-scrape";
+import { Play, Monitor, MapPin, Search, ChevronDown, ChevronUp, Plus, X, Sparkles, Target, AlertTriangle } from "lucide-react";
 
 interface Props {
   onStart: (queries: string[], limit: number, headless: boolean) => void;
@@ -37,6 +38,7 @@ const DEFAULT_CATEGORIES: CategoryConfig[] = [
 export function ScrapeControl({ onStart, isStarting, isRunning }: Props) {
   const { data: config } = useConfig();
   const { data: plan } = useOutreachPlan(10);
+  const { data: scrapeHistory } = useScrapeHistory();
   const [location, setLocation] = useState("UK");
   const [limit, setLimit] = useState(60);
   const [headless, setHeadless] = useState(false);
@@ -44,6 +46,23 @@ export function ScrapeControl({ onStart, isStarting, isRunning }: Props) {
   const [showCategories, setShowCategories] = useState(false);
   const [newCatLabel, setNewCatLabel] = useState("");
   const [newCatQuery, setNewCatQuery] = useState("");
+
+  // Detect if the same location was scraped recently (last 7 days)
+  const recentDuplicate = useMemo(() => {
+    if (!scrapeHistory || !location.trim()) return null;
+    const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    return (
+      scrapeHistory.find((run) => {
+        if (run.status !== "completed") return false;
+        if (new Date(run.started_at).getTime() < cutoff) return false;
+        return run.query.toLowerCase().includes(location.trim().toLowerCase());
+      }) ?? null
+    );
+  }, [scrapeHistory, location]);
+
+  const duplicateDaysAgo = recentDuplicate
+    ? Math.round((Date.now() - new Date(recentDuplicate.started_at).getTime()) / (1000 * 60 * 60 * 24))
+    : null;
 
   const enabledCategories = categories.filter((c) => c.enabled);
   const totalRatio = enabledCategories.reduce((sum, c) => sum + c.ratio, 0);
@@ -355,6 +374,21 @@ export function ScrapeControl({ onStart, isStarting, isRunning }: Props) {
           <Monitor className="h-4 w-4 text-muted-foreground" />
           Headless mode (hide browser window)
         </label>
+
+        {/* Duplicate scrape warning */}
+        {recentDuplicate && (
+          <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-400">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <span>
+              <span className="font-semibold">Similar scrape already ran</span>
+              {" "}—{" "}
+              {duplicateDaysAgo === 0
+                ? "today"
+                : `${duplicateDaysAgo} day${duplicateDaysAgo !== 1 ? "s" : ""} ago`}
+              {" "}({recentDuplicate.leads_found} leads found). You can still run it again.
+            </span>
+          </div>
+        )}
 
         {/* Start button */}
         <Button

@@ -355,10 +355,16 @@ def _sort_parts_by_relevance(parts: list[str]) -> list[str]:
     return sorted(parts, key=priority)
 
 
+MENU_PATH_PATTERN = re.compile(
+    r"menu|drink|cocktail|wine|bar|beverage",
+    re.IGNORECASE,
+)
+
+
 async def fetch_website_text(
     url: str,
     config: EnrichmentConfig,
-) -> str:
+) -> tuple[str, str | None]:
     """Fetch text content from a venue website.
 
     Strategy:
@@ -373,12 +379,14 @@ async def fetch_website_text(
     7. Sort parts so menu content comes first before truncation
     8. Concatenate all text for Gemini analysis
 
-    Returns empty string on total failure.
+    Returns (text, menu_url) where menu_url is the best menu asset URL found
+    (priority: menu PDF > image menu > menu HTML page), or None if not found.
+    Returns ("", None) on total failure.
     """
     from src.scrapers.browser import close_browser, get_proxy_config, launch_browser
 
     if not url:
-        return ""
+        return "", None
 
     if not url.startswith(("http://", "https://")):
         url = f"https://{url}"
@@ -387,6 +395,7 @@ async def fetch_website_text(
     visited: set[str] = set()
     browser = None
     engine = "camoufox"
+    discovered_html_links: list[str] = []
 
     try:
         browser, engine = await launch_browser(headless=config.headless)
@@ -428,6 +437,7 @@ async def fetch_website_text(
 
         # Step 2: Discover links from homepage
         discovered, pdf_links, image_links = await _discover_links(page, url)
+        discovered_html_links = list(discovered)
         log.debug(
             "links_discovered",
             url=url,
@@ -487,7 +497,7 @@ async def fetch_website_text(
 
     except Exception as e:
         log.warning("browser_fetch_failed", url=url, engine=engine, error=str(e))
-        return ""
+        return "", None
     finally:
         if browser:
             await close_browser(browser, engine)
@@ -518,10 +528,23 @@ async def fetch_website_text(
     if len(full_text) > config.gemini_max_input_chars:
         full_text = full_text[: config.gemini_max_input_chars]
 
+    # Determine best menu URL (PDF first, then image, then HTML menu page)
+    menu_url: str | None = None
+    if pdf_links:
+        menu_url = pdf_links[0]
+    elif image_links:
+        menu_url = image_links[0]
+    else:
+        for link in discovered_html_links:
+            if MENU_PATH_PATTERN.search(urlparse(link).path):
+                menu_url = link
+                break
+
     log.info(
         "website_text_fetched",
         url=url,
         pages=len(collected_parts),
         total_chars=len(full_text),
+        menu_url=menu_url,
     )
-    return full_text
+    return full_text, menu_url

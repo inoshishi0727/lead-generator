@@ -49,7 +49,7 @@ async def test_one(url: str, config: EnrichmentConfig) -> None:
     print(f"FETCHING: {url}")
     print(f"{'='*60}")
 
-    text = await fetch_website_text(url, config)
+    text, menu_url = await fetch_website_text(url, config)
 
     if not text:
         print(f"  ERROR: No text returned for {url}")
@@ -63,6 +63,7 @@ async def test_one(url: str, config: EnrichmentConfig) -> None:
                       and any(k in s.split("\n")[0].lower() for k in MENU_KEYWORDS)]
 
     print(f"\n  Total chars: {len(text)}  |  Sections: {len(sections)}")
+    print(f"  Menu URL:            {menu_url or 'none'}")
     print(f"  PDF sections:        {len(pdf_sections)}")
     print(f"  Image menu sections: {len(image_sections)}")
     print(f"  Menu/drinks pages:   {len(menu_sections)}")
@@ -82,7 +83,7 @@ async def test_one(url: str, config: EnrichmentConfig) -> None:
     print(f"ENRICHMENT ANALYSIS: {url}")
     print(f"{'='*60}")
     lead = Lead(business_name=url, website=url, source=LeadSource.GOOGLE_MAPS)
-    enrichment = await analyze_website(text, lead, config)
+    enrichment = await analyze_website(text, lead, config, menu_url=menu_url)
 
     if enrichment.enrichment_status != "success":
         print(f"  FAILED: {enrichment.enrichment_error}")
@@ -113,6 +114,7 @@ async def test_one(url: str, config: EnrichmentConfig) -> None:
     print()
     print(f"  Why Asterley fits: {enrichment.why_asterley_fits or 'null'}")
     print(f"  Context notes:     {enrichment.context_notes or 'null'}")
+    print(f"  Menu URL:          {enrichment.menu_url or 'none'}")
     print(f"  Products:          {', '.join(enrichment.lead_products) if enrichment.lead_products else 'none'}")
 
 
