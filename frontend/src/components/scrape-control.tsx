@@ -53,7 +53,6 @@ export function ScrapeControl({ onStart, isStarting, isRunning }: Props) {
   const [showCategories, setShowCategories] = useState(false);
   const [newCatLabel, setNewCatLabel] = useState("");
   const [newCatQuery, setNewCatQuery] = useState("");
-  const [duplicateAcknowledged, setDuplicateAcknowledged] = useState(false);
 
   const enabledCategories = categories.filter((c) => c.enabled);
   const totalRatio = enabledCategories.reduce((sum, c) => sum + c.ratio, 0);
@@ -113,16 +112,14 @@ export function ScrapeControl({ onStart, isStarting, isRunning }: Props) {
     return currentFp === lastFp;
   }, [currentQueries, lastCompletedRun]);
 
-  // Reset acknowledgement when queries change
-  const currentFpForReset = normalizeScrapeFingerprint(currentQueries);
-  const [prevFp, setPrevFp] = useState(currentFpForReset);
-  if (currentFpForReset !== prevFp) {
-    setPrevFp(currentFpForReset);
-    setDuplicateAcknowledged(false);
-  }
+  const duplicateDaysAgo = lastCompletedRun?.started_at
+    ? Math.round(
+        (Date.now() - new Date(lastCompletedRun.started_at).getTime()) /
+          (1000 * 60 * 60 * 24),
+      )
+    : null;
 
   function handleStart() {
-    if (isDuplicate && !duplicateAcknowledged) return;
     onStart(currentQueries, Math.min(limit, remaining), headless);
   }
 
@@ -132,7 +129,7 @@ export function ScrapeControl({ onStart, isStarting, isRunning }: Props) {
     return `${c.label}: ~${leads}`;
   });
 
-  const disabled = isStarting || isRunning || !location || enabledCategories.length === 0 || atTarget || (isDuplicate && !duplicateAcknowledged);
+  const disabled = isStarting || isRunning || !location || enabledCategories.length === 0 || atTarget;
 
   return (
     <Card className="shadow-md">
@@ -389,34 +386,25 @@ export function ScrapeControl({ onStart, isStarting, isRunning }: Props) {
           Headless mode (hide browser window)
         </label>
 
-        {/* Duplicate parameters warning */}
-        {isDuplicate && !duplicateAcknowledged && (
-          <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 space-y-2">
-            <div className="flex items-start gap-2">
-              <AlertTriangle className="h-4 w-4 text-amber-400 mt-0.5 shrink-0" />
-              <div className="space-y-1">
-                <p className="text-sm font-medium text-amber-400">
-                  Same parameters as last scrape
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  These queries are identical to your last completed run
-                  {lastCompletedRun?.started_at && (
-                    <> on {new Date(lastCompletedRun.started_at).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</>
-                  )}
-                  {lastCompletedRun?.leads_found != null && (
-                    <> ({lastCompletedRun.leads_found} leads found)</>
-                  )}. Running again may produce mostly duplicates.
-                </p>
-              </div>
-            </div>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setDuplicateAcknowledged(true)}
-              className="w-full border-amber-500/30 text-amber-400 hover:bg-amber-500/10"
-            >
-              I understand, run anyway
-            </Button>
+        {/* Duplicate parameters warning (non-blocking) */}
+        {isDuplicate && (
+          <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-400">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <span>
+              <span className="font-semibold">Same parameters as last scrape</span>
+              {duplicateDaysAgo != null && (
+                <>
+                  {" "}&mdash;{" "}
+                  {duplicateDaysAgo === 0
+                    ? "today"
+                    : `${duplicateDaysAgo} day${duplicateDaysAgo !== 1 ? "s" : ""} ago`}
+                </>
+              )}
+              {lastCompletedRun?.leads_found != null && (
+                <> ({lastCompletedRun.leads_found} leads found)</>
+              )}
+              . You can still run it again.
+            </span>
           </div>
         )}
 
