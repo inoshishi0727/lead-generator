@@ -5,7 +5,7 @@ import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { GoogleGenAI } from "@google/genai";
 import Anthropic from "@anthropic-ai/sdk";
 import { Resend } from "resend";
-import { FOLLOW_UP_LABELS, FOLLOW_UP_GAP_DAYS, shouldSkipLead, determineFollowUpAction } from "./followup-logic.js";
+import { FOLLOW_UP_LABELS, FOLLOW_UP_GAP_DAYS, shouldSkipLead, determineFollowUpAction, shouldGenerateEscalationDm } from "./followup-logic.js";
 
 const HttpsError = functions.https.HttpsError;
 
@@ -193,6 +193,16 @@ It's been 3 months since we last touched base. Warm, low-pressure tone. Acknowle
 - Tone: friendly peer reconnecting, not sales pressure
 Signal that this is a fresh start, not a continuation of the previous thread.`,
 };
+
+// ---- Instagram Escalation Prompt ----
+
+const INSTAGRAM_ESCALATION_PROMPT = `INSTAGRAM DM — Channel Escalation. Under 80 words.
+You emailed them a few days ago but haven't heard back. This is a short, casual DM — not a sales pitch.
+- Reference the email very briefly: "Dropped you an email recently about Asterley Bros vermouth"
+- Keep it warm and low-friction: "Thought I'd try here in case email got buried!"
+- Short CTA: "Happy to chat or send samples over. Just drop me a line."
+- Sound like a real person sliding into DMs, not a bot.
+- No formal sign-off needed. Conversational tone.`;
 
 // ---- Email system prompt ----
 
@@ -1215,6 +1225,12 @@ export const sendApproved = functions
     let failed = 0;
 
     for (const msg of toSend) {
+      // Skip non-email channels (e.g., instagram_dm) — manual send only
+      if (msg.channel !== "email") {
+        console.log(`SKIP [${msg.business_name}]: channel "${msg.channel}" is not auto-sent`);
+        continue;
+      }
+
       let sendFailed = false; // Track if actual send failed vs pre-send error (Bug #14)
       try {
         // Get lead to find recipient email
@@ -2430,6 +2446,70 @@ async function runFollowUpGeneration() {
     }
   }
 
+  // ---- STEP 3: Channel escalation — Instagram DM if email unopened ----
+  for (const lead of allLeads) {
+    try {
+      const skipReason = shouldSkipLead(lead, leadsWithReplies.has(lead.id));
+      if (skipReason) {
+        continue; // Silent skip for escalation checks
+      }
+
+      if (!lead.instagram_handle) {
+        continue; // No Instagram handle, can't escalate
+      }
+
+      const leadMessages = allMessages.filter((m) => m.lead_id === lead.id);
+
+      if (!shouldGenerateEscalationDm(leadMessages, now)) {
+        continue;
+      }
+
+      // Check if escalation DM already exists (planned, draft, approved, or sent)
+      const existingDm = leadMessages.find(
+        (m) => m.is_channel_escalation === true &&
+          (m.status === "planned" || m.status === "draft" || m.status === "approved" || m.status === "sent")
+      );
+      if (existingDm) {
+        continue; // Already handled
+      }
+
+      // Create a planned card for the Instagram DM escalation
+      const dmId = crypto.randomUUID();
+      const enrichment = lead.enrichment || {};
+      await db.collection("outreach_messages").doc(dmId).set({
+        id: dmId,
+        lead_id: lead.id,
+        business_name: lead.business_name,
+        venue_category: enrichment.venue_category || null,
+        channel: "instagram_dm",
+        subject: null,
+        content: "",
+        status: "planned",
+        step_number: 2,
+        follow_up_label: "instagram escalation",
+        is_channel_escalation: true,
+        scheduled_send_date: tomorrowStr,
+        created_at: new Date().toISOString(),
+        tone_tier: enrichment.tone_tier || null,
+        lead_products: enrichment.lead_products || [],
+        contact_name: lead.contact_name || null,
+        context_notes: enrichment.context_notes || null,
+        menu_fit: enrichment.menu_fit || null,
+        recipient_email: lead.instagram_handle || null,
+        website: lead.website || null,
+        workspace_id: lead.workspace_id || "",
+        assigned_to: lead.assigned_to || null,
+        was_edited: false,
+      });
+
+      console.log(`ESCALATE [${lead.business_name}]: Instagram DM planned for ${tomorrowStr}`);
+      generated++;
+    } catch (err) {
+      console.error("Escalation DM creation failed for", lead.business_name, err.message);
+      failed++;
+    }
+  }
+
   return { generated, skipped, failed, total };
 }
 
@@ -2532,6 +2612,13 @@ export const scheduledSendFollowups = functions
     let failed = 0;
 
     for (const msg of dueMessages) {
+      // Skip non-email channels (e.g., instagram_dm) — manual send only
+      if (msg.channel !== "email") {
+        console.log(`SKIP [${msg.business_name}]: channel "${msg.channel}" is not auto-sent`);
+        failed++;
+        continue;
+      }
+
       try {
         const leadSnap = await db.collection("leads").doc(msg.lead_id).get();
         if (!leadSnap.exists) { failed++; continue; }
