@@ -2003,3 +2003,261 @@ export const scheduledFollowups = functions
     console.log("Scheduled follow-up generation:", JSON.stringify(result));
     return null;
   });
+
+/**
+ * Build HTML for weekly analytics summary email.
+ */
+function buildAnalyticsSummaryHtml(stats) {
+  const {
+    totalLeads,
+    activeInSequence,
+    responseRate,
+    conversionRate,
+    sentLast7Days,
+    openedLast7Days,
+    openRateLast7Days,
+    repliedLast7Days,
+    replyRateLast7Days,
+    approvedWaiting,
+    plannedToDraft,
+    escalationDMsPending,
+    stageBreakdown,
+    dateRange,
+  } = stats;
+
+  const formatPercent = (num) => (isNaN(num) ? "0%" : `${Math.round(num)}%`);
+
+  return `
+    <html>
+      <head>
+        <style>
+          body { font-family: Arial, sans-serif; color: #333; line-height: 1.6; }
+          .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+          .header { text-align: center; margin-bottom: 30px; }
+          .header h1 { color: #1f2937; margin: 0 0 5px 0; font-size: 24px; }
+          .header p { color: #6b7280; margin: 0; font-size: 14px; }
+          .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 25px; }
+          .stat-card { background: #f3f4f6; border-left: 4px solid #3b82f6; padding: 15px; border-radius: 4px; }
+          .stat-label { color: #6b7280; font-size: 12px; font-weight: 600; text-transform: uppercase; margin-bottom: 5px; }
+          .stat-value { font-size: 28px; font-weight: bold; color: #1f2937; }
+          .section { margin-bottom: 25px; }
+          .section-title { font-size: 16px; font-weight: 600; color: #1f2937; margin-bottom: 12px; border-bottom: 2px solid #e5e7eb; padding-bottom: 8px; }
+          table { width: 100%; border-collapse: collapse; font-size: 13px; }
+          th { background: #f9fafb; padding: 8px; text-align: left; font-weight: 600; color: #374151; border-bottom: 1px solid #e5e7eb; }
+          td { padding: 8px; border-bottom: 1px solid #e5e7eb; }
+          tr:hover { background: #f9fafb; }
+          .footer { background: #f3f4f6; padding: 15px; border-radius: 4px; text-align: center; font-size: 12px; color: #6b7280; }
+          .footer a { color: #3b82f6; text-decoration: none; }
+          .footer a:hover { text-decoration: underline; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>Asterley Bros Outreach</h1>
+            <p>Weekly Summary — ${dateRange}</p>
+          </div>
+
+          <div class="stats-grid">
+            <div class="stat-card">
+              <div class="stat-label">Active in Sequence</div>
+              <div class="stat-value">${activeInSequence}</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">Sent (Last 7d)</div>
+              <div class="stat-value">${sentLast7Days}</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">Open Rate (7d)</div>
+              <div class="stat-value">${formatPercent(openRateLast7Days)}</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">Reply Rate (7d)</div>
+              <div class="stat-value">${formatPercent(replyRateLast7Days)}</div>
+            </div>
+          </div>
+
+          <div class="section">
+            <div class="section-title">Funnel Pipeline (All-time)</div>
+            <table>
+              <thead>
+                <tr>
+                  <th>Stage</th>
+                  <th style="text-align: right;">Count</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${stageBreakdown.map(s => `<tr><td>${s.label}</td><td style="text-align: right; font-weight: 600;">${s.count}</td></tr>`).join('')}
+                <tr style="font-weight: 600; background: #f0f4ff;">
+                  <td>Total Leads</td>
+                  <td style="text-align: right;">${totalLeads}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="section">
+            <div class="section-title">Engagement (Last 7 Days)</div>
+            <table>
+              <tbody>
+                <tr>
+                  <td>Sent</td>
+                  <td style="text-align: right; font-weight: 600;">${sentLast7Days}</td>
+                </tr>
+                <tr>
+                  <td>Opened</td>
+                  <td style="text-align: right;">${openedLast7Days} (${formatPercent(openRateLast7Days)})</td>
+                </tr>
+                <tr>
+                  <td>Replied</td>
+                  <td style="text-align: right;">${repliedLast7Days} (${formatPercent(replyRateLast7Days)})</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="section">
+            <div class="section-title">Pending Queue</div>
+            <table>
+              <tbody>
+                <tr>
+                  <td>Approved Emails Ready to Send</td>
+                  <td style="text-align: right; font-weight: 600;">${approvedWaiting}</td>
+                </tr>
+                <tr>
+                  <td>Planned Cards Awaiting Draft</td>
+                  <td style="text-align: right; font-weight: 600;">${plannedToDraft}</td>
+                </tr>
+                ${escalationDMsPending > 0 ? `<tr><td>Instagram DM Escalations Pending</td><td style="text-align: right; font-weight: 600; color: #ea580c;">${escalationDMsPending}</td></tr>` : ''}
+              </tbody>
+            </table>
+          </div>
+
+          <div class="footer">
+            <p>📊 <a href="https://asterleyleadgen.netlify.app/analytics">View Full Dashboard</a></p>
+            <p style="margin-top: 10px; color: #9ca3af;">This is an automated weekly summary. Questions? Check the analytics dashboard.</p>
+          </div>
+        </div>
+      </body>
+    </html>
+  `;
+}
+
+/**
+ * Scheduled trigger — runs Monday at 9am London time.
+ * Sends weekly analytics summary email to all admin users.
+ */
+export const scheduledAnalyticsSummary = functions
+  .runWith({ timeoutSeconds: 120, memory: "256MB", secrets: ["RESEND_API_KEY"] })
+  .pubsub.schedule("0 9 * * 1")
+  .timeZone("Europe/London")
+  .onRun(async () => {
+    const apiKey = process.env.RESEND_API_KEY;
+    if (!apiKey) {
+      console.error("RESEND_API_KEY not configured");
+      return null;
+    }
+
+    // 1. Get admin recipient list
+    const adminSnap = await db.collection("users").where("role", "==", "admin").get();
+    const adminEmails = adminSnap.docs.map(d => d.data().email).filter(Boolean);
+    if (!adminEmails.length) {
+      console.log("No admin emails found, skipping analytics summary");
+      return null;
+    }
+
+    // 2. Aggregate data
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const [leadsSnap, sentRecentSnap, openedRecentSnap, repliedRecentSnap, approvedSnap, plannedSnap, escalationSnap] = await Promise.all([
+      db.collection("leads").get(),
+      db.collection("outreach_messages").where("sent_at", ">=", sevenDaysAgo).where("status", "==", "sent").get(),
+      db.collection("outreach_messages").where("sent_at", ">=", sevenDaysAgo).where("status", "==", "sent").where("opened", "==", true).get(),
+      db.collection("outreach_messages").where("sent_at", ">=", sevenDaysAgo).where("status", "==", "sent").where("has_reply", "==", true).get(),
+      db.collection("outreach_messages").where("status", "==", "approved").where("channel", "==", "email").get(),
+      db.collection("outreach_messages").where("status", "==", "planned").where("channel", "==", "email").get(),
+      db.collection("outreach_messages").where("is_channel_escalation", "==", true).where("status", "in", ["planned", "draft", "approved"]).get(),
+    ]);
+
+    const leads = leadsSnap.docs.map(d => d.data());
+    const sentLast7 = sentRecentSnap.docs.map(d => d.data());
+    const openedLast7 = openedRecentSnap.docs.map(d => d.data());
+    const repliedLast7 = repliedRecentSnap.docs.map(d => d.data());
+
+    // Compute stats
+    const totalLeads = leads.length;
+    const activeInSequence = leads.filter(l => ["sent", "follow_up_1", "follow_up_2"].includes(l.stage)).length;
+    const respondedConverted = leads.filter(l => ["responded", "converted"].includes(l.stage)).length;
+    const responseRate = (respondedConverted / totalLeads) * 100;
+    const converted = leads.filter(l => l.stage === "converted").length;
+    const conversionRate = (converted / totalLeads) * 100;
+
+    const sentCount = sentLast7.length;
+    const openedCount = openedLast7.length;
+    const openRate = sentCount > 0 ? (openedCount / sentCount) * 100 : 0;
+    const repliedCount = repliedLast7.length;
+    const replyRate = sentCount > 0 ? (repliedCount / sentCount) * 100 : 0;
+
+    const approvedCount = approvedSnap.docs.length;
+    const plannedCount = plannedSnap.docs.length;
+    const escalationCount = escalationSnap.docs.length;
+
+    // Stage breakdown for table
+    const STAGE_ORDER = [
+      { key: "sent", label: "Sent (Active)" },
+      { key: "follow_up_1", label: "Follow-up 1" },
+      { key: "follow_up_2", label: "Follow-up 2" },
+      { key: "responded", label: "Responded" },
+      { key: "converted", label: "Converted" },
+      { key: "no_response", label: "No Response" },
+      { key: "declined", label: "Declined" },
+    ];
+    const stageBreakdown = STAGE_ORDER.map(s => ({
+      label: s.label,
+      count: leads.filter(l => l.stage === s.key).length,
+    }));
+
+    // Date range for header
+    const today = new Date();
+    const lastMonday = new Date(today);
+    lastMonday.setDate(lastMonday.getDate() - 7);
+    const dateRange = `${lastMonday.toLocaleDateString("en-GB")} – ${today.toLocaleDateString("en-GB")}`;
+
+    const stats = {
+      totalLeads,
+      activeInSequence,
+      responseRate,
+      conversionRate,
+      sentLast7Days: sentCount,
+      openedLast7Days: openedCount,
+      openRateLast7Days: openRate,
+      repliedLast7Days: repliedCount,
+      replyRateLast7Days: replyRate,
+      approvedWaiting: approvedCount,
+      plannedToDraft: plannedCount,
+      escalationDMsPending: escalationCount,
+      stageBreakdown,
+      dateRange,
+    };
+
+    // 3. Send email to all admins
+    const resend = new Resend(apiKey);
+    const subject = `Asterley Bros Outreach — Weekly Summary (${today.toLocaleDateString("en-GB")})`;
+    const html = buildAnalyticsSummaryHtml(stats);
+
+    for (const email of adminEmails) {
+      try {
+        await resend.emails.send({
+          from: `${SENDER_NAME} <${SENDER_EMAIL}>`,
+          to: email,
+          subject,
+          html,
+        });
+        console.log(`Analytics summary sent to ${email}`);
+      } catch (err) {
+        console.error(`Failed to send analytics summary to ${email}:`, err.message);
+      }
+    }
+
+    console.log(`Analytics summary completed: sent to ${adminEmails.length} admin(s), stats: ${JSON.stringify(stats)}`);
+    return null;
+  });
