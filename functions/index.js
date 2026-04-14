@@ -2473,9 +2473,35 @@ async function runFollowUpGeneration() {
         continue; // Already handled
       }
 
-      // Create a planned card for the Instagram DM escalation
-      const dmId = crypto.randomUUID();
+      // Generate Instagram DM draft using Claude
       const enrichment = lead.enrichment || {};
+      let dmContent = "";
+      try {
+        const dmPrompt = `${INSTAGRAM_ESCALATION_PROMPT}
+
+RECIPIENT: ${lead.business_name}
+INSTAGRAM: ${lead.instagram_handle}
+CONTEXT: ${enrichment.context_notes || "No additional context"}`;
+
+        const dmResponse = await claudeClient.messages.create({
+          model: CLAUDE_MODEL,
+          max_tokens: 200,
+          messages: [
+            {
+              role: "user",
+              content: dmPrompt,
+            },
+          ],
+        });
+
+        dmContent = dmResponse.content[0]?.type === "text" ? dmResponse.content[0].text : "";
+      } catch (err) {
+        console.warn(`Failed to generate DM content for ${lead.business_name}:`, err.message);
+        dmContent = "Hey! Saw your venue and thought you'd love Asterley Bros. Mind if I reach out?";
+      }
+
+      // Create draft for approval
+      const dmId = crypto.randomUUID();
       await db.collection("outreach_messages").doc(dmId).set({
         id: dmId,
         lead_id: lead.id,
@@ -2483,10 +2509,10 @@ async function runFollowUpGeneration() {
         venue_category: enrichment.venue_category || null,
         channel: "instagram_dm",
         subject: null,
-        content: "",
-        status: "planned",
+        content: dmContent,
+        status: "draft",
         step_number: 2,
-        follow_up_label: "instagram escalation",
+        follow_up_label: null,
         is_channel_escalation: true,
         scheduled_send_date: tomorrowStr,
         created_at: new Date().toISOString(),
@@ -2502,7 +2528,7 @@ async function runFollowUpGeneration() {
         was_edited: false,
       });
 
-      console.log(`ESCALATE [${lead.business_name}]: Instagram DM planned for ${tomorrowStr}`);
+      console.log(`ESCALATE [${lead.business_name}]: Instagram DM draft created for approval`);
       generated++;
     } catch (err) {
       console.error("Escalation DM creation failed for", lead.business_name, err.message);
