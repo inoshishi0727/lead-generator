@@ -17,7 +17,7 @@ import {
 import { doc, getDoc } from "firebase/firestore";
 import { auth, db } from "./firebase";
 
-export type UserRole = "admin" | "viewer";
+export type UserRole = "admin" | "member" | "viewer";
 
 interface AuthState {
   user: User | null;
@@ -28,6 +28,7 @@ interface AuthState {
   signIn: (email: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
   isAdmin: boolean;
+  isMember: boolean;
 }
 
 const AuthContext = createContext<AuthState>({
@@ -39,6 +40,7 @@ const AuthContext = createContext<AuthState>({
   signIn: async () => {},
   signOut: async () => {},
   isAdmin: false,
+  isMember: false,
 });
 
 export function useAuth() {
@@ -102,10 +104,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   const isAdmin = role === "admin";
+  const isMember = role === "member";
 
   return (
     <AuthContext.Provider
-      value={{ user, role, workspaceId, displayName, loading, signIn, signOut, isAdmin }}
+      value={{ user, role, workspaceId, displayName, loading, signIn, signOut, isAdmin, isMember }}
     >
       {children}
     </AuthContext.Provider>

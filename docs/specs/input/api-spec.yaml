@@ -1,14 +1,46 @@
 openapi: "3.1.0"
 info:
   title: Asterley Bros Lead Generation — Internal API
-  version: "0.1.0"
+  version: "0.2.0"
   description: >
     Internal contracts for data flow between system components.
-    Not a REST API — these define the Pydantic model schemas and
-    function signatures used across modules.
+    Not a REST API — these define the Firestore document schemas and
+    Cloud Function callable signatures used across modules.
 
 components:
   schemas:
+    # ---- User & Auth ----
+
+    UserRole:
+      type: string
+      enum: [admin, member, viewer]
+      description: >
+        admin: full access, can assign leads, manage team.
+        member: sees only assigned leads, can approve/send own.
+        viewer: read-only access to all leads.
+
+    UserDoc:
+      type: object
+      required: [uid, email, role, workspace_id, created_at]
+      properties:
+        uid:
+          type: string
+          description: Firebase Auth UID
+        email:
+          type: string
+          format: email
+        display_name:
+          type: string
+        role:
+          $ref: "#/components/schemas/UserRole"
+        workspace_id:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    # ---- Lead ----
+
     Lead:
       type: object
       required: [source, business_name]
@@ -18,7 +50,7 @@ components:
           format: uuid
         source:
           type: string
-          enum: [google_maps, instagram]
+          enum: [google_maps, instagram, manual]
         business_name:
           type: string
         address:
@@ -70,6 +102,8 @@ components:
           type: string
           enum:
             - scraped
+            - needs_email
+            - enriched
             - scored
             - draft_generated
             - approved
@@ -86,6 +120,40 @@ components:
         updated_at:
           type: string
           format: date-time
+        location_city:
+          type: string
+          nullable: true
+        location_area:
+          type: string
+          nullable: true
+        location_postcode:
+          type: string
+          nullable: true
+
+        # ---- Assignment fields (NEW) ----
+        assigned_to:
+          type: string
+          nullable: true
+          description: >
+            Firebase Auth UID of the team member this lead is assigned to.
+            null = unassigned (admin pool). Admin's own leads use admin's UID.
+        assigned_to_name:
+          type: string
+          nullable: true
+          description: >
+            Denormalized display name of the assigned member.
+            Used for UI rendering without an extra lookup.
+        assigned_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: ISO 8601 timestamp of the most recent assignment.
+        assigned_by:
+          type: string
+          nullable: true
+          description: UID of the admin who made the assignment.
+
+    # ---- Outreach Message ----
 
     OutreachMessage:
       type: object
@@ -108,11 +176,18 @@ components:
           type: string
         status:
           type: string
-          enum: [draft, approved, rejected, sent, delivered, bounced, opened]
+          enum: [draft, approved, rejected, sent, planned]
           default: draft
-        attempt_number:
+        step_number:
           type: integer
           default: 1
+        follow_up_label:
+          type: string
+          nullable: true
+        scheduled_send_date:
+          type: string
+          format: date-time
+          nullable: true
         created_at:
           type: string
           format: date-time
@@ -120,6 +195,123 @@ components:
           type: string
           format: date-time
           nullable: true
+        # ---- Assignment (NEW) ----
+        assigned_to:
+          type: string
+          nullable: true
+          description: >
+            Inherited from the lead at draft generation time.
+            Ensures outreach page filtering works without joining to leads.
+
+    # ---- Inbound Reply ----
+
+    InboundReply:
+      type: object
+      required: [from_email, body, source, direction]
+      properties:
+        id:
+          type: string
+        lead_id:
+          type: string
+          nullable: true
+        message_id:
+          type: string
+          nullable: true
+        from_email:
+          type: string
+          format: email
+        from_name:
+          type: string
+          nullable: true
+        subject:
+          type: string
+          nullable: true
+        body:
+          type: string
+        source:
+          type: string
+          enum: [email_forward, manual, resend, outbound_reply]
+        direction:
+          type: string
+          enum: [inbound, outbound]
+        matched:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        sentiment:
+          type: string
+          enum: [positive, negative, neutral]
+          nullable: true
+        # ---- Assignment (NEW) ----
+        assigned_to:
+          type: string
+          nullable: true
+          description: Inherited from lead when reply is matched.
+
+    # ---- Callable Function Contracts ----
+
+    AssignLeadsRequest:
+      type: object
+      required: [lead_ids, assigned_to]
+      properties:
+        lead_ids:
+          type: array
+          items:
+            type: string
+          minItems: 1
+          maxItems: 500
+          description: Firestore document IDs of leads to assign.
+        assigned_to:
+          type: string
+          description: >
+            Firebase Auth UID of the target team member.
+            Must be a valid user with role "admin" or "member" in the same workspace.
+      description: >
+        Callable function: assignLeads. Admin-only.
+        Assigns leads + their outreach_messages + inbound_replies to the target user.
+        Logs action to activity_log.
+
+    AssignLeadsResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        assigned:
+          type: integer
+          description: Number of leads successfully assigned.
+        assigned_to:
+          type: string
+        assigned_to_name:
+          type: string
+
+    UnassignLeadsRequest:
+      type: object
+      required: [lead_ids]
+      properties:
+        lead_ids:
+          type: array
+          items:
+            type: string
+          minItems: 1
+          maxItems: 500
+          description: Firestore document IDs of leads to unassign.
+      description: >
+        Callable function: unassignLeads. Admin-only.
+        Sets assigned_to = null on leads + their messages + replies.
+        Returns leads to the unassigned admin pool.
+
+    UnassignLeadsResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        unassigned:
+          type: integer
+
+    # ---- Legacy schemas (unchanged) ----
 
     ScrapeRun:
       type: object

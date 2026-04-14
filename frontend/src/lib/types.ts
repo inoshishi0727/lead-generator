@@ -65,6 +65,11 @@ export interface Lead {
   rejection_reason: string | null;
   rejection_notes: string | null;
   batch_id: string | null;
+  // Assignment
+  assigned_to: string | null;
+  assigned_to_name: string | null;
+  assigned_at: string | null;
+  assigned_by: string | null;
   // Reply tracking
   human_takeover: boolean;
   human_takeover_at: string | null;
@@ -95,7 +100,7 @@ export interface OutreachMessage {
   channel: "email" | "instagram_dm";
   subject: string | null;
   content: string;
-  status: "draft" | "approved" | "rejected" | "sent";
+  status: "draft" | "approved" | "rejected" | "sent" | "planned";
   step_number: number;
   follow_up_label: string | null;
   scheduled_send_date: string | null;
@@ -119,6 +124,17 @@ export interface OutreachMessage {
   email_message_id?: string;
   reply_to_address?: string;
   variant?: "A" | "B" | null;
+  // Assignment
+  assigned_to?: string | null;
+  // Email tracking
+  opened?: boolean;
+  opened_at?: string | null;
+  open_count?: number;
+  last_opened_at?: string | null;
+  delivered?: boolean;
+  delivered_at?: string | null;
+  // Follow-up threading
+  parent_email_message_id?: string | null;
 }
 
 // --- Edit Feedback / Reflection ---
@@ -170,6 +186,7 @@ export interface InboundReply {
   forwarded_by: string | null;
   sentiment?: "positive" | "negative" | "neutral" | null;
   sentiment_reason?: string | null;
+  assigned_to?: string | null;
 }
 
 // --- Analytics ---
@@ -213,6 +230,16 @@ export interface ReplyRateTrendPoint {
   week: string;
   sent: number;
   replied: number;
+  reply_rate: number;
+}
+
+export interface OpenRateTrendPoint {
+  week: string;
+  sent: number;
+  delivered: number;
+  opened: number;
+  replied: number;
+  open_rate: number;
   reply_rate: number;
 }
 

@@ -17,6 +17,8 @@ import {
   User,
   MoreVertical,
   Trash2,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 import { EditMessageDialog } from "@/components/edit-message-dialog";
 import { RegenerateCompareDialog } from "@/components/regenerate-compare-dialog";
@@ -33,6 +35,8 @@ import {
   useSendReply,
   useInboundReplies,
   useDeleteReply,
+  useGenerateFollowupForLead,
+  useMessages,
 } from "@/hooks/use-outreach";
 import { useGeneratingLeadId } from "@/hooks/use-live-updates";
 import { useAuth } from "@/lib/auth-context";
@@ -40,9 +44,11 @@ import { useLeadDetail } from "@/hooks/use-lead-detail";
 
 interface Props {
   message: OutreachMessage;
+  inConversation?: boolean;
 }
 
 const statusColors: Record<string, string> = {
+  planned: "bg-violet-100 text-violet-800 dark:bg-violet-900/30 dark:text-violet-300",
   draft: "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400",
   approved:
     "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400",
@@ -82,22 +88,35 @@ function rejectionLabel(reason: string): string {
   return REJECTION_LABELS[reason] ?? "rejected";
 }
 
-export function MessageCard({ message }: Props) {
+export function MessageCard({ message, inConversation }: Props) {
   const [editDialogOpen, setEditDialogOpen] = useState(false);
-  const [threadOpen, setThreadOpen] = useState(false);
+  const [threadOpen, setThreadOpen] = useState(inConversation && !!message.has_reply);
   const [menuOpen, setMenuOpen] = useState(false);
   const [flowingDraft, setFlowingDraft] = useState<{ subject: string | null; content: string } | null>(null);
   const [activeAction, setActiveAction] = useState<string | null>(null);
   const [replyContent, setReplyContent] = useState("");
+  const [originalExpanded, setOriginalExpanded] = useState(false);
 
-  const { isAdmin } = useAuth();
+  const { isAdmin, isMember } = useAuth();
+  const canAct = isAdmin || isMember;
   const updateMutation = useUpdateMessage();
   const regenerateMutation = useRegenerateMessage();
   const sendMutation = useSendMessage();
   const deleteMutation = useDeleteMessage();
   const sendReplyMutation = useSendReply();
   const deleteReplyMutation = useDeleteReply();
+  const generateFollowupMutation = useGenerateFollowupForLead();
   const generatingLeadId = useGeneratingLeadId();
+
+  // Fetch original email for follow-ups
+  const { data: leadMessages } = useMessages(
+    { lead_id: message.lead_id },
+    200,
+  );
+  const originalMessage = message.step_number > 1
+    ? (leadMessages ?? []).find((m) => m.step_number === 1 && m.status === "sent")
+      || (leadMessages ?? []).find((m) => m.step_number === 1)
+    : null;
 
   const repliesQuery = useInboundReplies(
     { lead_id: message.lead_id },
@@ -157,6 +176,23 @@ export function MessageCard({ message }: Props) {
     }
   }
 
+  async function handleGenerateFollowup() {
+    try {
+      setActiveAction("generate-followup");
+      const res = await generateFollowupMutation.mutateAsync({ leadId: message.lead_id, force: false });
+      // Inform the user that a planned follow-up was created and where to find it.
+      // If the backend returned details about generation, surface them minimally.
+      alert("Planned follow-up created — appears in Follow-ups tab");
+    } catch (err: any) {
+      console.error("Generate follow-up failed", err);
+      // Surface a simple alert in the UI so the user sees the error when clicking the button.
+      // In-app toast could be used instead if available.
+      alert(`Generate follow-up failed: ${err?.message ?? String(err)}`);
+    } finally {
+      setActiveAction(null);
+    }
+  }
+
   function handlePickFlowing() {
     if (!flowingDraft) return;
     updateMutation.mutate(
@@ -165,13 +201,35 @@ export function MessageCard({ message }: Props) {
     );
   }
 
-  function handleDialogSave(content: string, subject?: string) {
-    const updates: { id: string; content: string; subject?: string } = {
+  function handleDialogSave(
+    content: string,
+    subject?: string,
+    scheduledSendDate?: string | null
+  ) {
+    const updates: {
+      id: string;
+      content: string;
+      subject?: string;
+      scheduled_send_date?: string | null;
+    } = {
       id: message.id,
       content,
     };
     if (subject !== undefined) updates.subject = subject;
-    updateMutation.mutate(updates);
+    if (scheduledSendDate !== undefined) {
+      updates.scheduled_send_date = scheduledSendDate;
+    }
+    const shouldCheckDueNow =
+      message.status === "planned"
+      && scheduledSendDate !== undefined
+      && scheduledSendDate !== message.scheduled_send_date;
+    updateMutation.mutate(updates, {
+      onSuccess: () => {
+        if (shouldCheckDueNow) {
+          generateFollowupMutation.mutate({ leadId: message.lead_id, force: false });
+        }
+      },
+    });
     setEditDialogOpen(false);
   }
 
@@ -219,7 +277,7 @@ export function MessageCard({ message }: Props) {
               {message.follow_up_label}
             </Badge>
           )}
-          {message.scheduled_send_date && message.status === "draft" && (
+          {message.scheduled_send_date && (message.status === "draft" || message.status === "planned") && (
             <Badge variant="outline" className="text-xs gap-1">
               <Clock className="h-2.5 w-2.5" />
               Send by {message.scheduled_send_date}
@@ -255,6 +313,75 @@ export function MessageCard({ message }: Props) {
             </span>
           )}
         </div>
+
+        {/* Email tracking stats — sent messages only */}
+        {message.status === "sent" && (
+          <div className="flex items-center gap-4 text-xs">
+            <div className={`flex items-center gap-1 ${message.opened ? "text-emerald-400" : "text-muted-foreground/50"}`}>
+              {message.opened ? <Eye className="h-3 w-3" /> : <EyeOff className="h-3 w-3" />}
+              <span>{message.opened ? `Opened ${message.open_count || 1}x` : "Not opened"}</span>
+            </div>
+            {message.last_opened_at && (
+              <div className="flex items-center gap-1 text-muted-foreground">
+                <Clock className="h-3 w-3" />
+                <span>Last {formatDate(message.last_opened_at)}</span>
+              </div>
+            )}
+            {message.delivered && (
+              <span className="text-muted-foreground/60">Delivered</span>
+            )}
+          </div>
+        )}
+
+        {/* Follow-up context — show previous emails in the sequence */}
+        {message.step_number > 1 && (leadMessages ?? []).length > 0 && (() => {
+          const previousMessages = (leadMessages ?? [])
+            .filter((m) => m.step_number < message.step_number && m.id !== message.id && m.status === "sent")
+            .sort((a, b) => a.step_number - b.step_number);
+          if (previousMessages.length === 0) return null;
+          return (
+            <div className="rounded-md border border-border/30 bg-muted/20 overflow-hidden">
+              <button
+                onClick={() => setOriginalExpanded((o) => !o)}
+                className="w-full flex items-center justify-between px-3 py-2 text-xs text-muted-foreground hover:bg-muted/30 transition-colors"
+              >
+                <span>
+                  Follow-up #{message.step_number - 1} · {previousMessages.length} previous email{previousMessages.length !== 1 ? "s" : ""}
+                </span>
+                {originalExpanded
+                  ? <ChevronUp className="h-3 w-3 shrink-0" />
+                  : <ChevronDown className="h-3 w-3 shrink-0" />
+                }
+              </button>
+              {originalExpanded && (
+                <div className="border-t border-border/20">
+                  {previousMessages.map((prev, i) => (
+                    <div key={prev.id} className={`px-3 py-2 space-y-1 ${i > 0 ? "border-t border-border/10" : ""}`}>
+                      <div className="flex items-center gap-2 text-xs">
+                        <Badge variant="secondary" className="text-[9px]">
+                          {prev.step_number === 1 ? "Original" : `Follow-up #${prev.step_number - 1}`}
+                        </Badge>
+                        <span className="font-medium text-foreground text-xs">{prev.subject || "No subject"}</span>
+                        {prev.status === "sent" && prev.sent_at && (
+                          <span className="text-muted-foreground">sent {formatDate(prev.sent_at)}</span>
+                        )}
+                        {prev.opened && (
+                          <span className="text-emerald-400">opened {prev.open_count || 1}x</span>
+                        )}
+                        {prev.has_reply && (
+                          <span className="text-blue-400">{prev.reply_count || 1} reply</span>
+                        )}
+                      </div>
+                      <div className="text-xs text-muted-foreground whitespace-pre-wrap bg-muted/30 rounded p-2 max-h-32 overflow-y-auto">
+                        {prev.content}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })()}
 
         {/* Context row */}
         {(message.contact_name || message.context_notes || message.recipient_email || message.website) && (
@@ -415,7 +542,7 @@ export function MessageCard({ message }: Props) {
                             {reply.sentiment_reason || reply.sentiment}
                           </Badge>
                         )}
-                        {isAdmin && !isOutbound && (
+                        {canAct && !isOutbound && (
                           <Menu>
                             <MenuTrigger
                               render={
@@ -450,7 +577,7 @@ export function MessageCard({ message }: Props) {
             )}
 
             {/* Reply input */}
-            {isAdmin && message.status === "sent" && (
+            {canAct && message.status === "sent" && (
               <div className="flex gap-2 pt-2 border-t border-border">
                 <textarea
                   className="flex-1 min-h-[80px] rounded-md border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring resize-y"
@@ -486,9 +613,71 @@ export function MessageCard({ message }: Props) {
         )}
 
         {/* Action buttons */}
+        {message.status === "planned" && canAct && (
+          <div className="flex items-center gap-2 pt-1">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setEditDialogOpen(true)}
+              disabled={isPending}
+            >
+              <Clock className="mr-1 h-3.5 w-3.5" />
+              Edit Schedule
+            </Button>
+
+            {/* Generate a draft for planned follow-ups */}
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => handleRegenerate("default")}
+              disabled={isPending || regenerateMutation.isPending}
+            >
+              {regenerateMutation.isPending ? (
+                <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="mr-1 h-3.5 w-3.5" />
+              )}
+              {regenerateMutation.isPending ? "Generating..." : "Generate Draft"}
+            </Button>
+
+            {/* If a generated draft exists on a planned follow-up, allow Approve/Reject */}
+            {message.content && message.content.trim() !== "" && (
+              <>
+                <Button
+                  size="sm"
+                  variant="default"
+                  className="bg-emerald-600 hover:bg-emerald-700"
+                  onClick={handleApprove}
+                  disabled={isPending}
+                >
+                  {activeAction === "approve" ? (
+                    <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Check className="mr-1 h-3.5 w-3.5" />
+                  )}
+                  {activeAction === "approve" ? "Approving..." : "Approve"}
+                </Button>
+
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  onClick={handleReject}
+                  disabled={isPending}
+                >
+                  {activeAction === "reject" ? (
+                    <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <X className="mr-1 h-3.5 w-3.5" />
+                  )}
+                  {activeAction === "reject" ? "Rejecting..." : "Reject"}
+                </Button>
+              </>
+            )}
+          </div>
+        )}
         {message.status === "draft" && (
           <div className="flex items-center gap-2 pt-1">
-            {isAdmin && (
+            {canAct && (
               <Button
                 size="sm"
                 variant="default"
@@ -504,7 +693,7 @@ export function MessageCard({ message }: Props) {
                 {activeAction === "approve" ? "Approving..." : "Approve"}
               </Button>
             )}
-            {isAdmin && (
+            {canAct && (
               <Button
                 size="sm"
                 variant="destructive"
@@ -554,7 +743,7 @@ export function MessageCard({ message }: Props) {
               <Pencil className="mr-1 h-3.5 w-3.5" />
               Edit
             </Button>
-            {isAdmin && (
+            {canAct && (
               <Button
                 size="sm"
                 variant="ghost"
@@ -573,7 +762,7 @@ export function MessageCard({ message }: Props) {
           </div>
         )}
         {/* Edit + Send + Unapprove buttons for approved messages */}
-        {message.status === "approved" && isAdmin && (
+        {message.status === "approved" && canAct && (
           <div className="flex items-center gap-2 pt-1">
             <Button
               size="sm"
@@ -614,7 +803,7 @@ export function MessageCard({ message }: Props) {
           </div>
         )}
         {/* Back to draft button for rejected messages */}
-        {message.status === "rejected" && isAdmin && (
+        {message.status === "rejected" && canAct && (
           <div className="flex items-center gap-2 pt-1">
             <Button
               size="sm"
@@ -631,8 +820,8 @@ export function MessageCard({ message }: Props) {
             </Button>
           </div>
         )}
-        {/* View Replies + Reset for sent messages */}
-        {message.status === "sent" && isAdmin && (
+        {/* View Replies + Reset for sent messages — hidden in conversation view */}
+        {message.status === "sent" && canAct && !inConversation && (
           <div className="flex items-center gap-2 pt-1">
             <Button
               size="sm"
@@ -657,6 +846,21 @@ export function MessageCard({ message }: Props) {
               )}
               {activeAction === "back-to-draft" ? "Restoring..." : "Back to Draft"}
             </Button>
+            {!message.has_reply && (message.step_number ?? 1) < 4 && (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={handleGenerateFollowup}
+                  disabled={generateFollowupMutation.isPending || activeAction === "generate-followup"}
+              >
+                {generateFollowupMutation.isPending ? (
+                  <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <RefreshCw className="mr-1 h-3.5 w-3.5" />
+                )}
+                {generateFollowupMutation.isPending ? "Generating..." : "Generate Follow-up"}
+              </Button>
+            )}
           </div>
         )}
       </CardContent>

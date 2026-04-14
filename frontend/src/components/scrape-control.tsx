@@ -1,13 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { useConfig } from "@/hooks/use-config";
 import { useOutreachPlan } from "@/hooks/use-outreach-plan";
-import { Play, Monitor, MapPin, Search, ChevronDown, ChevronUp, Plus, X, Sparkles, Target } from "lucide-react";
+import { useScrapeHistory } from "@/hooks/use-scrape";
+import { Play, Monitor, MapPin, Search, ChevronDown, ChevronUp, Plus, X, Sparkles, Target, AlertTriangle } from "lucide-react";
 
 interface Props {
   onStart: (queries: string[], limit: number, headless: boolean) => void;
@@ -34,9 +35,17 @@ const DEFAULT_CATEGORIES: CategoryConfig[] = [
   { key: "other", label: "Other (Delis, Farm Shops...)", queries: ["deli and wine shop", "farm shop spirits"], enabled: true, ratio: 20 },
 ];
 
+function normalizeScrapeFingerprint(queries: string[]): string {
+  return [...queries]
+    .map((q) => q.toLowerCase().trim())
+    .sort()
+    .join("|");
+}
+
 export function ScrapeControl({ onStart, isStarting, isRunning }: Props) {
   const { data: config } = useConfig();
   const { data: plan } = useOutreachPlan(10);
+  const { data: runs } = useScrapeHistory();
   const [location, setLocation] = useState("UK");
   const [limit, setLimit] = useState(60);
   const [headless, setHeadless] = useState(false);
@@ -86,11 +95,32 @@ export function ScrapeControl({ onStart, isStarting, isRunning }: Props) {
     setCategories((prev) => prev.filter((c) => c.key !== key));
   }
 
+  // Detect duplicate parameters vs last completed run
+  const currentQueries = useMemo(
+    () => enabledCategories.map((c) => `${c.queries[0]} ${location}`.trim()),
+    [enabledCategories, location],
+  );
+
+  const lastCompletedRun = runs?.find((r) => r.status === "completed") ?? null;
+
+  const isDuplicate = useMemo(() => {
+    if (!lastCompletedRun?.query) return false;
+    const currentFp = normalizeScrapeFingerprint(currentQueries);
+    // scrape_runs store queries as comma-separated string
+    const lastQueries = lastCompletedRun.query.split(",").map((q) => q.trim());
+    const lastFp = normalizeScrapeFingerprint(lastQueries);
+    return currentFp === lastFp;
+  }, [currentQueries, lastCompletedRun]);
+
+  const duplicateDaysAgo = lastCompletedRun?.started_at
+    ? Math.round(
+        (Date.now() - new Date(lastCompletedRun.started_at).getTime()) /
+          (1000 * 60 * 60 * 24),
+      )
+    : null;
+
   function handleStart() {
-    const allQueries = enabledCategories.map(
-      (c) => `${c.queries[0]} ${location}`.trim()
-    );
-    onStart(allQueries, Math.min(limit, remaining), headless);
+    onStart(currentQueries, Math.min(limit, remaining), headless);
   }
 
   // Summary of what will be scraped
@@ -355,6 +385,28 @@ export function ScrapeControl({ onStart, isStarting, isRunning }: Props) {
           <Monitor className="h-4 w-4 text-muted-foreground" />
           Headless mode (hide browser window)
         </label>
+
+        {/* Duplicate parameters warning (non-blocking) */}
+        {isDuplicate && (
+          <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-400">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <span>
+              <span className="font-semibold">Same parameters as last scrape</span>
+              {duplicateDaysAgo != null && (
+                <>
+                  {" "}&mdash;{" "}
+                  {duplicateDaysAgo === 0
+                    ? "today"
+                    : `${duplicateDaysAgo} day${duplicateDaysAgo !== 1 ? "s" : ""} ago`}
+                </>
+              )}
+              {lastCompletedRun?.leads_found != null && (
+                <> ({lastCompletedRun.leads_found} leads found)</>
+              )}
+              . You can still run it again.
+            </span>
+          </div>
+        )}
 
         {/* Start button */}
         <Button
