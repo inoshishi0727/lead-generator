@@ -50,8 +50,8 @@ class EnrichmentEngine:
             return lead
 
         async with self._semaphore:
-            # Fetch website text
-            text = await fetch_website_text(
+            # Fetch website text + best menu URL
+            text, menu_url = await fetch_website_text(
                 lead.website, self.enrichment_config
             )
 
@@ -73,7 +73,7 @@ class EnrichmentEngine:
 
             # Analyze with Gemini
             enrichment = await analyze_website(
-                text, lead, self.enrichment_config
+                text, lead, self.enrichment_config, menu_url=menu_url
             )
 
             lead.enrichment = enrichment

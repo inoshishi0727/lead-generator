@@ -41,10 +41,10 @@ export function useCreateLead() {
 export function useEnrichLeads() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (opts?: { force?: boolean }) => {
+    mutationFn: async (opts?: { force?: boolean; lead_ids?: string[] }) => {
       return vpsApi.post<{ status: string; enriched: number; failed: number }>(
         "/api/enrich",
-        { force: opts?.force ?? false },
+        { force: opts?.force ?? false, lead_ids: opts?.lead_ids },
       );
     },
     onSuccess: () => {

@@ -342,6 +342,7 @@ function buildPrompt(lead, enrichment, step = 1, previousSubject = "") {
 - Location: ${lead.address || "London"}
 - Is London: ${isLondon ? "Yes" : "No"}
 - Drinks on menu: ${enrichment.drinks_programme || "not available"}
+- Menu URL: ${enrichment.menu_url || "not available"}
 - Context notes: ${enrichment.context_notes || "none"}
 - Business summary: ${enrichment.business_summary || "none"}
 - Why Asterley fits: ${enrichment.why_asterley_fits || "none"}
@@ -725,6 +726,7 @@ export const regenerateAllDrafts = functions
           contact_name: leadDoc.contact_name || contact.name || null,
           context_notes: enrichment.context_notes || null,
           menu_fit: enrichment.menu_fit || null,
+          menu_url: enrichment.menu_url || null,
           recipient_email: leadDoc.email || leadDoc.contact_email || null,
           website: leadDoc.website || null,
           workspace_id: leadDoc.workspace_id || "",

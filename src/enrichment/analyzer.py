@@ -278,6 +278,7 @@ async def analyze_website(
     text: str,
     lead: Lead,
     config: EnrichmentConfig,
+    menu_url: str | None = None,
 ) -> EnrichmentData:
     """Analyze website text using Gemini and return structured enrichment data.
 
@@ -362,6 +363,7 @@ async def analyze_website(
         contact=contact,
         opening_hours_summary=parsed.get("opening_hours_summary"),
         price_tier=parsed.get("price_tier"),
+        menu_url=menu_url,
         ai_approval=parsed.get("ai_approval"),
         ai_approval_reason=parsed.get("ai_approval_reason"),
         enrichment_source="website",

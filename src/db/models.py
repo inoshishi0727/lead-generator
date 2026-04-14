@@ -120,6 +120,7 @@ class EnrichmentData(BaseModel):
     contact: Optional[ContactInfo] = None
     opening_hours_summary: Optional[str] = None
     price_tier: Optional[str] = None
+    menu_url: Optional[str] = None
     ai_approval: Optional[str] = None  # approve / maybe / reject
     ai_approval_reason: Optional[str] = None
     enrichment_source: Optional[str] = None
