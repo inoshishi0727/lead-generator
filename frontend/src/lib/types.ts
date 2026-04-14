@@ -50,6 +50,7 @@ export interface Lead {
   opening_hours_summary: string | null;
   price_tier: string | null;
   menu_fit_signals: string[];
+  menu_url: string | null;
   ai_approval: string | null;
   ai_approval_reason: string | null;
   google_maps_place_id: string | null;
@@ -110,6 +111,7 @@ export interface OutreachMessage {
   contact_name: string | null;
   context_notes: string | null;
   menu_fit: string | null;
+  menu_url: string | null;
   recipient_email: string | null;
   website: string | null;
   original_content?: string;

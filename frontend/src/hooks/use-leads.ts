@@ -47,17 +47,11 @@ export function useCreateLead() {
 export function useEnrichLeads() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (opts?: { force?: boolean }) => {
-      const res = await fetch("/api/enrich", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ force: opts?.force ?? false }),
-      });
-      if (!res.ok) {
-        const text = await res.text().catch(() => res.statusText);
-        throw new Error(text);
-      }
-      return res.json() as Promise<{ status: string; enriched: number; failed: number }>;
+    mutationFn: async (opts?: { force?: boolean; lead_ids?: string[] }) => {
+      return vpsApi.post<{ status: string; enriched: number; failed: number }>(
+        "/api/enrich",
+        { force: opts?.force ?? false, lead_ids: opts?.lead_ids },
+      );
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["leads"] });
