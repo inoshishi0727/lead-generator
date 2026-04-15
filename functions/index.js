@@ -204,6 +204,53 @@ You emailed them a few days ago but haven't heard back. This is a short, casual 
 - Sound like a real person sliding into DMs, not a bot.
 - No formal sign-off needed. Conversational tone.`;
 
+// ---- Prompt Rules Cache ----
+
+const RULES_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+let _rulesCache = { rules_md: "", fetched_at: 0 };
+
+/**
+ * Fetch the active prompt rules from Firestore.
+ * Follows the pointer pattern: prompt_config/email_rules -> versions/{version_id}
+ */
+async function getPromptRules() {
+  // Return cached rules if still fresh
+  if (Date.now() - _rulesCache.fetched_at < RULES_CACHE_TTL_MS) {
+    return _rulesCache.rules_md;
+  }
+
+  try {
+    // Read pointer doc to find active version
+    const pointerSnap = await db.collection("prompt_config").doc("email_rules").get();
+    if (!pointerSnap.exists) {
+      _rulesCache = { rules_md: "", fetched_at: Date.now() };
+      return "";
+    }
+
+    const { active_version_id } = pointerSnap.data();
+    if (!active_version_id) {
+      _rulesCache = { rules_md: "", fetched_at: Date.now() };
+      return "";
+    }
+
+    // Read active version doc
+    const versionSnap = await db
+      .collection("prompt_config")
+      .doc("email_rules")
+      .collection("versions")
+      .doc(active_version_id)
+      .get();
+
+    const rules_md = versionSnap.exists ? (versionSnap.data().rules_md || "") : "";
+    _rulesCache = { rules_md, fetched_at: Date.now() };
+    return rules_md;
+  } catch (err) {
+    console.warn("Failed to fetch prompt rules:", err.message);
+    _rulesCache = { rules_md: "", fetched_at: Date.now() };
+    return "";
+  }
+}
+
 // ---- Email system prompt ----
 
 const EMAIL_SYSTEM_PROMPT = `You are Rob, founder of Asterley Bros, an independent English Vermouth, Amaro, and Aperitivo producer based in SE26, London. You are writing cold outreach emails to potential stockists.
@@ -546,9 +593,10 @@ export const generateDrafts = functions
 
         // Inject edit feedback so Claude learns from past human corrections
         const feedbackBlock = await getEditFeedback(venueCat, toneTier);
-        const systemPrompt = feedbackBlock
-          ? EMAIL_SYSTEM_PROMPT + feedbackBlock
-          : EMAIL_SYSTEM_PROMPT;
+        const promptRules = await getPromptRules();
+        const systemPrompt = EMAIL_SYSTEM_PROMPT
+          + (promptRules ? `\n\nPROMPT RULES (apply to every email):\n${promptRules}` : "")
+          + (feedbackBlock || "");
 
         const response = await anthropic.messages.create({
           model: CLAUDE_MODEL,
@@ -649,9 +697,10 @@ export const regenerateDraft = functions
     const prompt = buildPrompt(leadDoc, enrichment);
 
     const feedbackBlock = await getEditFeedback(venueCat, toneTier);
-    const systemPrompt = feedbackBlock
-      ? EMAIL_SYSTEM_PROMPT + feedbackBlock
-      : EMAIL_SYSTEM_PROMPT;
+    const promptRules = await getPromptRules();
+    const systemPrompt = EMAIL_SYSTEM_PROMPT
+      + (promptRules ? `\n\nPROMPT RULES (apply to every email):\n${promptRules}` : "")
+      + (feedbackBlock || "");
 
     const response = await anthropic.messages.create({
       model: CLAUDE_MODEL,
@@ -736,9 +785,10 @@ export const regenerateAllDrafts = functions
         const prompt = buildPrompt(leadDoc, enrichment);
 
         const feedbackBlock = await getEditFeedback(venueCat, toneTier);
-        const systemPrompt = feedbackBlock
-          ? EMAIL_SYSTEM_PROMPT + feedbackBlock
-          : EMAIL_SYSTEM_PROMPT;
+        const promptRules = await getPromptRules();
+        const systemPrompt = EMAIL_SYSTEM_PROMPT
+          + (promptRules ? `\n\nPROMPT RULES (apply to every email):\n${promptRules}` : "")
+          + (feedbackBlock || "");
 
         const response = await anthropic.messages.create({
           model: CLAUDE_MODEL,
@@ -2273,9 +2323,10 @@ async function runFollowUpGeneration() {
       const prompt = buildPrompt(lead, enrichment, plannedDoc.step_number, previousSubject);
 
       const feedbackBlock = await getEditFeedback(venueCat, toneTier);
-      const systemPrompt = feedbackBlock
-        ? EMAIL_SYSTEM_PROMPT + feedbackBlock
-        : EMAIL_SYSTEM_PROMPT;
+      const promptRules = await getPromptRules();
+      const systemPrompt = EMAIL_SYSTEM_PROMPT
+        + (promptRules ? `\n\nPROMPT RULES (apply to every email):\n${promptRules}` : "")
+        + (feedbackBlock || "");
 
       const response = await anthropic.messages.create({
         model: CLAUDE_MODEL,
@@ -2378,9 +2429,10 @@ async function runFollowUpGeneration() {
       const prompt = buildPrompt(lead, enrichment, nextStepNumber, previousSubject);
 
       const feedbackBlock = await getEditFeedback(venueCat, toneTier);
-      const systemPrompt = feedbackBlock
-        ? EMAIL_SYSTEM_PROMPT + feedbackBlock
-        : EMAIL_SYSTEM_PROMPT;
+      const promptRules = await getPromptRules();
+      const systemPrompt = EMAIL_SYSTEM_PROMPT
+        + (promptRules ? `\n\nPROMPT RULES (apply to every email):\n${promptRules}` : "")
+        + (feedbackBlock || "");
 
       const response = await anthropic.messages.create({
         model: CLAUDE_MODEL,
@@ -3207,5 +3259,184 @@ export const scheduledAnalyticsSummary = functions
 
     console.log(`Analytics summary completed: sent to ${adminEmails.length} admin(s), stats: ${JSON.stringify(stats)}`);
     return null;
+  });
+
+// ---- Prompt Rules Generation ----
+
+/**
+ * Generate prompt rules from weekly feedback.
+ * Scheduled: Monday 6am UTC (London time with DST)
+ * Reads recent edit_feedback records, synthesizes durable rules via Claude, stores versioned.
+ */
+export const generatePromptRules = functions
+  .runWith({ timeoutSeconds: 300, memory: "512MB", secrets: ["ANTHROPIC_API_KEY"] })
+  .pubsub.schedule("0 6 * * 1")
+  .timeZone("Europe/London")
+  .onRun(async (context) => {
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) {
+      console.error("ANTHROPIC_API_KEY not configured");
+      return null;
+    }
+
+    const anthropic = new Anthropic({ apiKey });
+
+    try {
+      // Fetch recent edit feedback from the last 28 days
+      const thirtyDaysAgo = new Date();
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 28);
+
+      const feedbackDocs = await db
+        .collection("edit_feedback")
+        .where("channel", "==", "email")
+        .orderBy("created_at", "desc")
+        .limit(200)
+        .get();
+
+      if (feedbackDocs.empty) {
+        console.log("No edit feedback found; skipping generation");
+        return null;
+      }
+
+      // Filter to last 28 days and extract venue_category + reflection_notes
+      const feedbacks = feedbackDocs.docs
+        .map((doc) => ({ ...doc.data(), id: doc.id }))
+        .filter((fb) => {
+          try {
+            return fb.created_at && new Date(fb.created_at) >= thirtyDaysAgo;
+          } catch {
+            return false;
+          }
+        });
+
+      if (feedbacks.length < 3) {
+        console.log(`Only ${feedbacks.length} feedbacks in last 28 days; skipping generation`);
+        return null;
+      }
+
+      // Build meta-prompt to synthesize rules
+      let feedbackText = "# Edit Feedback Summary (Last 28 Days)\n\n";
+      const categories = {};
+      for (const fb of feedbacks) {
+        const venueCat = fb.venue_category || "unknown";
+        if (!categories[venueCat]) categories[venueCat] = [];
+        categories[venueCat].push(fb);
+
+        feedbackText += `## ${venueCat}\n`;
+        if (fb.original_subject && fb.edited_subject && fb.original_subject !== fb.edited_subject) {
+          feedbackText += `**Subject change**: "${fb.original_subject}" → "${fb.edited_subject}"\n`;
+        }
+        feedbackText += `**Original**: ${fb.original_content.slice(0, 300)}\n`;
+        feedbackText += `**Edited**: ${fb.edited_content.slice(0, 300)}\n`;
+        if (fb.reflection_note) {
+          feedbackText += `**Reason**: ${fb.reflection_note}\n`;
+        }
+        feedbackText += "\n";
+      }
+
+      const metaPrompt = `You are reviewing email feedback from sales team members who have been correcting AI-generated cold outreach drafts.
+
+${feedbackText}
+
+Synthesize 5–10 markdown bullet-point rules that capture the most important patterns from these corrections. Rules should be:
+- Actionable (tell the AI what to do or avoid)
+- Specific to cold outreach emails
+- Derived from the patterns seen in the feedback
+
+Return ONLY the bullet-point rules as markdown, no preamble or explanation.`;
+
+      const response = await anthropic.messages.create({
+        model: CLAUDE_MODEL,
+        max_tokens: 1024,
+        messages: [{ role: "user", content: metaPrompt }],
+      });
+
+      const rules_md = response.content[0].text || "";
+      if (!rules_md.trim()) {
+        console.log("Claude returned empty rules; skipping write");
+        return null;
+      }
+
+      // Write versioned doc
+      const versionId = `v_${Date.now()}`;
+      const versionRef = db
+        .collection("prompt_config")
+        .doc("email_rules")
+        .collection("versions")
+        .doc(versionId);
+
+      await versionRef.set({
+        rules_md,
+        generated_at: new Date().toISOString(),
+        feedback_count: feedbacks.length,
+        version_id: versionId,
+      });
+
+      // Update pointer doc (make this the active version)
+      const pointerRef = db.collection("prompt_config").doc("email_rules");
+      await pointerRef.set(
+        {
+          active_version_id: versionId,
+          generated_at: new Date().toISOString(),
+          feedback_count: feedbacks.length,
+        },
+        { merge: true }
+      );
+
+      // Bust cache
+      _rulesCache = { rules_md: "", fetched_at: 0 };
+
+      console.log(`Prompt rules generated: version ${versionId} with ${feedbacks.length} feedbacks`);
+      return { version_id: versionId, feedback_count: feedbacks.length };
+    } catch (err) {
+      console.error("generatePromptRules failed:", err.message);
+      return null;
+    }
+  });
+
+/**
+ * Switch the active prompt rule version.
+ * Callable: admin only
+ */
+export const setActivePromptVersion = functions
+  .runWith({ timeoutSeconds: 30, memory: "256MB" })
+  .https.onCall(async (data, context) => {
+    if (!context.auth) {
+      throw new HttpsError("unauthenticated", "Must be signed in");
+    }
+
+    // Check admin role
+    const userSnap = await db.collection("users").doc(context.auth.uid).get();
+    if (!userSnap.exists || userSnap.data().role !== "admin") {
+      throw new HttpsError("permission-denied", "Admin access required");
+    }
+
+    const { version_id } = data;
+    if (!version_id || typeof version_id !== "string") {
+      throw new HttpsError("invalid-argument", "version_id (string) required");
+    }
+
+    // Verify the version exists
+    const versionSnap = await db
+      .collection("prompt_config")
+      .doc("email_rules")
+      .collection("versions")
+      .doc(version_id)
+      .get();
+
+    if (!versionSnap.exists) {
+      throw new HttpsError("not-found", `Version ${version_id} not found`);
+    }
+
+    // Update pointer
+    await db.collection("prompt_config").doc("email_rules").update({
+      active_version_id: version_id,
+      updated_at: new Date().toISOString(),
+    });
+
+    // Bust cache
+    _rulesCache = { rules_md: "", fetched_at: 0 };
+
+    return { status: "success", version_id };
   });
 
