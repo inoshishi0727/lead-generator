@@ -1314,6 +1314,7 @@ export const sendApproved = functions
           sent_at: now,
           reply_to_address: replyToAddress,
           email_message_id: resendData?.id ?? null,
+          assigned_to_name: lead.assigned_to_name || msg.assigned_to_name || null,
         });
 
         // Set the correct stage based on step number
