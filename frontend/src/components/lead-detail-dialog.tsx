@@ -10,6 +10,7 @@ import {
   Star,
   Sparkles,
   RefreshCw,
+  Eye,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -223,6 +224,17 @@ export function LeadDetailDialog({ lead, onClose }: Props) {
                 <Globe className="h-3 w-3" />
                 {lead.menu_url.replace(/^https?:\/\/(www\.)?/, "").slice(0, 45)}
               </a>
+            </Row>
+          )}
+          {lead.last_opened_at && (
+            <Row label="Email opened">
+              <span className="flex items-center gap-1.5 text-sky-400">
+                <Eye className="h-3 w-3" />
+                {new Date(lead.last_opened_at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}
+                {lead.open_count > 1 && (
+                  <span className="text-muted-foreground text-[11px]">({lead.open_count} times)</span>
+                )}
+              </span>
             </Row>
           )}
         </div>

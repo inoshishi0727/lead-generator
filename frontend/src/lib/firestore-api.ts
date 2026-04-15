@@ -99,6 +99,8 @@ export async function getLeads(filters?: {
       outcome: data.outcome || null,
       outcome_updated_at: data.outcome_updated_at || null,
       reply_count: data.reply_count || 0,
+      last_opened_at: data.last_opened_at || null,
+      open_count: data.open_count || 0,
     };
   });
 
@@ -169,6 +171,8 @@ export async function getLeadById(id: string): Promise<Lead | null> {
     outcome: data.outcome || null,
     outcome_updated_at: data.outcome_updated_at || null,
     reply_count: data.reply_count || 0,
+    last_opened_at: data.last_opened_at || null,
+    open_count: data.open_count || 0,
   };
 }
 
