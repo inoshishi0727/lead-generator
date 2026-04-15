@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { Users, TrendingUp, Target, BarChart3, MessageSquare, Send, Eye, CheckCircle } from "lucide-react";
 import { StatCard } from "@/components/stat-card";
 import { FunnelChart } from "@/components/funnel-chart";
@@ -11,9 +12,12 @@ import { SubjectLineChart } from "@/components/subject-line-chart";
 import { ReplyRateTrendChart } from "@/components/reply-rate-trend-chart";
 import { OutreachBreakdownChart } from "@/components/outreach-breakdown-chart";
 import { EmailEngagementChart } from "@/components/email-engagement-chart";
+import { Button } from "@/components/ui/button";
 import { useFunnel, useCategories, useReplyRateTrend, useOpenRateTrend } from "@/hooks/use-analytics";
+import { useAuth } from "@/lib/auth-context";
 
 export default function AnalyticsPage() {
+  const { isAdmin } = useAuth();
   const { data: funnelData } = useFunnel();
   const { data: categoryData } = useCategories();
   const { data: replyTrendData } = useReplyRateTrend();
@@ -53,7 +57,17 @@ export default function AnalyticsPage() {
 
   return (
     <div className="mx-auto max-w-6xl space-y-6 p-4">
-      <h1 className="text-2xl font-bold tracking-tight">Analytics</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold tracking-tight">Analytics</h1>
+        {isAdmin && (
+          <Link href="/analytics/team">
+            <Button variant="outline" size="sm">
+              <Users className="h-3.5 w-3.5 mr-1.5" />
+              Team Metrics
+            </Button>
+          </Link>
+        )}
+      </div>
 
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
         <StatCard icon={Users} label="Total Leads" value={totalLeads} />
