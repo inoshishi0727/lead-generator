@@ -294,3 +294,18 @@ export interface LeadRecommendation {
   opening_hook: string;
   confidence: number;
 }
+
+export interface MemberMetrics {
+  uid: string;
+  display_name: string;
+  email: string;
+  role: string;
+  assigned_leads: number;
+  emails_sent: number;
+  emails_opened: number;
+  open_rate: number;
+  replies_received: number;
+  reply_rate: number;
+  leads_converted: number;
+  leads_by_stage: Record<string, number>;
+}
