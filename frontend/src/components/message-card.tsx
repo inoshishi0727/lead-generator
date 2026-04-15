@@ -45,6 +45,7 @@ import { useLeadDetail } from "@/hooks/use-lead-detail";
 interface Props {
   message: OutreachMessage;
   inConversation?: boolean;
+  emailCapReached?: boolean;
 }
 
 const statusColors: Record<string, string> = {
@@ -88,7 +89,7 @@ function rejectionLabel(reason: string): string {
   return REJECTION_LABELS[reason] ?? "rejected";
 }
 
-export function MessageCard({ message, inConversation }: Props) {
+export function MessageCard({ message, inConversation, emailCapReached }: Props) {
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [threadOpen, setThreadOpen] = useState(inConversation && !!message.has_reply);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -131,6 +132,7 @@ export function MessageCard({ message, inConversation }: Props) {
   const isRegenerating = regenerateMutation.isPending || generatingLeadId === message.lead_id;
 
   function handleApprove() {
+    if (emailCapReached && message.channel === "email") return;
     setActiveAction("approve");
     updateMutation.mutate({ id: message.id, status: "approved" }, {
       onSettled: () => setActiveAction(null),
@@ -653,7 +655,8 @@ export function MessageCard({ message, inConversation }: Props) {
                   variant="default"
                   className="bg-emerald-600 hover:bg-emerald-700"
                   onClick={handleApprove}
-                  disabled={isPending}
+                  disabled={isPending || (emailCapReached && message.channel === "email")}
+                  title={emailCapReached && message.channel === "email" ? "20 emails already approved — unapprove or reject some first" : undefined}
                 >
                   {activeAction === "approve" ? (
                     <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
@@ -688,7 +691,8 @@ export function MessageCard({ message, inConversation }: Props) {
                 variant="default"
                 className="bg-emerald-600 hover:bg-emerald-700"
                 onClick={handleApprove}
-                disabled={isPending}
+                disabled={isPending || (emailCapReached && message.channel === "email")}
+                title={emailCapReached && message.channel === "email" ? "20 emails already approved — unapprove or reject some first" : undefined}
               >
                 {activeAction === "approve" ? (
                   <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
