@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { getFunnel, getCategories, getRatios, getTrends, getSubjectLineStats, getReplyRateTrend, getReplyRateByDimension, getOpenRateTrend } from "@/lib/firestore-analytics";
+import { getTeamMetrics } from "@/lib/firestore-team-analytics";
 import type {
   FunnelData,
   CategoryStat,
@@ -10,6 +11,7 @@ import type {
   ReplyRateTrendPoint,
   ReplyRateByDimensionPoint,
   OpenRateTrendPoint,
+  MemberMetrics,
 } from "@/lib/types";
 
 const hasBackend = !!process.env.NEXT_PUBLIC_API_URL;
@@ -79,5 +81,12 @@ export function useReplyRateByDimension(dimension: "tone_tier" | "step_number" |
   return useQuery<{ points: ReplyRateByDimensionPoint[] }>({
     queryKey: ["analytics", "reply-rate-by-dimension", dimension],
     queryFn: () => getReplyRateByDimension(dimension),
+  });
+}
+
+export function useTeamMetrics() {
+  return useQuery<MemberMetrics[]>({
+    queryKey: ["analytics", "team-metrics"],
+    queryFn: () => getTeamMetrics(),
   });
 }
