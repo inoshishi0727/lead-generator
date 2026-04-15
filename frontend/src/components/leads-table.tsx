@@ -23,6 +23,7 @@ import {
   ThumbsUp,
   ThumbsDown,
   Loader2,
+  Eye,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Menu, MenuTrigger, MenuContent, MenuItem } from "@/components/ui/menu";
@@ -62,6 +63,37 @@ export function LeadsTable({ leads, isLoading, selectable, selectedIds = [], onS
   const generateDrafts = useGenerateDrafts();
 
   const handleExport = () => {
+    // Client-side CSV from current filtered view
+    const escape = (v: string | null | undefined) => {
+      if (v == null) return "";
+      const s = String(v);
+      return s.includes(",") || s.includes('"') || s.includes("\n")
+        ? `"${s.replace(/"/g, '""')}"`
+        : s;
+    };
+    const headers = ["Account Name", "Address", "Email Address", "Owner", "Stage", "Menu Fit", "Score", "Category", "Last Opened"];
+    const rows = leads.map((l) => [
+      l.business_name,
+      l.address,
+      l.contact_email || l.email,
+      l.assigned_to_name,
+      l.stage,
+      l.menu_fit,
+      l.score != null ? String(l.score) : "",
+      l.venue_category || l.category,
+      l.last_opened_at ? new Date(l.last_opened_at).toLocaleDateString("en-GB") : "",
+    ].map(escape).join(","));
+    const csv = [headers.join(","), ...rows].join("\r\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `asterley-leads-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleFullCrmExport = () => {
     window.open("/api/leads/export", "_blank");
   };
 
@@ -167,10 +199,16 @@ export function LeadsTable({ leads, isLoading, selectable, selectedIds = [], onS
           {leads.length} lead{leads.length !== 1 ? "s" : ""}
         </p>
         {leads.length > 0 && (
-          <Button variant="outline" size="sm" onClick={handleExport}>
-            <Download className="mr-2 h-4 w-4" />
-            Export CSV
-          </Button>
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" onClick={handleExport} title="Export current filtered view (no email copy)">
+              <Download className="mr-2 h-4 w-4" />
+              Export CSV
+            </Button>
+            <Button variant="outline" size="sm" onClick={handleFullCrmExport} title="Full CRM export — all leads with email copy sent">
+              <Download className="mr-2 h-4 w-4" />
+              Full CRM Export
+            </Button>
+          </div>
         )}
       </div>
 
@@ -236,29 +274,40 @@ export function LeadsTable({ leads, isLoading, selectable, selectedIds = [], onS
                   )}
                   {/* Status column */}
                   <TableCell className="w-20 px-2">
-                    {lead.client_status === "approved" ? (
-                      <Check className="h-3.5 w-3.5 text-emerald-400" />
-                    ) : lead.client_status === "rejected" && lead.rejection_reason === "snoozed" ? (
-                      <Badge variant="outline" className="gap-1 text-[10px] border-amber-500/30 text-amber-400 bg-amber-500/10">
-                        <AlarmClock className="h-3 w-3" />
-                        Snoozed
-                      </Badge>
-                    ) : lead.client_status === "rejected" && lead.rejection_reason === "current_account" ? (
-                      <Badge variant="outline" className="gap-1 text-[10px] border-purple-500/30 text-purple-400 bg-purple-500/10">
-                        <Building2 className="h-3 w-3" />
-                        Account
-                      </Badge>
-                    ) : lead.client_status === "rejected" && lead.rejection_reason === "in_discussion" ? (
-                      <Badge variant="outline" className="gap-1 text-[10px] border-sky-500/30 text-sky-400 bg-sky-500/10">
-                        <MessageSquareMore className="h-3 w-3" />
-                        In Disc.
-                      </Badge>
-                    ) : lead.client_status === "rejected" ? (
-                      <Badge variant="outline" className="gap-1 text-[10px] border-red-500/30 text-red-400 bg-red-500/10">
-                        <X className="h-3 w-3" />
-                        Rejected
-                      </Badge>
-                    ) : null}
+                    <div className="flex flex-col gap-1">
+                      {lead.client_status === "approved" ? (
+                        <Check className="h-3.5 w-3.5 text-emerald-400" />
+                      ) : lead.client_status === "rejected" && lead.rejection_reason === "snoozed" ? (
+                        <Badge variant="outline" className="gap-1 text-[10px] border-amber-500/30 text-amber-400 bg-amber-500/10">
+                          <AlarmClock className="h-3 w-3" />
+                          Snoozed
+                        </Badge>
+                      ) : lead.client_status === "rejected" && lead.rejection_reason === "current_account" ? (
+                        <Badge variant="outline" className="gap-1 text-[10px] border-purple-500/30 text-purple-400 bg-purple-500/10">
+                          <Building2 className="h-3 w-3" />
+                          Account
+                        </Badge>
+                      ) : lead.client_status === "rejected" && lead.rejection_reason === "in_discussion" ? (
+                        <Badge variant="outline" className="gap-1 text-[10px] border-sky-500/30 text-sky-400 bg-sky-500/10">
+                          <MessageSquareMore className="h-3 w-3" />
+                          In Disc.
+                        </Badge>
+                      ) : lead.client_status === "rejected" ? (
+                        <Badge variant="outline" className="gap-1 text-[10px] border-red-500/30 text-red-400 bg-red-500/10">
+                          <X className="h-3 w-3" />
+                          Rejected
+                        </Badge>
+                      ) : null}
+                      {lead.last_opened_at && (
+                        <span
+                          title={`Opened ${new Date(lead.last_opened_at).toLocaleDateString("en-GB")}${lead.open_count > 1 ? ` (${lead.open_count}×)` : ""}`}
+                          className="flex items-center gap-0.5 text-[10px] text-sky-400"
+                        >
+                          <Eye className="h-3 w-3" />
+                          {lead.open_count > 1 ? `${lead.open_count}×` : ""}
+                        </span>
+                      )}
+                    </div>
                   </TableCell>
                   {/* Business name */}
                   <TableCell className="font-medium text-primary truncate">

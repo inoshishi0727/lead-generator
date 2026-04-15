@@ -71,6 +71,9 @@ export interface Lead {
   assigned_to_name: string | null;
   assigned_at: string | null;
   assigned_by: string | null;
+  // Email open tracking (denormalized from outreach_messages)
+  last_opened_at: string | null;
+  open_count: number;
   // Reply tracking
   human_takeover: boolean;
   human_takeover_at: string | null;
