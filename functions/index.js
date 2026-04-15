@@ -1360,6 +1360,7 @@ export const sendApproved = functions
             contact_name: msg.contact_name || null,
             context_notes: msg.context_notes || null,
             menu_fit: msg.menu_fit || null,
+            menu_url: msg.menu_url || null,
             recipient_email: msg.recipient_email || lead.email || lead.contact_email || null,
             website: msg.website || null,
             workspace_id: msg.workspace_id || "",
@@ -2299,12 +2300,14 @@ async function runFollowUpGeneration() {
       }
 
       // Update the planned doc: status -> draft, fill content/subject
+      const enrichmentForUpdate = lead.enrichment || {};
       await db.collection("outreach_messages").doc(plannedDoc.id).update({
         status: "draft",
         content,
         subject,
         original_content: content,
         original_subject: subject,
+        menu_url: enrichmentForUpdate.menu_url || null,
       });
 
       // Update lead stage if needed (follow_up_1 for step 2, follow_up_2 for step 3+)
@@ -2423,6 +2426,7 @@ async function runFollowUpGeneration() {
         contact_name: lead.contact_name || contact.name || null,
         context_notes: enrichment.context_notes || null,
         menu_fit: enrichment.menu_fit || null,
+        menu_url: enrichment.menu_url || null,
         recipient_email: lead.email || lead.contact_email || null,
         website: lead.website || null,
         workspace_id: lead.workspace_id || "",
@@ -2759,6 +2763,7 @@ export const scheduledSendFollowups = functions
               contact_name: msg.contact_name || null,
               context_notes: msg.context_notes || null,
               menu_fit: msg.menu_fit || null,
+              menu_url: msg.menu_url || null,
               recipient_email: toEmail,
               website: msg.website || null,
               workspace_id: msg.workspace_id || "",
@@ -2862,6 +2867,7 @@ export const backfillPlannedCards = functions
         contact_name: msg.contact_name || null,
         context_notes: msg.context_notes || null,
         menu_fit: msg.menu_fit || null,
+        menu_url: msg.menu_url || null,
         recipient_email: msg.recipient_email || null,
         website: msg.website || null,
         workspace_id: msg.workspace_id || "",
@@ -2910,6 +2916,7 @@ export const processEmailEvents = functions
       }
 
       const docRef = snap.docs[0].ref;
+      const msgData = snap.docs[0].data();
       const now = new Date().toISOString();
 
       switch (type) {
@@ -2919,6 +2926,13 @@ export const processEmailEvents = functions
             open_count: FieldValue.increment(1),
             last_opened_at: now,
           });
+          // Denormalize onto the lead so the leads table can show who opened
+          if (msgData.lead_id) {
+            await db.collection("leads").doc(msgData.lead_id).update({
+              last_opened_at: now,
+              open_count: FieldValue.increment(1),
+            }).catch(() => {}); // non-fatal if lead doc missing
+          }
           console.log("Email opened:", emailId);
           break;
 
@@ -2968,6 +2982,7 @@ function buildAnalyticsSummaryHtml(stats) {
     approvedWaiting,
     plannedToDraft,
     escalationDMsPending,
+    feedbackCorrectionsLast7Days,
     stageBreakdown,
     dateRange,
   } = stats;
@@ -3080,6 +3095,20 @@ function buildAnalyticsSummaryHtml(stats) {
             </table>
           </div>
 
+          <div class="section" style="background: #fffbeb; border: 1px solid #fde68a; border-radius: 6px; padding: 16px;">
+            <div class="section-title" style="color: #92400e; border-bottom-color: #fde68a;">AI Model Feedback</div>
+            <p style="font-size: 13px; color: #78350f; margin: 0 0 10px 0;">
+              ${feedbackCorrectionsLast7Days > 0
+                ? `<strong>${feedbackCorrectionsLast7Days} draft correction${feedbackCorrectionsLast7Days !== 1 ? "s" : ""}</strong> logged this week — great work. Each correction improves future AI drafts.`
+                : `<strong>No draft corrections logged this week.</strong> Editing and correcting AI-generated emails directly trains the model to improve.`
+              }
+            </p>
+            <p style="font-size: 13px; color: #92400e; margin: 0;">
+              Aim for 3–5 corrections per week. Open a draft, click <em>Edit</em>, make your changes, and the system captures the improvement automatically.
+              <a href="https://asterleyleadgen.netlify.app/outreach" style="color: #b45309; font-weight: 600;">Review drafts →</a>
+            </p>
+          </div>
+
           <div class="footer">
             <p>📊 <a href="https://asterleyleadgen.netlify.app/analytics">View Full Dashboard</a></p>
             <p style="margin-top: 10px; color: #9ca3af;">This is an automated weekly summary. Questions? Check the analytics dashboard.</p>
@@ -3115,7 +3144,7 @@ export const scheduledAnalyticsSummary = functions
 
     // 2. Aggregate data
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
-    const [leadsSnap, sentRecentSnap, openedRecentSnap, repliedRecentSnap, approvedSnap, plannedSnap, escalationSnap] = await Promise.all([
+    const [leadsSnap, sentRecentSnap, openedRecentSnap, repliedRecentSnap, approvedSnap, plannedSnap, escalationSnap, feedbackRecentSnap] = await Promise.all([
       db.collection("leads").get(),
       db.collection("outreach_messages").where("sent_at", ">=", sevenDaysAgo).where("status", "==", "sent").get(),
       db.collection("outreach_messages").where("sent_at", ">=", sevenDaysAgo).where("status", "==", "sent").where("opened", "==", true).get(),
@@ -3123,6 +3152,7 @@ export const scheduledAnalyticsSummary = functions
       db.collection("outreach_messages").where("status", "==", "approved").where("channel", "==", "email").get(),
       db.collection("outreach_messages").where("status", "==", "planned").where("channel", "==", "email").get(),
       db.collection("outreach_messages").where("is_channel_escalation", "==", true).where("status", "in", ["planned", "draft", "approved"]).get(),
+      db.collection("edit_feedback").where("created_at", ">=", sevenDaysAgo).get(),
     ]);
 
     const leads = leadsSnap.docs.map(d => d.data());
@@ -3147,6 +3177,7 @@ export const scheduledAnalyticsSummary = functions
     const approvedCount = approvedSnap.docs.length;
     const plannedCount = plannedSnap.docs.length;
     const escalationCount = escalationSnap.docs.length;
+    const feedbackCount = feedbackRecentSnap.docs.length;
 
     // Stage breakdown for table
     const STAGE_ORDER = [
@@ -3182,6 +3213,7 @@ export const scheduledAnalyticsSummary = functions
       approvedWaiting: approvedCount,
       plannedToDraft: plannedCount,
       escalationDMsPending: escalationCount,
+      feedbackCorrectionsLast7Days: feedbackCount,
       stageBreakdown,
       dateRange,
     };
