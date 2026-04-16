@@ -146,22 +146,39 @@ export function useRegenerateMessage() {
   });
 }
 
+export function useApprovedEmailCount() {
+  return useQuery({
+    queryKey: ["outreach", "approved-email-count"],
+    queryFn: async () => {
+      const messages = await getOutreachMessages({ status: "approved", channel: "email", limit: 25 });
+      return messages.length;
+    },
+  });
+}
+
 export function useBatchApprove() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (messageIds: string[]) => {
+      // Get current approved count and cap at 20
+      const currentMessages = await getOutreachMessages({ status: "approved", channel: "email", limit: 25 });
+      const currentCount = currentMessages.filter((m) => m.channel === "email").length;
+      const slots = Math.max(0, 20 - currentCount);
+      const toApprove = messageIds.slice(0, slots);
+
       if (hasBackend) {
-        return api.post<{ approved: number }>("/api/outreach/approve-batch", {
-          message_ids: messageIds,
+        return api.post<{ approved: number; capped: boolean }>("/api/outreach/approve-batch", {
+          message_ids: toApprove,
         });
       }
+
       // Client-side batch approve
       let approved = 0;
-      for (const id of messageIds) {
+      for (const id of toApprove) {
         await updateOutreachMessage(id, { status: "approved" });
         approved++;
       }
-      return { approved };
+      return { approved, capped: toApprove.length < messageIds.length };
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["outreach"] });

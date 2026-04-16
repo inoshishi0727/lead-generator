@@ -3602,6 +3602,7 @@ export const generatePromptRules = functions
     const anthropic = new Anthropic({ apiKey });
 
     try {
+      // Fetch recent edit feedback from the last 28 days
       const thirtyDaysAgo = new Date();
       thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 28);
 
@@ -3617,6 +3618,7 @@ export const generatePromptRules = functions
         return null;
       }
 
+      // Filter to last 28 days and extract venue_category + reflection_notes
       const feedbacks = feedbackDocs.docs
         .map((doc) => ({ ...doc.data(), id: doc.id }))
         .filter((fb) => {
@@ -3675,6 +3677,7 @@ Return ONLY the bullet-point rules as markdown, no preamble or explanation.`;
         return null;
       }
 
+      // Write versioned doc
       const versionId = `v_${Date.now()}`;
       const versionRef = db
         .collection("prompt_config")
@@ -3756,3 +3759,4 @@ export const setActivePromptVersion = functions
 
     return { status: "success", version_id };
   });
+

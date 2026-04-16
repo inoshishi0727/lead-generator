@@ -16,7 +16,8 @@ import { useConfig } from "@/hooks/use-config";
 import { useAuth } from "@/lib/auth-context";
 import { sendPasswordResetEmail, updatePassword } from "firebase/auth";
 import { auth } from "@/lib/firebase";
-import { KeyRound, Loader2, Check } from "lucide-react";
+import Link from "next/link";
+import { KeyRound, Loader2, Check, Sparkles } from "lucide-react";
 
 export default function SettingsPage() {
   const { isAdmin, loading, user } = useAuth();
@@ -129,6 +130,28 @@ export default function SettingsPage() {
           </form>
         </CardContent>
       </Card>
+
+      {/* Prompt Rules (admin only) */}
+      {isAdmin && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-sm font-semibold">
+              <Sparkles className="h-4 w-4" />
+              Prompt Rules
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-muted-foreground mb-4">
+              Manage synthesized writing rules generated from team feedback. View version history and rollback if needed.
+            </p>
+            <Link href="/settings/prompt-rules">
+              <Button size="sm">
+                View & Manage Versions
+              </Button>
+            </Link>
+          </CardContent>
+        </Card>
+      )}
 
       {/* System settings (admin only) */}
       {isAdmin && config && (
