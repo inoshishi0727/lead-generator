@@ -1833,6 +1833,85 @@ export const processInboundEmail = functions
       const textBody = fullEmail.text || eventData.text || "";
       const htmlBody = fullEmail.html || eventData.html || "";
       const toAddresses = eventData.to || [];
+      const toList = (Array.isArray(toAddresses) ? toAddresses : [toAddresses])
+        .map((a) => (typeof a === "string" ? a : a?.email || "").toLowerCase());
+
+      // ---- Lead ingestion: email sent to leads@replies.asterleybros.com ----
+      const isLeadIngestion = toList.some((a) => a.startsWith("leads@"));
+      if (isLeadIngestion) {
+        // Parse business name from subject (strip Re:/Fwd: prefixes)
+        const businessName = subject.replace(/^(re|fwd?):\s*/i, "").trim() || "Unknown";
+
+        // Extract first URL from body
+        const urlMatch = (textBody || htmlBody).match(/https?:\/\/[^\s"<>]+/);
+        const website = urlMatch ? urlMatch[0].replace(/[.,;)]+$/, "") : null;
+
+        // Check for Google Maps URL
+        const isMapsUrl = website && /maps\.google|google\.com\/maps|goo\.gl\/maps/i.test(website);
+
+        const leadId = crypto.randomUUID();
+        const now = new Date().toISOString();
+
+        await db.collection("leads").doc(leadId).set({
+          id: leadId,
+          business_name: businessName,
+          website: isMapsUrl ? null : website,
+          google_maps_url: isMapsUrl ? website : null,
+          source: "email_ingestion",
+          stage: "scraped",
+          added_by_email: fromEmail,
+          added_by_name: fromName,
+          scraped_at: now,
+          email: null,
+          phone: null,
+          address: null,
+          score: null,
+          enrichment_status: null,
+        });
+
+        // Send confirmation reply
+        if (process.env.RESEND_API_KEY) {
+          try {
+            await fetch("https://api.resend.com/emails", {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                from: "Asterley Leads <leads@replies.asterleybros.com>",
+                to: fromEmail,
+                subject: `Lead added: ${businessName}`,
+                text: `Got it — "${businessName}" has been added to the leads pipeline.${website ? `\n\nWebsite: ${website}` : ""}\n\nYou can view it at https://asterleyleadgen.netlify.app/leads`,
+              }),
+            });
+          } catch (err) {
+            console.warn("Lead ingestion confirmation email failed:", err.message);
+          }
+        }
+
+        if (resendEmailId) {
+          await db.collection("webhook_events").doc(resendEmailId).set({
+            event_type: "lead_ingestion",
+            resend_email_id: resendEmailId,
+            processed_at: now,
+            status: "processed",
+            lead_id: leadId,
+          });
+        }
+
+        await db.collection("activity_log").add({
+          type: "lead_ingested_via_email",
+          lead_id: leadId,
+          business_name: businessName,
+          from_email: fromEmail,
+          created_at: now,
+        });
+
+        console.log("Lead ingested via email:", { leadId, businessName, website, fromEmail });
+        res.status(200).json({ status: "ok", type: "lead_ingestion", lead_id: leadId });
+        return;
+      }
 
       // Extract lead_id from the plus-addressed reply-to
       const leadIdFromAddress = extractLeadIdFromTo(
@@ -2569,16 +2648,40 @@ export const scheduledFollowups = functions
   .pubsub.schedule("0 8 * * 1-5")
   .timeZone("Europe/London")
   .onRun(async () => {
-    // Skip blackout days (bank holidays, Dec 24 - Jan 3)
     const now = new Date();
     const london = new Date(now.toLocaleString("en-US", { timeZone: "Europe/London" }));
     if (isBlackoutDay(london)) {
       console.log("Scheduled follow-ups skipped: blackout day");
+      await db.collection("pipeline_jobs").add({
+        type: "scheduled_followups",
+        status: "skipped",
+        started_at: now.toISOString(),
+        completed_at: now.toISOString(),
+        result: { reason: "blackout day" },
+      });
       return null;
     }
 
-    const result = await runFollowUpGeneration();
-    console.log("Scheduled follow-up generation:", JSON.stringify(result));
+    const jobRef = db.collection("pipeline_jobs").doc();
+    await jobRef.set({
+      type: "scheduled_followups",
+      status: "running",
+      started_at: now.toISOString(),
+      completed_at: null,
+      result: null,
+    });
+
+    try {
+      const result = await runFollowUpGeneration();
+      console.log("Scheduled follow-up generation:", JSON.stringify(result));
+      await jobRef.update({
+        status: "completed",
+        completed_at: new Date().toISOString(),
+        result,
+      });
+    } catch (err) {
+      await jobRef.update({ status: "failed", completed_at: new Date().toISOString(), result: { error: err.message } });
+    }
     return null;
   });
 
@@ -2635,8 +2738,18 @@ export const scheduledSendFollowups = functions
       .filter((m) => (m.step_number ?? 1) > 1 && m.scheduled_send_date && m.scheduled_send_date <= todayStr)
       .slice(0, remaining);
 
+    const jobRef = db.collection("pipeline_jobs").doc();
+    await jobRef.set({
+      type: "scheduled_send_followups",
+      status: "running",
+      started_at: new Date().toISOString(),
+      completed_at: null,
+      result: null,
+    });
+
     if (!dueMessages.length) {
       console.log("Scheduled follow-up send: no due messages");
+      await jobRef.update({ status: "completed", completed_at: new Date().toISOString(), result: { sent: 0, failed: 0, reason: "no due messages" } });
       return null;
     }
 
@@ -2784,6 +2897,11 @@ export const scheduledSendFollowups = functions
     }
 
     console.log("Scheduled follow-up send complete:", JSON.stringify({ sent, failed, total: dueMessages.length }));
+    await jobRef.update({
+      status: "completed",
+      completed_at: new Date().toISOString(),
+      result: { sent, failed, total: dueMessages.length },
+    });
     return null;
   });
 
@@ -3135,11 +3253,21 @@ export const scheduledAnalyticsSummary = functions
       return null;
     }
 
+    const jobRef = db.collection("pipeline_jobs").doc();
+    await jobRef.set({
+      type: "scheduled_analytics",
+      status: "running",
+      started_at: new Date().toISOString(),
+      completed_at: null,
+      result: null,
+    });
+
     // 1. Get admin recipient list
     const adminSnap = await db.collection("users").where("role", "==", "admin").get();
     const adminEmails = adminSnap.docs.map(d => d.data().email).filter(Boolean);
     if (!adminEmails.length) {
       console.log("No admin emails found, skipping analytics summary");
+      await jobRef.update({ status: "skipped", completed_at: new Date().toISOString(), result: { reason: "no admin emails" } });
       return null;
     }
 
@@ -3239,6 +3367,165 @@ export const scheduledAnalyticsSummary = functions
     }
 
     console.log(`Analytics summary completed: sent to ${adminEmails.length} admin(s), stats: ${JSON.stringify(stats)}`);
+    await jobRef.update({
+      status: "completed",
+      completed_at: new Date().toISOString(),
+      result: { recipients: adminEmails.length, ...stats },
+    });
     return null;
+  });
+
+// ---- Client System Prompt ----
+
+const CLIENT_SYSTEM_PROMPT = `You are Rob, founder of Asterley Bros, an independent English Vermouth, Amaro, and Aperitivo producer based in SE26, London. You are writing an outreach email to an existing stockist — a current client who already stocks and sells your products.
+
+YOUR VOICE: Warm, personal, direct. Not a newsletter. This reads like a message from a founder to a trusted trade partner.
+- You know this venue. You have a real relationship with them.
+- Use "we" for Asterley Bros, "you" for the venue.
+- Keep the tone collegial, not salesy. This isn't cold outreach.
+- You CAN reference the ongoing relationship: "hope the Dispense is still flying," "great to hear the Negronis are going well."
+
+PRODUCT NAMES, RULES, and VOICE are identical to your cold outreach — same tone, same capitalisation, same do-not-say list.
+
+CAMPAIGN TYPES:
+- seasonal: Highlight a seasonal opportunity (e.g. summer aperitivo, Christmas gift sets) with a relevant product + serve angle.
+- reorder: Check in on stock levels, make it easy for them to reorder. Mention any low-stock risk or popular serves that might need topping up.
+- new_product: Introduce a new or updated product to an existing client first — "wanted you to see this before it goes anywhere else."
+- new_menu: Offer to help them develop a serve or update their menu listing around a particular product.
+- event: Propose a collaboration, tasting event, or feature they could run with Asterley products.
+
+EMAIL STRUCTURE:
+1. GREETING (use first name if known, otherwise "Hi team")
+2. BRIEF CHECK-IN (1 sentence — warm acknowledgement of the relationship, no more)
+3. REASON FOR REACHING OUT (2-3 sentences — clear purpose tied to the campaign type and brief provided)
+4. SPECIFIC PRODUCT + SERVE SUGGESTION (1-2 sentences — concrete, relevant to this venue)
+5. CTA (one clear ask — a call, drop-in, or response. Keep it light. "Worth a quick call?" / "Fancy trying it before it goes wider?")
+6. SIGN-OFF: "Cheers," only
+
+WORD COUNT: 90-130 words. Shorter than cold outreach — they know you.
+NO send window rules apply (you can email clients any day).
+
+Output ONLY "Subject:" on the first line, then the full email body. Nothing else.`;
+
+/**
+ * Generate client campaign drafts for selected clients.
+ * Called from frontend: generateClientDrafts({ lead_ids, campaign_type, campaign_brief })
+ */
+export const generateClientDrafts = functions
+  .runWith({ timeoutSeconds: 300, memory: "512MB", secrets: ["ANTHROPIC_API_KEY"] })
+  .https.onCall(async (data, context) => {
+    if (!context.auth) {
+      throw new HttpsError("unauthenticated", "Must be signed in.");
+    }
+
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) {
+      throw new HttpsError("failed-precondition", "ANTHROPIC_API_KEY not configured.");
+    }
+
+    const { lead_ids, campaign_type, campaign_brief } = data;
+    if (!lead_ids || !Array.isArray(lead_ids) || lead_ids.length === 0) {
+      throw new HttpsError("invalid-argument", "lead_ids required.");
+    }
+    if (!campaign_type || !campaign_brief) {
+      throw new HttpsError("invalid-argument", "campaign_type and campaign_brief required.");
+    }
+
+    const anthropic = new Anthropic({ apiKey });
+
+    // Fetch lead docs
+    const promises = lead_ids.map((id) => db.collection("leads").doc(id).get());
+    const snaps = await Promise.all(promises);
+    const docs = snaps.filter((s) => s.exists).map((s) => ({ id: s.id, ...s.data() }));
+
+    let generated = 0;
+    let failed = 0;
+
+    for (const leadDoc of docs) {
+      try {
+        const enrichment = leadDoc.enrichment || {};
+        const contact = enrichment.contact || {};
+        const contactName = leadDoc.contact_name || contact.name || "";
+        const contactConf = leadDoc.contact_confidence || contact.confidence || "uncertain";
+        const greeting = (contactName && (contactConf === "verified" || contactConf === "likely"))
+          ? contactName.split(" ")[0]
+          : "team";
+
+        const venueCat = enrichment.venue_category || leadDoc.category || "bar";
+        const season = getCurrentSeason();
+
+        const prompt = `CLIENT DATA:
+- Name: ${leadDoc.business_name}
+- Category: ${venueCat}
+- Location: ${leadDoc.address || "London"}
+- Greeting to use: Hi ${greeting}
+- Drinks programme: ${enrichment.drinks_programme || "not available"}
+- Context notes: ${enrichment.context_notes || "none"}
+
+CAMPAIGN TYPE: ${campaign_type}
+CAMPAIGN BRIEF: ${campaign_brief}
+
+SEASON: ${season}
+
+Write a client retention email for this stockist based on the campaign brief above. Remember: they are an existing client who stocks our products.`;
+
+        const response = await anthropic.messages.create({
+          model: CLAUDE_MODEL,
+          max_tokens: 512,
+          system: CLIENT_SYSTEM_PROMPT,
+          messages: [{ role: "user", content: prompt }],
+        });
+
+        let content = response.content[0].text || "";
+        let subject = null;
+
+        if (content.includes("Subject:")) {
+          const lines = content.split("\n");
+          for (let i = 0; i < lines.length; i++) {
+            if (lines[i].trim().startsWith("Subject:")) {
+              subject = lines[i].trim().replace("Subject:", "").trim();
+              content = lines.slice(i + 1).join("\n").trim();
+              break;
+            }
+          }
+        }
+
+        const msgId = crypto.randomUUID();
+        await db.collection("outreach_messages").doc(msgId).set({
+          id: msgId,
+          lead_id: leadDoc.id,
+          business_name: leadDoc.business_name,
+          venue_category: enrichment.venue_category || null,
+          channel: "email",
+          subject,
+          content,
+          status: "draft",
+          step_number: 1,
+          follow_up_label: campaign_type,
+          scheduled_send_date: null,
+          created_at: new Date().toISOString(),
+          tone_tier: enrichment.tone_tier || null,
+          lead_products: enrichment.lead_products || [],
+          contact_name: leadDoc.contact_name || contact.name || null,
+          context_notes: enrichment.context_notes || null,
+          menu_fit: enrichment.menu_fit || null,
+          recipient_email: leadDoc.email || leadDoc.contact_email || null,
+          website: leadDoc.website || null,
+          workspace_id: leadDoc.workspace_id || "",
+          assigned_to: leadDoc.assigned_to || null,
+          original_content: content,
+          original_subject: subject,
+          was_edited: false,
+          is_client_campaign: true,
+        });
+
+        generated++;
+      } catch (err) {
+        console.error("Client draft failed for", leadDoc.business_name, err.message);
+        failed++;
+      }
+    }
+
+    return { generated, failed, total: docs.length };
   });
 

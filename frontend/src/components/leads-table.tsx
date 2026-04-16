@@ -159,8 +159,6 @@ export function LeadsTable({ leads, isLoading, selectable, selectedIds = [], onS
         nextMonday.setDate(now.getDate() + daysUntilMonday);
         nextMonday.setHours(9, 0, 0, 0);
         updates.snoozed_until = nextMonday.toISOString();
-      } else if (reason === "current_account") {
-        updates.stage = "declined";
       } else if (reason === "in_discussion") {
         const snoozeUntil = new Date();
         snoozeUntil.setDate(snoozeUntil.getDate() + 60);
@@ -173,6 +171,30 @@ export function LeadsTable({ leads, isLoading, selectable, selectedIds = [], onS
     } catch (err) {
       console.error("Reject failed:", err);
       toast.error("Failed to reject lead");
+    } finally {
+      setPendingLeads((prev) => {
+        const next = new Set(prev);
+        next.delete(leadId);
+        return next;
+      });
+    }
+  }
+
+  async function handleMarkAsClient(e: React.MouseEvent, leadId: string) {
+    e.stopPropagation();
+    if (pendingLeads.has(leadId)) return;
+    setPendingLeads((prev) => new Set(prev).add(leadId));
+    try {
+      await updateLeadFields(leadId, {
+        client_status: "current_account",
+        stage: "client",
+        rejection_reason: null,
+      });
+      qc.invalidateQueries({ queryKey: ["leads"] });
+      toast.success("Marked as client");
+    } catch (err) {
+      console.error("Mark as client failed:", err);
+      toast.error("Failed to mark as client");
     } finally {
       setPendingLeads((prev) => {
         const next = new Set(prev);
@@ -252,7 +274,7 @@ export function LeadsTable({ leads, isLoading, selectable, selectedIds = [], onS
                 <TableRow
                   key={lead.id}
                   className={`cursor-pointer transition-colors hover:bg-accent/50 ${
-                    lead.client_status === "rejected" ? "opacity-60" : ""
+                    lead.client_status === "rejected" && lead.rejection_reason !== "current_account" ? "opacity-60" : ""
                   } ${index % 2 === 1 ? "bg-muted/30" : ""}`}
                   onClick={() => setSelectedLead(lead)}
                 >
@@ -282,10 +304,10 @@ export function LeadsTable({ leads, isLoading, selectable, selectedIds = [], onS
                           <AlarmClock className="h-3 w-3" />
                           Snoozed
                         </Badge>
-                      ) : lead.client_status === "rejected" && lead.rejection_reason === "current_account" ? (
+                      ) : lead.client_status === "current_account" || (lead.client_status === "rejected" && lead.rejection_reason === "current_account") ? (
                         <Badge variant="outline" className="gap-1 text-[10px] border-purple-500/30 text-purple-400 bg-purple-500/10">
                           <Building2 className="h-3 w-3" />
-                          Account
+                          Client
                         </Badge>
                       ) : lead.client_status === "rejected" && lead.rejection_reason === "in_discussion" ? (
                         <Badge variant="outline" className="gap-1 text-[10px] border-sky-500/30 text-sky-400 bg-sky-500/10">
@@ -315,6 +337,11 @@ export function LeadsTable({ leads, isLoading, selectable, selectedIds = [], onS
                     {lead.source === "manual" && lead.enrichment_status !== "success" && (
                       <Badge variant="outline" className="ml-2 text-[9px] border-orange-500/30 text-orange-400 bg-orange-500/10">
                         Queued — next week
+                      </Badge>
+                    )}
+                    {lead.source === "email_ingestion" && (
+                      <Badge variant="outline" className="ml-2 text-[9px] border-sky-500/30 text-sky-400 bg-sky-500/10">
+                        Via email
                       </Badge>
                     )}
                     {lead.client_status === "rejected" && lead.rejection_notes && (
@@ -386,12 +413,23 @@ export function LeadsTable({ leads, isLoading, selectable, selectedIds = [], onS
                           >
                             <ThumbsUp className="h-3.5 w-3.5" />
                           </button>
+                          <button
+                            className={`rounded p-1.5 transition-colors ${
+                              lead.client_status === "current_account" || (lead.client_status === "rejected" && lead.rejection_reason === "current_account")
+                                ? "bg-purple-500/20 text-purple-400"
+                                : "text-muted-foreground hover:text-purple-400 hover:bg-purple-500/10"
+                            }`}
+                            onClick={(e) => handleMarkAsClient(e, lead.id)}
+                            title="Mark as client"
+                          >
+                            <Building2 className="h-3.5 w-3.5" />
+                          </button>
                           <Menu>
                             <MenuTrigger
                               render={
                                 <button
                                   className={`rounded p-1.5 transition-colors ${
-                                    lead.client_status === "rejected"
+                                    lead.client_status === "rejected" && lead.rejection_reason !== "current_account"
                                       ? "bg-red-500/20 text-red-400"
                                       : "text-muted-foreground hover:text-red-400 hover:bg-red-500/10"
                                   }`}
@@ -405,10 +443,6 @@ export function LeadsTable({ leads, isLoading, selectable, selectedIds = [], onS
                               <MenuItem onClick={(e) => { e.stopPropagation(); setRejectDialog({ leadId: lead.id, reason: "snoozed" }); setRejectionNotes(""); }}>
                                 <AlarmClock className="h-3.5 w-3.5" />
                                 Snooze until next week
-                              </MenuItem>
-                              <MenuItem onClick={(e) => { e.stopPropagation(); setRejectDialog({ leadId: lead.id, reason: "current_account" }); setRejectionNotes(""); }}>
-                                <Building2 className="h-3.5 w-3.5" />
-                                Current account
                               </MenuItem>
                               <MenuItem onClick={(e) => { e.stopPropagation(); setRejectDialog({ leadId: lead.id, reason: "in_discussion" }); setRejectionNotes(""); }}>
                                 <MessageSquareMore className="h-3.5 w-3.5" />

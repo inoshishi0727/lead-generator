@@ -29,7 +29,7 @@ import { getOutreachMessages } from "@/lib/firestore-api";
 import { EditReflectionBanner } from "@/components/edit-reflection-banner";
 import { ThreadCard } from "@/components/thread-card";
 
-const STATUS_FILTERS = ["draft", "approved", "sent", "conversations", "rejected", "follow-ups", "all"] as const;
+const STATUS_FILTERS = ["draft", "approved", "sent", "conversations", "rejected", "follow-ups", "clients", "all"] as const;
 
 const CATEGORY_OPTIONS = [
   { value: "", label: "All Categories" },
@@ -65,33 +65,33 @@ export default function OutreachPage() {
   // Member auto-scopes to own messages
   const assignedTo = isMember ? user?.uid : undefined;
 
-  // "replied" is a client-side filter (has_reply), not a Firestore status
-  const firestoreFilter = statusFilter === "all" || statusFilter === "conversations"
+  // "replied", "follow-ups", "clients" are client-side filters — fetch all and filter below
+  const firestoreFilter = statusFilter === "all" || statusFilter === "conversations" || statusFilter === "follow-ups" || statusFilter === "clients"
     ? { assignedTo } as any
-    : (statusFilter === "follow-ups" ? { assignedTo } as any : { status: statusFilter, assignedTo });
+    : { status: statusFilter, assignedTo };
 
-  // Use API-backed messages by default, but when viewing Follow-ups, fetch directly
+  // Use API-backed messages by default, but when viewing Follow-ups or Clients, fetch directly
   // from Firestore client to avoid server-side cache delays (live functions write directly to Firestore).
   const { data: apiMessages, isLoading: apiLoading } = useMessages(firestoreFilter);
-  const [clientMessages, setClientMessages] = useState<any[] | null>(null);
-  const [clientLoading, setClientLoading] = useState(false);
+  const [clientSideMessages, setClientSideMessages] = useState<any[] | null>(null);
+  const [clientSideLoading, setClientSideLoading] = useState(false);
 
   useEffect(() => {
     let mounted = true;
-    if (statusFilter === "follow-ups") {
-      setClientLoading(true);
+    if (statusFilter === "follow-ups" || statusFilter === "clients") {
+      setClientSideLoading(true);
       getOutreachMessages({ limit: 500, assignedTo })
-        .then((res) => { if (mounted) setClientMessages(res); })
-        .catch((err) => { console.error("Failed to load follow-ups from client Firestore", err); if (mounted) setClientMessages([]); })
-        .finally(() => { if (mounted) setClientLoading(false); });
+        .then((res) => { if (mounted) setClientSideMessages(res); })
+        .catch((err) => { console.error("Failed to load messages from client Firestore", err); if (mounted) setClientSideMessages([]); })
+        .finally(() => { if (mounted) setClientSideLoading(false); });
     } else {
-      setClientMessages(null);
+      setClientSideMessages(null);
     }
     return () => { mounted = false; };
   }, [statusFilter]);
 
-  const messages = statusFilter === "follow-ups" ? (clientMessages ?? []) : (apiMessages ?? []);
-  const isLoading = statusFilter === "follow-ups" ? clientLoading : apiLoading;
+  const messages = (statusFilter === "follow-ups" || statusFilter === "clients") ? (clientSideMessages ?? []) : (apiMessages ?? []);
+  const isLoading = (statusFilter === "follow-ups" || statusFilter === "clients") ? clientSideLoading : apiLoading;
 
   const generateMutation = useGenerateDrafts();
   const regenerateAllMutation = useRegenerateAll();
@@ -115,9 +115,11 @@ export default function OutreachPage() {
           && !m.has_reply
           && leadsWithSentEmail.has(m.lead_id)
         )
-      : (statusFilter === "all")
-        ? (messages ?? [])
-        : (messages ?? []).filter((m) => m.status === statusFilter);
+      : statusFilter === "clients"
+        ? (messages ?? []).filter((m) => m.is_client_campaign)
+        : (statusFilter === "all")
+          ? (messages ?? [])
+          : (messages ?? []).filter((m) => m.status === statusFilter);
   const filteredByCategory = filteredByStatus.filter(
     (m) => !categoryFilter || m.venue_category === categoryFilter
   );
