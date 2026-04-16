@@ -204,6 +204,29 @@ You emailed them a few days ago but haven't heard back. This is a short, casual 
 - Sound like a real person sliding into DMs, not a bot.
 - No formal sign-off needed. Conversational tone.`;
 
+// ---- Prompt Rules Cache ----
+const RULES_CACHE_TTL_MS = 5 * 60 * 1000;
+let _rulesCache = { rules_md: "", fetched_at: 0 };
+async function getPromptRules() {
+  const now = Date.now();
+  if (_rulesCache.rules_md && now - _rulesCache.fetched_at < RULES_CACHE_TTL_MS) {
+    return _rulesCache.rules_md;
+  }
+  try {
+    const snap = await db.collection("prompt_config").doc("email_rules").get();
+    if (!snap.exists) return "";
+    const data = snap.data();
+    const activeId = data.active_version;
+    if (!activeId || !data.versions?.[activeId]) return "";
+    const rules = data.versions[activeId].rules_md || "";
+    _rulesCache = { rules_md: rules, fetched_at: now };
+    return rules;
+  } catch (e) {
+    console.warn("getPromptRules: failed to fetch, skipping rules", e.message);
+    return "";
+  }
+}
+
 // ---- Email system prompt ----
 
 const EMAIL_SYSTEM_PROMPT = `You are Rob, founder of Asterley Bros, an independent English Vermouth, Amaro, and Aperitivo producer based in SE26, London. You are writing cold outreach emails to potential stockists.
@@ -546,9 +569,10 @@ export const generateDrafts = functions
 
         // Inject edit feedback so Claude learns from past human corrections
         const feedbackBlock = await getEditFeedback(venueCat, toneTier);
-        const systemPrompt = feedbackBlock
-          ? EMAIL_SYSTEM_PROMPT + feedbackBlock
-          : EMAIL_SYSTEM_PROMPT;
+        const promptRules = await getPromptRules();
+        const systemPrompt = EMAIL_SYSTEM_PROMPT
+          + (promptRules ? `\n\nPROMPT RULES (apply to every email):\n${promptRules}` : "")
+          + (feedbackBlock || "");
 
         const response = await anthropic.messages.create({
           model: CLAUDE_MODEL,
@@ -649,9 +673,10 @@ export const regenerateDraft = functions
     const prompt = buildPrompt(leadDoc, enrichment);
 
     const feedbackBlock = await getEditFeedback(venueCat, toneTier);
-    const systemPrompt = feedbackBlock
-      ? EMAIL_SYSTEM_PROMPT + feedbackBlock
-      : EMAIL_SYSTEM_PROMPT;
+    const promptRules = await getPromptRules();
+    const systemPrompt = EMAIL_SYSTEM_PROMPT
+      + (promptRules ? `\n\nPROMPT RULES (apply to every email):\n${promptRules}` : "")
+      + (feedbackBlock || "");
 
     const response = await anthropic.messages.create({
       model: CLAUDE_MODEL,
@@ -736,9 +761,10 @@ export const regenerateAllDrafts = functions
         const prompt = buildPrompt(leadDoc, enrichment);
 
         const feedbackBlock = await getEditFeedback(venueCat, toneTier);
-        const systemPrompt = feedbackBlock
-          ? EMAIL_SYSTEM_PROMPT + feedbackBlock
-          : EMAIL_SYSTEM_PROMPT;
+        const promptRules = await getPromptRules();
+        const systemPrompt = EMAIL_SYSTEM_PROMPT
+          + (promptRules ? `\n\nPROMPT RULES (apply to every email):\n${promptRules}` : "")
+          + (feedbackBlock || "");
 
         const response = await anthropic.messages.create({
           model: CLAUDE_MODEL,
@@ -2354,9 +2380,10 @@ async function runFollowUpGeneration() {
       const prompt = buildPrompt(lead, enrichment, plannedDoc.step_number, previousSubject);
 
       const feedbackBlock = await getEditFeedback(venueCat, toneTier);
-      const systemPrompt = feedbackBlock
-        ? EMAIL_SYSTEM_PROMPT + feedbackBlock
-        : EMAIL_SYSTEM_PROMPT;
+      const promptRules = await getPromptRules();
+      const systemPrompt = EMAIL_SYSTEM_PROMPT
+        + (promptRules ? `\n\nPROMPT RULES (apply to every email):\n${promptRules}` : "")
+        + (feedbackBlock || "");
 
       const response = await anthropic.messages.create({
         model: CLAUDE_MODEL,
@@ -2461,9 +2488,10 @@ async function runFollowUpGeneration() {
       const prompt = buildPrompt(lead, enrichment, nextStepNumber, previousSubject);
 
       const feedbackBlock = await getEditFeedback(venueCat, toneTier);
-      const systemPrompt = feedbackBlock
-        ? EMAIL_SYSTEM_PROMPT + feedbackBlock
-        : EMAIL_SYSTEM_PROMPT;
+      const promptRules = await getPromptRules();
+      const systemPrompt = EMAIL_SYSTEM_PROMPT
+        + (promptRules ? `\n\nPROMPT RULES (apply to every email):\n${promptRules}` : "")
+        + (feedbackBlock || "");
 
       const response = await anthropic.messages.create({
         model: CLAUDE_MODEL,
