@@ -355,6 +355,27 @@ export function useDeleteMessage() {
   });
 }
 
+export function useGenerateClientDrafts() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (params: {
+      lead_ids: string[];
+      campaign_type: string;
+      campaign_brief: string;
+    }) => {
+      const fn = httpsCallable<
+        { lead_ids: string[]; campaign_type: string; campaign_brief: string },
+        { generated: number; failed: number; total: number }
+      >(functions, "generateClientDrafts");
+      const result = await fn(params);
+      return result.data;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["outreach"] });
+    },
+  });
+}
+
 export function useDeleteReply() {
   const qc = useQueryClient();
   return useMutation({

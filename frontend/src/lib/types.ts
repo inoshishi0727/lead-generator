@@ -142,6 +142,8 @@ export interface OutreachMessage {
   parent_email_message_id?: string | null;
   // Channel escalation
   is_channel_escalation?: boolean;
+  // Client campaign flag
+  is_client_campaign?: boolean;
 }
 
 // --- Edit Feedback / Reflection ---

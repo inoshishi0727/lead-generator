@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { EditReflectionBanner } from "@/components/edit-reflection-banner";
+import { ScrapeRunningBanner, PipelineActivity } from "@/components/pipeline-activity";
 import { useImportQueries, type SearchQueries } from "@/hooks/use-search-queries";
 import { toast } from "sonner";
 import type { Lead } from "@/lib/types";
@@ -154,6 +155,9 @@ export default function DashboardPage() {
         </div>
       </div>
 
+      {/* Live scrape running banner */}
+      <ScrapeRunningBanner />
+
       {/* Edit reflection banner */}
       <EditReflectionBanner />
 
@@ -256,6 +260,9 @@ export default function DashboardPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Pipeline Activity */}
+      <PipelineActivity />
 
       {/* Outreach Plan */}
       <OutreachPlan

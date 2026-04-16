@@ -410,17 +410,8 @@ export function MessageCard({ message, inConversation }: Props) {
                 )}
               </p>
             )}
-            {!message.menu_url && message.menu_fit && (
-              <p>
-                Menu fit:{" "}
-                <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
-                  message.menu_fit === "strong" ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300" :
-                  message.menu_fit === "moderate" ? "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-300" :
-                  "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"
-                }`}>
-                  {message.menu_fit} fit
-                </span>
-              </p>
+            {!message.menu_url && (
+              <p className="text-muted-foreground/60 text-sm">Menu: link not found</p>
             )}
             {message.contact_name && (
               <p>
