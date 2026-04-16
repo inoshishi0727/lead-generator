@@ -24,6 +24,7 @@ import {
   useBatchApprove,
   useSendApproved,
   useGenerateFollowups,
+  useApprovedEmailCount,
 } from "@/hooks/use-outreach";
 import { getOutreachMessages } from "@/lib/firestore-api";
 import { EditReflectionBanner } from "@/components/edit-reflection-banner";
@@ -135,6 +136,9 @@ export default function OutreachPage() {
         m.content?.toLowerCase().includes(q)
     );
   }, [filteredByCategory, searchQuery]);
+  const { data: approvedEmailCount = 0 } = useApprovedEmailCount();
+  const emailCapReached = approvedEmailCount >= 20;
+
   const draftCount = allMessages.filter((m) => m.status === "draft").length;
   const approvedCount = allMessages.filter((m) => m.status === "approved").length;
   const sentCount = allMessages.filter((m) => m.status === "sent").length;
@@ -202,7 +206,7 @@ export default function OutreachPage() {
               variant="outline"
               className="border-emerald-500 text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/20"
               onClick={handleApproveAll}
-              disabled={batchApproveMutation.isPending}
+              disabled={batchApproveMutation.isPending || emailCapReached}
             >
               <CheckCheck className="mr-1.5 h-4 w-4" />
               Approve All ({draftCount})
@@ -225,6 +229,16 @@ export default function OutreachPage() {
           )}
         </div>
       </div>
+
+      {/* Approved email cap warning */}
+      {emailCapReached && statusFilter !== "sent" && (
+        <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/20 dark:text-amber-400">
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          <span>
+            20 emails are already approved and queued. Unapprove or reject some before approving more.
+          </span>
+        </div>
+      )}
 
       {/* Send window warning */}
       {showSendWarning && (
@@ -410,7 +424,7 @@ export default function OutreachPage() {
         ) : (
           <div className="space-y-4">
             {allMessages.map((msg) => (
-              <MessageCard key={msg.id} message={msg} />
+              <MessageCard key={msg.id} message={msg} emailCapReached={emailCapReached} />
             ))}
           </div>
         )}
