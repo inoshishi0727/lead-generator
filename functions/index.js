@@ -205,24 +205,48 @@ You emailed them a few days ago but haven't heard back. This is a short, casual 
 - No formal sign-off needed. Conversational tone.`;
 
 // ---- Prompt Rules Cache ----
-const RULES_CACHE_TTL_MS = 5 * 60 * 1000;
+
+const RULES_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 let _rulesCache = { rules_md: "", fetched_at: 0 };
+
+/**
+ * Fetch the active prompt rules from Firestore.
+ * Follows the pointer pattern: prompt_config/email_rules -> versions/{version_id}
+ */
 async function getPromptRules() {
-  const now = Date.now();
-  if (_rulesCache.rules_md && now - _rulesCache.fetched_at < RULES_CACHE_TTL_MS) {
+  // Return cached rules if still fresh
+  if (Date.now() - _rulesCache.fetched_at < RULES_CACHE_TTL_MS) {
     return _rulesCache.rules_md;
   }
+
   try {
-    const snap = await db.collection("prompt_config").doc("email_rules").get();
-    if (!snap.exists) return "";
-    const data = snap.data();
-    const activeId = data.active_version;
-    if (!activeId || !data.versions?.[activeId]) return "";
-    const rules = data.versions[activeId].rules_md || "";
-    _rulesCache = { rules_md: rules, fetched_at: now };
-    return rules;
-  } catch (e) {
-    console.warn("getPromptRules: failed to fetch, skipping rules", e.message);
+    // Read pointer doc to find active version
+    const pointerSnap = await db.collection("prompt_config").doc("email_rules").get();
+    if (!pointerSnap.exists) {
+      _rulesCache = { rules_md: "", fetched_at: Date.now() };
+      return "";
+    }
+
+    const { active_version_id } = pointerSnap.data();
+    if (!active_version_id) {
+      _rulesCache = { rules_md: "", fetched_at: Date.now() };
+      return "";
+    }
+
+    // Read active version doc
+    const versionSnap = await db
+      .collection("prompt_config")
+      .doc("email_rules")
+      .collection("versions")
+      .doc(active_version_id)
+      .get();
+
+    const rules_md = versionSnap.exists ? (versionSnap.data().rules_md || "") : "";
+    _rulesCache = { rules_md, fetched_at: Date.now() };
+    return rules_md;
+  } catch (err) {
+    console.warn("Failed to fetch prompt rules:", err.message);
+    _rulesCache = { rules_md: "", fetched_at: Date.now() };
     return "";
   }
 }
@@ -3561,14 +3585,14 @@ Write a client retention email for this stockist based on the campaign brief abo
 
 /**
  * Generate prompt rules from weekly feedback.
- * Scheduled: Monday 6am London time.
+ * Scheduled: Monday 6am UTC (London time with DST)
  * Reads recent edit_feedback records, synthesizes durable rules via Claude, stores versioned.
  */
 export const generatePromptRules = functions
   .runWith({ timeoutSeconds: 300, memory: "512MB", secrets: ["ANTHROPIC_API_KEY"] })
   .pubsub.schedule("0 6 * * 1")
   .timeZone("Europe/London")
-  .onRun(async () => {
+  .onRun(async (context) => {
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) {
       console.error("ANTHROPIC_API_KEY not configured");
@@ -3608,9 +3632,14 @@ export const generatePromptRules = functions
         return null;
       }
 
+      // Build meta-prompt to synthesize rules
       let feedbackText = "# Edit Feedback Summary (Last 28 Days)\n\n";
+      const categories = {};
       for (const fb of feedbacks) {
         const venueCat = fb.venue_category || "unknown";
+        if (!categories[venueCat]) categories[venueCat] = [];
+        categories[venueCat].push(fb);
+
         feedbackText += `## ${venueCat}\n`;
         if (fb.original_subject && fb.edited_subject && fb.original_subject !== fb.edited_subject) {
           feedbackText += `**Subject change**: "${fb.original_subject}" → "${fb.edited_subject}"\n`;
@@ -3660,7 +3689,9 @@ Return ONLY the bullet-point rules as markdown, no preamble or explanation.`;
         version_id: versionId,
       });
 
-      await db.collection("prompt_config").doc("email_rules").set(
+      // Update pointer doc (make this the active version)
+      const pointerRef = db.collection("prompt_config").doc("email_rules");
+      await pointerRef.set(
         {
           active_version_id: versionId,
           generated_at: new Date().toISOString(),
@@ -3681,8 +3712,8 @@ Return ONLY the bullet-point rules as markdown, no preamble or explanation.`;
   });
 
 /**
- * Switch the active prompt rule version. Admin only.
- * Called from frontend: setActivePromptVersion({ version_id })
+ * Switch the active prompt rule version.
+ * Callable: admin only
  */
 export const setActivePromptVersion = functions
   .runWith({ timeoutSeconds: 30, memory: "256MB" })
@@ -3691,6 +3722,7 @@ export const setActivePromptVersion = functions
       throw new HttpsError("unauthenticated", "Must be signed in");
     }
 
+    // Check admin role
     const userSnap = await db.collection("users").doc(context.auth.uid).get();
     if (!userSnap.exists || userSnap.data().role !== "admin") {
       throw new HttpsError("permission-denied", "Admin access required");
@@ -3701,6 +3733,7 @@ export const setActivePromptVersion = functions
       throw new HttpsError("invalid-argument", "version_id (string) required");
     }
 
+    // Verify the version exists
     const versionSnap = await db
       .collection("prompt_config")
       .doc("email_rules")
@@ -3712,6 +3745,7 @@ export const setActivePromptVersion = functions
       throw new HttpsError("not-found", `Version ${version_id} not found`);
     }
 
+    // Update pointer
     await db.collection("prompt_config").doc("email_rules").update({
       active_version_id: version_id,
       updated_at: new Date().toISOString(),
