@@ -1812,6 +1812,152 @@ function extractLeadIdFromTo(toAddresses) {
   return null;
 }
 
+/**
+ * Separate inbound endpoint for lead ingestion via email.
+ * Email leads@replies.asterleybros.com with Subject = business name, Body = website URL.
+ * Creates a lead with source: "email_ingestion", stage: "scraped".
+ */
+export const processLeadIngestion = functions
+  .runWith({ timeoutSeconds: 30, memory: "256MB", secrets: ["RESEND_API_KEY"] })
+  .https.onRequest(async (req, res) => {
+    if (req.method !== "POST") {
+      res.status(405).send("Method not allowed");
+      return;
+    }
+
+    try {
+      const payload = req.body;
+      const eventData = payload.data || payload;
+      const resendEmailId = eventData.email_id || eventData.id || null;
+
+      // Idempotency check
+      if (resendEmailId) {
+        const existing = await db.collection("webhook_events").doc(resendEmailId).get();
+        if (existing.exists) {
+          console.log("Duplicate lead ingestion webhook skipped:", resendEmailId);
+          res.status(200).json({ status: "skipped", reason: "duplicate" });
+          return;
+        }
+      }
+
+      // Fetch full email content via Resend Receiving API
+      let fullEmail = {};
+      if (process.env.RESEND_API_KEY && resendEmailId) {
+        try {
+          const emailRes = await fetch(`https://api.resend.com/emails/receiving/${resendEmailId}`, {
+            headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}` },
+          });
+          if (emailRes.ok) {
+            fullEmail = await emailRes.json();
+          }
+        } catch (err) {
+          console.warn("Failed to fetch email body:", err.message);
+        }
+      }
+
+      const fromEmail = (eventData.from?.email || eventData.from || "").toLowerCase().trim();
+      const fromName = eventData.from?.name || fullEmail.from?.name || null;
+      const subject = eventData.subject || "";
+      const textBody = fullEmail.text || eventData.text || "";
+      const htmlBody = fullEmail.html || eventData.html || "";
+
+      // Parse business name from subject (strip Re:/Fwd: prefixes)
+      const businessName = subject.replace(/^(re|fwd?):\s*/i, "").trim() || "Unknown";
+
+      // Extract first URL from body
+      const urlMatch = (textBody || htmlBody).match(/https?:\/\/[^\s"<>]+/);
+      const website = urlMatch ? urlMatch[0].replace(/[.,;)]+$/, "") : null;
+
+      // Check for Google Maps URL
+      const isMapsUrl = website && /maps\.google|google\.com\/maps|goo\.gl\/maps/i.test(website);
+
+      // Duplicate lead check — skip if a lead with the same business name already exists
+      const dupeSnap = await db.collection("leads")
+        .where("business_name", "==", businessName)
+        .limit(1)
+        .get();
+      if (!dupeSnap.empty) {
+        console.log("Lead already exists, skipping:", businessName);
+        if (resendEmailId) {
+          await db.collection("webhook_events").doc(resendEmailId).set({
+            event_type: "lead_ingestion",
+            resend_email_id: resendEmailId,
+            processed_at: new Date().toISOString(),
+            status: "skipped",
+            reason: "duplicate_lead",
+          });
+        }
+        res.status(200).json({ status: "skipped", reason: "duplicate_lead", business_name: businessName });
+        return;
+      }
+
+      const leadId = crypto.randomUUID();
+      const now = new Date().toISOString();
+
+      await db.collection("leads").doc(leadId).set({
+        id: leadId,
+        business_name: businessName,
+        website: isMapsUrl ? null : website,
+        google_maps_url: isMapsUrl ? website : null,
+        source: "email_ingestion",
+        stage: "scraped",
+        added_by_email: fromEmail,
+        added_by_name: fromName,
+        scraped_at: now,
+        email: null,
+        phone: null,
+        address: null,
+        score: null,
+        enrichment_status: null,
+      });
+
+      // Send confirmation reply
+      if (process.env.RESEND_API_KEY) {
+        try {
+          await fetch("https://api.resend.com/emails", {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              from: "Asterley Leads <leads@replies.asterleybros.com>",
+              to: fromEmail,
+              subject: `Lead added: ${businessName}`,
+              text: `Got it — "${businessName}" has been added to the leads pipeline.${website ? `\n\nWebsite: ${website}` : ""}\n\nYou can view it at https://asterleyleadgen.netlify.app/leads`,
+            }),
+          });
+        } catch (err) {
+          console.warn("Lead ingestion confirmation email failed:", err.message);
+        }
+      }
+
+      if (resendEmailId) {
+        await db.collection("webhook_events").doc(resendEmailId).set({
+          event_type: "lead_ingestion",
+          resend_email_id: resendEmailId,
+          processed_at: now,
+          status: "processed",
+          lead_id: leadId,
+        });
+      }
+
+      await db.collection("activity_log").add({
+        type: "lead_ingested_via_email",
+        lead_id: leadId,
+        business_name: businessName,
+        from_email: fromEmail,
+        created_at: now,
+      });
+
+      console.log("Lead ingested via email:", { leadId, businessName, website, fromEmail });
+      res.status(200).json({ status: "ok", lead_id: leadId, business_name: businessName });
+    } catch (err) {
+      console.error("processLeadIngestion error:", err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
 export const processInboundEmail = functions
   .runWith({ timeoutSeconds: 30, memory: "256MB", secrets: ["RESEND_API_KEY", "GEMINI_API_KEY"] })
   .https.onRequest(async (req, res) => {
@@ -1883,86 +2029,6 @@ export const processInboundEmail = functions
       const textBody = fullEmail.text || eventData.text || "";
       const htmlBody = fullEmail.html || eventData.html || "";
       const toAddresses = eventData.to || [];
-      const toList = (Array.isArray(toAddresses) ? toAddresses : [toAddresses])
-        .map((a) => (typeof a === "string" ? a : a?.email || "").toLowerCase());
-
-      // ---- Lead ingestion: email sent to leads@replies.asterleybros.com ----
-      const isLeadIngestion = toList.some((a) => a.startsWith("leads@"));
-      if (isLeadIngestion) {
-        // Parse business name from subject (strip Re:/Fwd: prefixes)
-        const businessName = subject.replace(/^(re|fwd?):\s*/i, "").trim() || "Unknown";
-
-        // Extract first URL from body
-        const urlMatch = (textBody || htmlBody).match(/https?:\/\/[^\s"<>]+/);
-        const website = urlMatch ? urlMatch[0].replace(/[.,;)]+$/, "") : null;
-
-        // Check for Google Maps URL
-        const isMapsUrl = website && /maps\.google|google\.com\/maps|goo\.gl\/maps/i.test(website);
-
-        const leadId = crypto.randomUUID();
-        const now = new Date().toISOString();
-
-        await db.collection("leads").doc(leadId).set({
-          id: leadId,
-          business_name: businessName,
-          website: isMapsUrl ? null : website,
-          google_maps_url: isMapsUrl ? website : null,
-          source: "email_ingestion",
-          stage: "scraped",
-          added_by_email: fromEmail,
-          added_by_name: fromName,
-          scraped_at: now,
-          email: null,
-          phone: null,
-          address: null,
-          score: null,
-          enrichment_status: null,
-        });
-
-        // Send confirmation reply
-        if (process.env.RESEND_API_KEY) {
-          try {
-            await fetch("https://api.resend.com/emails", {
-              method: "POST",
-              headers: {
-                Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify({
-                from: "Asterley Leads <leads@replies.asterleybros.com>",
-                to: fromEmail,
-                subject: `Lead added: ${businessName}`,
-                text: `Got it — "${businessName}" has been added to the leads pipeline.${website ? `\n\nWebsite: ${website}` : ""}\n\nYou can view it at https://asterleyleadgen.netlify.app/leads`,
-              }),
-            });
-          } catch (err) {
-            console.warn("Lead ingestion confirmation email failed:", err.message);
-          }
-        }
-
-        if (resendEmailId) {
-          await db.collection("webhook_events").doc(resendEmailId).set({
-            event_type: "lead_ingestion",
-            resend_email_id: resendEmailId,
-            processed_at: now,
-            status: "processed",
-            lead_id: leadId,
-          });
-        }
-
-        await db.collection("activity_log").add({
-          type: "lead_ingested_via_email",
-          lead_id: leadId,
-          business_name: businessName,
-          from_email: fromEmail,
-          created_at: now,
-        });
-
-        console.log("Lead ingested via email:", { leadId, businessName, website, fromEmail });
-        res.status(200).json({ status: "ok", type: "lead_ingestion", lead_id: leadId });
-        return;
-      }
-
       // Extract lead_id from the plus-addressed reply-to
       const leadIdFromAddress = extractLeadIdFromTo(
         Array.isArray(toAddresses) ? toAddresses : [toAddresses]
