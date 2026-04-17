@@ -11,10 +11,13 @@ import {
   Sparkles,
   RefreshCw,
   Eye,
+  Pencil,
+  Check,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useEnrichLeads } from "@/hooks/use-leads";
+import { updateLeadFields } from "@/lib/firestore-api";
 import type { Lead } from "@/lib/types";
 
 interface Props {
@@ -44,6 +47,20 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 export function LeadDetailDialog({ lead, onClose }: Props) {
   const enrichMutation = useEnrichLeads();
   const [enrichDone, setEnrichDone] = useState(false);
+  const [editingMenuUrl, setEditingMenuUrl] = useState(false);
+  const [menuUrlDraft, setMenuUrlDraft] = useState("");
+  const [savingMenuUrl, setSavingMenuUrl] = useState(false);
+
+  async function handleSaveMenuUrl() {
+    if (!lead) return;
+    setSavingMenuUrl(true);
+    try {
+      await updateLeadFields(lead.id, { menu_url: menuUrlDraft.trim() || null });
+      setEditingMenuUrl(false);
+    } finally {
+      setSavingMenuUrl(false);
+    }
+  }
 
   useEffect(() => {
     function handleKey(e: KeyboardEvent) {
@@ -217,15 +234,62 @@ export function LeadDetailDialog({ lead, onClose }: Props) {
               </span>
             )}
           </Row>
-          {lead.menu_url && (
-            <Row label="Menu">
-              <a href={lead.menu_url} target="_blank" rel="noopener noreferrer"
-                className="text-emerald-400 hover:underline flex items-center gap-1">
-                <Globe className="h-3 w-3" />
-                {lead.menu_url.replace(/^https?:\/\/(www\.)?/, "").slice(0, 45)}
-              </a>
-            </Row>
-          )}
+          <div className="flex items-start gap-3 text-sm">
+            <span className="w-28 shrink-0 text-[11px] font-medium uppercase tracking-wider text-muted-foreground pt-0.5">
+              Menu
+            </span>
+            <span className="flex-1">
+              {editingMenuUrl ? (
+                <span className="flex items-center gap-1.5">
+                  <input
+                    autoFocus
+                    type="url"
+                    value={menuUrlDraft}
+                    onChange={(e) => setMenuUrlDraft(e.target.value)}
+                    placeholder="https://example.com/menu"
+                    className="flex-1 min-w-0 rounded border border-input bg-background px-2 py-0.5 text-sm"
+                    onKeyDown={(e) => { if (e.key === "Enter") handleSaveMenuUrl(); if (e.key === "Escape") setEditingMenuUrl(false); }}
+                  />
+                  <button
+                    onClick={handleSaveMenuUrl}
+                    disabled={savingMenuUrl}
+                    className="text-emerald-400 hover:text-emerald-300 transition-colors"
+                  >
+                    <Check className="h-3.5 w-3.5" />
+                  </button>
+                  <button onClick={() => setEditingMenuUrl(false)} className="text-muted-foreground hover:text-foreground transition-colors">
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </span>
+              ) : lead.menu_url && lead.menu_url !== "not_found" ? (
+                <span className="flex items-center gap-1.5">
+                  <a href={lead.menu_url} target="_blank" rel="noopener noreferrer"
+                    className="text-emerald-400 hover:underline flex items-center gap-1">
+                    <Globe className="h-3 w-3" />
+                    {lead.menu_url.replace(/^https?:\/\/(www\.)?/, "").slice(0, 40)}
+                  </a>
+                  <button
+                    onClick={() => { setMenuUrlDraft(lead.menu_url ?? ""); setEditingMenuUrl(true); }}
+                    className="text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    <Pencil className="h-3 w-3" />
+                  </button>
+                </span>
+              ) : (
+                <span className="flex items-center gap-1.5">
+                  <span className="text-muted-foreground text-sm">
+                    {lead.menu_url === "not_found" ? "Link not found" : "Not set"}
+                  </span>
+                  <button
+                    onClick={() => { setMenuUrlDraft(""); setEditingMenuUrl(true); }}
+                    className="text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    <Pencil className="h-3 w-3" />
+                  </button>
+                </span>
+              )}
+            </span>
+          </div>
           {lead.last_opened_at && (
             <Row label="Email opened">
               <span className="flex items-center gap-1.5 text-sky-400">

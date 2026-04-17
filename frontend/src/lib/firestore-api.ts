@@ -14,6 +14,7 @@ import {
   updateDoc,
   addDoc,
   deleteDoc,
+  onSnapshot,
 } from "firebase/firestore";
 import { db } from "./firebase";
 import type { Lead, LeadDetail, OutreachMessage, InboundReply, EditFeedback, ReflectionCategory } from "./types";
@@ -236,6 +237,7 @@ export async function getOutreachMessages(filters?: {
       delivered_at: data.delivered_at || null,
       parent_email_message_id: data.parent_email_message_id || null,
       is_channel_escalation: data.is_channel_escalation || false,
+      is_client_campaign: data.is_client_campaign || false,
       assigned_to: data.assigned_to || null,
     };
   });
@@ -322,7 +324,8 @@ export async function updateOutreachMessage(
     } else if (reason === "current_account") {
       await updateDoc(leadRef, {
         client_status: "current_account",
-        stage: "declined",
+        stage: "client",
+        rejection_reason: null,
       });
     } else if (reason === "in_discussion") {
       const snoozeUntil = new Date();
@@ -501,6 +504,65 @@ export async function getScrapeRuns(max = 10): Promise<ScrapeRunRecord[]> {
   const q = query(ref, orderBy("started_at", "desc"), fbLimit(max));
   const snap = await getDocs(q);
   return snap.docs.map((d) => d.data() as ScrapeRunRecord);
+}
+
+/** Real-time listener for the most recent scrape run (manual or scheduled). */
+export function watchLatestScrapeRun(
+  callback: (run: ScrapeRunRecord | null) => void
+): () => void {
+  const ref = collection(db, "scrape_runs");
+  const q = query(ref, orderBy("started_at", "desc"), fbLimit(1));
+  return onSnapshot(q, (snap) => {
+    callback(snap.empty ? null : (snap.docs[0].data() as ScrapeRunRecord));
+  });
+}
+
+// --- Pipeline Jobs ---
+
+export interface PipelineJobRecord {
+  id: string;
+  type: string;
+  status: "running" | "completed" | "failed" | "skipped";
+  started_at: string;
+  completed_at: string | null;
+  result: Record<string, number | string> | null;
+}
+
+export async function getPipelineActivity(max = 10): Promise<PipelineJobRecord[]> {
+  const ref = collection(db, "pipeline_jobs");
+  const q = query(ref, orderBy("started_at", "desc"), fbLimit(max));
+  const snap = await getDocs(q);
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() }) as PipelineJobRecord);
+}
+
+/** Real-time listener — fires whenever a pipeline job changes (e.g. running → completed). */
+export function watchPipelineActivity(
+  callback: (jobs: PipelineJobRecord[]) => void,
+  max = 10
+): () => void {
+  const ref = collection(db, "pipeline_jobs");
+  const q = query(ref, orderBy("started_at", "desc"), fbLimit(max));
+  return onSnapshot(q, (snap) => {
+    callback(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as PipelineJobRecord));
+  });
+}
+
+// --- Clients (current_account + converted) ---
+
+export async function getClients(): Promise<Lead[]> {
+  const [clientLeads, convertedLeads] = await Promise.all([
+    getLeads({ stage: "client" }),
+    getLeads({ stage: "converted" }),
+  ]);
+  const seen = new Set<string>();
+  const merged: Lead[] = [];
+  for (const l of [...clientLeads, ...convertedLeads]) {
+    if (!seen.has(l.id)) {
+      seen.add(l.id);
+      merged.push(l);
+    }
+  }
+  return merged.sort((a, b) => a.business_name.localeCompare(b.business_name));
 }
 
 export async function restoreOriginalEmail(messageId: string): Promise<void> {

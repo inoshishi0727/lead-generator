@@ -108,15 +108,85 @@ function parseGeminiResponse(raw: string): Record<string, any> | null {
   return null;
 }
 
-async function fetchWebsiteText(url: string): Promise<string | null> {
+function extractMenuUrlFromHtml(html: string, baseUrl: string): string | null {
+  const hrefRegex = /<a[^>]+href=["']([^"'#][^"']*?)["'][^>]*>/gi;
+  const links: string[] = [];
+  let m;
+  while ((m = hrefRegex.exec(html)) !== null) {
+    links.push(m[1]);
+  }
+
+  let base: URL;
+  try { base = new URL(baseUrl); } catch { return null; }
+
+  const absolute = links
+    .map((l) => { try { return new URL(l, base).href; } catch { return null; } })
+    .filter((l): l is string => !!l && l.startsWith("http"));
+
+  // Priority 1: PDF with menu/drinks keyword
+  const pdfMenu = absolute.find((l) =>
+    /\.pdf$/i.test(l) && /menu|drink|wine|cocktail|food|beverage/i.test(l)
+  );
+  if (pdfMenu) return pdfMenu;
+
+  // Priority 2: Any PDF (WordPress uploads, etc.)
+  const anyPdf = absolute.find((l) => /\.pdf$/i.test(l));
+  if (anyPdf) return anyPdf;
+
+  // Priority 3: Page whose path contains menu/drinks/wine-list
+  const menuPage = absolute.find((l) => {
+    try {
+      const path = new URL(l).pathname.toLowerCase();
+      return /\/(menu|drinks|wine-?list|cocktails|food-drink)\b/.test(path);
+    } catch { return false; }
+  });
+  if (menuPage) return menuPage;
+
+  return null;
+}
+
+async function fetchHtml(url: string, timeoutMs = 8000): Promise<string | null> {
   try {
-    const cleanUrl = url.startsWith("http") ? url : `https://${url}`;
-    const res = await fetch(cleanUrl, {
+    const res = await fetch(url, {
       headers: { "User-Agent": "Mozilla/5.0 (compatible; AsterleyBot/1.0)" },
-      signal: AbortSignal.timeout(10000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     if (!res.ok) return null;
-    const html = await res.text();
+    return await res.text();
+  } catch {
+    return null;
+  }
+}
+
+async function findMenuUrl(websiteUrl: string): Promise<string | null> {
+  const cleanUrl = websiteUrl.startsWith("http") ? websiteUrl : `https://${websiteUrl}`;
+  let base: URL;
+  try { base = new URL(cleanUrl); } catch { return null; }
+  const origin = base.origin;
+
+  const homepageHtml = await fetchHtml(cleanUrl);
+  if (homepageHtml) {
+    const found = extractMenuUrlFromHtml(homepageHtml, cleanUrl);
+    if (found) return found;
+  }
+
+  for (const path of ["/menu", "/drinks", "/food-drink", "/wine-list", "/cocktails"]) {
+    const html = await fetchHtml(`${origin}${path}`, 5000);
+    if (html) {
+      const found = extractMenuUrlFromHtml(html, `${origin}${path}`);
+      if (found) return found;
+    }
+  }
+
+  return null;
+}
+
+async function fetchWebsiteContent(url: string): Promise<{ text: string; menuUrl: string | null } | null> {
+  try {
+    const cleanUrl = url.startsWith("http") ? url : `https://${url}`;
+    const html = await fetchHtml(cleanUrl, 10000);
+    if (!html) return null;
+    const menuUrl = extractMenuUrlFromHtml(html, cleanUrl);
     // Strip HTML tags, scripts, styles
     const text = html
       .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
@@ -124,7 +194,7 @@ async function fetchWebsiteText(url: string): Promise<string | null> {
       .replace(/<[^>]+>/g, " ")
       .replace(/\s+/g, " ")
       .trim();
-    return text.slice(0, MAX_INPUT_CHARS);
+    return { text: text.slice(0, MAX_INPUT_CHARS), menuUrl };
   } catch {
     return null;
   }
@@ -174,8 +244,8 @@ export async function POST(req: NextRequest) {
 
     for (const lead of toProcess) {
       try {
-        const websiteText = await fetchWebsiteText((lead as any).website);
-        if (!websiteText) {
+        const websiteContent = await fetchWebsiteContent((lead as any).website);
+        if (!websiteContent) {
           console.log("No website content for", (lead as any).business_name);
           await adminDb.collection("leads").doc(lead.id).update({
             "enrichment.enrichment_status": "failed",
@@ -184,6 +254,12 @@ export async function POST(req: NextRequest) {
           failed++;
           continue;
         }
+
+        const { text: websiteText } = websiteContent;
+
+        // Deep menu URL scan: homepage already fetched above, also checks sub-pages
+        const extractedMenuUrl = websiteContent.menuUrl
+          ?? await findMenuUrl((lead as any).website);
 
         const prompt = ANALYSIS_PROMPT
           .replace("{business_name}", (lead as any).business_name || "")
@@ -240,7 +316,12 @@ export async function POST(req: NextRequest) {
           };
         }
 
-        await adminDb.collection("leads").doc(lead.id).update({ enrichment });
+        const leadUpdate: Record<string, any> = { enrichment };
+        // Write menu_url if the lead doesn't already have a real one
+        if (!(lead as any).menu_url || (lead as any).menu_url === "not_found") {
+          leadUpdate.menu_url = extractedMenuUrl ?? "not_found";
+        }
+        await adminDb.collection("leads").doc(lead.id).update(leadUpdate);
         enriched++;
         console.log("Enriched:", (lead as any).business_name, "->", venueCat);
       } catch (err: any) {
