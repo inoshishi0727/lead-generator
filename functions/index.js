@@ -1889,24 +1889,90 @@ If nothing useful found, return [].`,
     ...binaryParts,
   ];
 
-  try {
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: [{ role: "user", parts }],
-      config: { maxOutputTokens: 1024, temperature: 0.1 },
-    });
+  const MAX_RETRIES = 3;
+  const RETRY_DELAYS = [2000, 5000, 10000];
 
-    let text = (response.text || "").replace(/```json\s*/g, "").replace(/```/g, "").trim();
-    const start = text.indexOf("[");
-    const end = text.lastIndexOf("]");
-    if (start >= 0 && end > start) {
-      const parsed = JSON.parse(text.slice(start, end + 1));
-      if (Array.isArray(parsed)) return parsed;
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const response = await ai.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: [{ role: "user", parts }],
+        config: { maxOutputTokens: 1024, temperature: 0.1 },
+      });
+
+      let text = (response.text || "").replace(/```json\s*/g, "").replace(/```/g, "").trim();
+      const start = text.indexOf("[");
+      const end = text.lastIndexOf("]");
+      if (start >= 0 && end > start) {
+        const parsed = JSON.parse(text.slice(start, end + 1));
+        if (Array.isArray(parsed)) return parsed;
+      }
+      return [];
+    } catch (err) {
+      const is429 = err.message?.includes("429") || err.message?.includes("quota") || err.message?.includes("high demand");
+      console.warn(`Gemini lead parsing failed (attempt ${attempt}/${MAX_RETRIES}):`, err.message);
+
+      if (is429 && attempt < MAX_RETRIES) {
+        console.log(`Retrying in ${RETRY_DELAYS[attempt - 1]}ms...`);
+        await new Promise((r) => setTimeout(r, RETRY_DELAYS[attempt - 1]));
+        continue;
+      }
+
+      // All retries exhausted or non-429 error — fall back to regex extraction
+      console.warn("Falling back to regex extraction");
+      return fallbackParseLeads(subject, textBody);
     }
-  } catch (err) {
-    console.warn("Gemini lead parsing failed:", err.message);
   }
-  return [];
+
+  return fallbackParseLeads(subject, textBody);
+}
+
+/**
+ * Regex fallback when Gemini is unavailable.
+ * Extracts URLs and uses subject or domain as business name.
+ */
+function fallbackParseLeads(subject, textBody) {
+  const leads = [];
+  const text = textBody || "";
+
+  // Extract all URLs
+  const urls = [...text.matchAll(/https?:\/\/[^\s"<>]+/g)].map((m) =>
+    m[0].replace(/[.,;)]+$/, "")
+  );
+
+  if (urls.length === 0 && !subject) return [];
+
+  if (urls.length > 0) {
+    for (const url of urls) {
+      const isMapsUrl = /maps\.google|google\.com\/maps|goo\.gl\/maps/i.test(url);
+      const domain = url.match(/https?:\/\/(?:www\.)?([^/?#]+)/)?.[1] || "";
+      const nameFromDomain = domain.split(".")[0].replace(/-/g, " ");
+      const businessName = subject?.replace(/^(re|fwd?):\s*/i, "").trim() || nameFromDomain || domain;
+
+      leads.push({
+        business_name: businessName,
+        website: isMapsUrl ? null : url,
+        google_maps_url: isMapsUrl ? url : null,
+        phone: null,
+        address: null,
+        notes: "Parsed via fallback (Gemini unavailable)",
+      });
+
+      // Only use subject as name for the first URL
+      if (subject) break;
+    }
+  } else if (subject) {
+    leads.push({
+      business_name: subject.replace(/^(re|fwd?):\s*/i, "").trim(),
+      website: null,
+      google_maps_url: null,
+      phone: null,
+      address: null,
+      notes: "Parsed via fallback (Gemini unavailable)",
+    });
+  }
+
+  return leads;
 }
 
 /**
