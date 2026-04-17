@@ -1364,6 +1364,7 @@ export const sendApproved = functions
           sent_at: now,
           reply_to_address: replyToAddress,
           email_message_id: resendData?.id ?? null,
+          assigned_to_name: lead.assigned_to_name || msg.assigned_to_name || null,
         });
 
         // Set the correct stage based on step number
@@ -1811,6 +1812,350 @@ function extractLeadIdFromTo(toAddresses) {
   return null;
 }
 
+/**
+ * Use Gemini to parse email content (text + attachments) into structured lead data.
+ * Returns an array of leads: [{ business_name, website, phone, address, notes }]
+ */
+async function parseLeadsFromEmail(subject, textBody, _htmlBody, attachments) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) return [];
+
+  const ai = new GoogleGenAI({ apiKey });
+
+  const emailText = [
+    subject ? `Subject: ${subject}` : "",
+    textBody || "",
+  ].filter(Boolean).join("\n\n").slice(0, 4000);
+
+  // Decode text-based attachments (CSV, TSV, TXT) and append to email text
+  const TEXT_MIME = ["text/csv", "text/tab-separated-values", "text/plain", "application/csv"];
+  const BINARY_MIME = ["image/jpeg", "image/png", "image/gif", "image/webp", "application/pdf"];
+  const MAX_BYTES = 10 * 1024 * 1024;
+
+  let attachmentText = "";
+  const binaryParts = [];
+
+  for (const att of attachments || []) {
+    const mime = att.content_type || att.type || "";
+    const filename = att.filename || "";
+    const raw = att.content || att.data || "";
+    const bytes = Buffer.byteLength(raw, "base64");
+
+    if (bytes > MAX_BYTES) {
+      console.warn(`Attachment ${filename} too large (${bytes} bytes), skipping`);
+      continue;
+    }
+
+    // CSV/TSV/TXT — decode and include as text
+    const isTextFile = TEXT_MIME.includes(mime) ||
+      /\.(csv|tsv|txt)$/i.test(filename);
+    if (isTextFile) {
+      const decoded = Buffer.from(raw, "base64").toString("utf-8").slice(0, 8000);
+      attachmentText += `\n\nAttachment (${filename}):\n${decoded}`;
+      console.log(`Decoded text attachment ${filename} (${bytes} bytes)`);
+      continue;
+    }
+
+    // Images + PDFs — pass as inline binary to Gemini
+    if (BINARY_MIME.includes(mime)) {
+      binaryParts.push({ inlineData: { mimeType: mime, data: raw } });
+      console.log(`Attached binary ${filename} (${mime}, ${bytes} bytes) to Gemini prompt`);
+    }
+  }
+
+  const fullContent = emailText + attachmentText;
+
+  const parts = [
+    {
+      text: `You are extracting venue/business lead data from an email sent to a drinks sales team.
+
+Email content:
+${fullContent}
+
+Extract ALL businesses/venues mentioned anywhere in the content — including in attachments, lists, tables, or CSVs. For each, return:
+- business_name (required)
+- website (URL if present, null if not)
+- phone (if present, null if not)
+- address (if present, null if not)
+- notes (any relevant context, null if nothing useful)
+- google_maps_url (if any URL is a Google Maps link, put it here instead of website)
+
+Return ONLY a valid JSON array. Example:
+[{"business_name":"The Copper Kettle","website":"https://copperkettle.co.uk","phone":null,"address":"12 High St, London","notes":null,"google_maps_url":null}]
+
+If the content contains a list or table of venues, extract every single one.
+If nothing useful found, return [].`,
+    },
+    ...binaryParts,
+  ];
+
+  const MAX_RETRIES = 3;
+  const RETRY_DELAYS = [2000, 5000, 10000];
+
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const response = await ai.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: [{ role: "user", parts }],
+        config: { maxOutputTokens: 1024, temperature: 0.1 },
+      });
+
+      let text = (response.text || "").replace(/```json\s*/g, "").replace(/```/g, "").trim();
+      const start = text.indexOf("[");
+      const end = text.lastIndexOf("]");
+      if (start >= 0 && end > start) {
+        const parsed = JSON.parse(text.slice(start, end + 1));
+        if (Array.isArray(parsed)) return parsed;
+      }
+      return [];
+    } catch (err) {
+      const is429 = err.message?.includes("429") || err.message?.includes("quota") || err.message?.includes("high demand");
+      console.warn(`Gemini lead parsing failed (attempt ${attempt}/${MAX_RETRIES}):`, err.message);
+
+      if (is429 && attempt < MAX_RETRIES) {
+        console.log(`Retrying in ${RETRY_DELAYS[attempt - 1]}ms...`);
+        await new Promise((r) => setTimeout(r, RETRY_DELAYS[attempt - 1]));
+        continue;
+      }
+
+      // All retries exhausted or non-429 error — fall back to regex extraction
+      console.warn("Falling back to regex extraction");
+      return fallbackParseLeads(subject, textBody);
+    }
+  }
+
+  return fallbackParseLeads(subject, textBody);
+}
+
+/**
+ * Regex fallback when Gemini is unavailable.
+ * Extracts URLs and uses subject or domain as business name.
+ */
+function fallbackParseLeads(subject, textBody) {
+  const leads = [];
+  const text = textBody || "";
+
+  // Extract all URLs
+  const urls = [...text.matchAll(/https?:\/\/[^\s"<>]+/g)].map((m) =>
+    m[0].replace(/[.,;)]+$/, "")
+  );
+
+  if (urls.length === 0 && !subject) return [];
+
+  if (urls.length > 0) {
+    for (const url of urls) {
+      const isMapsUrl = /maps\.google|google\.com\/maps|goo\.gl\/maps/i.test(url);
+      const domain = url.match(/https?:\/\/(?:www\.)?([^/?#]+)/)?.[1] || "";
+      const nameFromDomain = domain.split(".")[0].replace(/-/g, " ");
+      const businessName = subject?.replace(/^(re|fwd?):\s*/i, "").trim() || nameFromDomain || domain;
+
+      leads.push({
+        business_name: businessName,
+        website: isMapsUrl ? null : url,
+        google_maps_url: isMapsUrl ? url : null,
+        phone: null,
+        address: null,
+        notes: "Parsed via fallback (Gemini unavailable)",
+      });
+
+      // Only use subject as name for the first URL
+      if (subject) break;
+    }
+  } else if (subject) {
+    leads.push({
+      business_name: subject.replace(/^(re|fwd?):\s*/i, "").trim(),
+      website: null,
+      google_maps_url: null,
+      phone: null,
+      address: null,
+      notes: "Parsed via fallback (Gemini unavailable)",
+    });
+  }
+
+  return leads;
+}
+
+/**
+ * Inbound endpoint for lead ingestion via email.
+ * Email leads@replies.asterleybros.com with any content — text, links, images, PDFs.
+ * Gemini parses the content and creates one or more leads automatically.
+ */
+export const processLeadIngestion = functions
+  .runWith({ timeoutSeconds: 60, memory: "512MB", secrets: ["RESEND_API_KEY", "GEMINI_API_KEY"] })
+  .https.onRequest(async (req, res) => {
+    if (req.method !== "POST") {
+      res.status(405).send("Method not allowed");
+      return;
+    }
+
+    try {
+      const payload = req.body;
+      const eventData = payload.data || payload;
+      const resendEmailId = eventData.email_id || eventData.id || null;
+
+      // Idempotency check
+      if (resendEmailId) {
+        const existing = await db.collection("webhook_events").doc(resendEmailId).get();
+        if (existing.exists) {
+          console.log("Duplicate lead ingestion webhook skipped:", resendEmailId);
+          res.status(200).json({ status: "skipped", reason: "duplicate" });
+          return;
+        }
+      }
+
+      // Fetch full email content via Resend Receiving API
+      let fullEmail = {};
+      if (process.env.RESEND_API_KEY && resendEmailId) {
+        const MAX_RETRIES = 3;
+        const RETRY_DELAY_MS = 2000;
+        for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+          try {
+            if (attempt > 1) await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
+            const emailRes = await fetch(`https://api.resend.com/emails/receiving/${resendEmailId}`, {
+              headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}` },
+            });
+            if (!emailRes.ok) {
+              console.warn(`Receiving API returned ${emailRes.status} on attempt ${attempt}`);
+              if (attempt < MAX_RETRIES) continue;
+              break;
+            }
+            const received = await emailRes.json();
+            if (received.text || received.html || (received.attachments || []).length > 0) {
+              fullEmail = received;
+              break;
+            }
+            if (attempt < MAX_RETRIES) continue;
+          } catch (err) {
+            console.warn(`Receiving API error (attempt ${attempt}):`, err.message);
+            if (attempt < MAX_RETRIES) continue;
+          }
+        }
+      }
+
+      const fromEmail = (eventData.from?.email || eventData.from || "").toLowerCase().trim();
+      const fromName = eventData.from?.name || fullEmail.from?.name || null;
+      const subject = eventData.subject || "";
+      const textBody = fullEmail.text || eventData.text || "";
+      const htmlBody = fullEmail.html || eventData.html || "";
+      const attachments = fullEmail.attachments || eventData.attachments || [];
+
+      // Parse leads from email content via Gemini
+      const parsedLeads = await parseLeadsFromEmail(subject, textBody, htmlBody, attachments);
+
+      if (parsedLeads.length === 0) {
+        console.log("No leads extracted from email, skipping");
+        if (resendEmailId) {
+          await db.collection("webhook_events").doc(resendEmailId).set({
+            event_type: "lead_ingestion",
+            resend_email_id: resendEmailId,
+            processed_at: new Date().toISOString(),
+            status: "skipped",
+            reason: "no_leads_extracted",
+          });
+        }
+        res.status(200).json({ status: "skipped", reason: "no_leads_extracted" });
+        return;
+      }
+
+      const now = new Date().toISOString();
+      const createdLeads = [];
+      const skippedLeads = [];
+
+      for (const lead of parsedLeads) {
+        if (!lead.business_name || lead.business_name === "Unknown") continue;
+
+        // Deduplicate by business name
+        const dupeSnap = await db.collection("leads")
+          .where("business_name", "==", lead.business_name)
+          .limit(1)
+          .get();
+        if (!dupeSnap.empty) {
+          console.log("Lead already exists, skipping:", lead.business_name);
+          skippedLeads.push(lead.business_name);
+          continue;
+        }
+
+        const isMapsUrl = lead.website && /maps\.google|google\.com\/maps|goo\.gl\/maps/i.test(lead.website);
+        const leadId = crypto.randomUUID();
+
+        await db.collection("leads").doc(leadId).set({
+          id: leadId,
+          business_name: lead.business_name,
+          website: isMapsUrl ? null : (lead.website || null),
+          google_maps_url: isMapsUrl ? lead.website : (lead.google_maps_url || null),
+          phone: lead.phone || null,
+          address: lead.address || null,
+          notes: lead.notes || null,
+          source: "email_ingestion",
+          stage: "scraped",
+          added_by_email: fromEmail,
+          added_by_name: fromName,
+          scraped_at: now,
+          email: null,
+          score: null,
+          enrichment_status: null,
+        });
+
+        await db.collection("activity_log").add({
+          type: "lead_ingested_via_email",
+          lead_id: leadId,
+          business_name: lead.business_name,
+          from_email: fromEmail,
+          created_at: now,
+        });
+
+        createdLeads.push({ id: leadId, business_name: lead.business_name });
+        console.log("Lead ingested via email:", { leadId, business_name: lead.business_name });
+      }
+
+      // Send confirmation reply
+      if (process.env.RESEND_API_KEY && createdLeads.length > 0) {
+        try {
+          const leadList = createdLeads.map((l) => `• ${l.business_name}`).join("\n");
+          const skipNote = skippedLeads.length > 0
+            ? `\n\nAlready existed (skipped):\n${skippedLeads.map((n) => `• ${n}`).join("\n")}`
+            : "";
+          await fetch("https://api.resend.com/emails", {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              from: "Asterley Leads <leads@leads.asterleybros.com>",
+              to: fromEmail,
+              subject: `${createdLeads.length} lead${createdLeads.length !== 1 ? "s" : ""} added`,
+              text: `Got it — added ${createdLeads.length} lead${createdLeads.length !== 1 ? "s" : ""} to the pipeline:\n\n${leadList}${skipNote}\n\nView them at https://asterleyleadgen.netlify.app/leads`,
+            }),
+          });
+        } catch (err) {
+          console.warn("Lead ingestion confirmation email failed:", err.message);
+        }
+      }
+
+      if (resendEmailId) {
+        await db.collection("webhook_events").doc(resendEmailId).set({
+          event_type: "lead_ingestion",
+          resend_email_id: resendEmailId,
+          processed_at: now,
+          status: "processed",
+          leads_created: createdLeads.map((l) => l.id),
+          leads_skipped: skippedLeads,
+        });
+      }
+
+      res.status(200).json({
+        status: "ok",
+        created: createdLeads.length,
+        skipped: skippedLeads.length,
+        leads: createdLeads,
+      });
+    } catch (err) {
+      console.error("processLeadIngestion error:", err);
+      res.status(200).json({ error: err.message });
+    }
+  });
+
 export const processInboundEmail = functions
   .runWith({ timeoutSeconds: 30, memory: "256MB", secrets: ["RESEND_API_KEY", "GEMINI_API_KEY"] })
   .https.onRequest(async (req, res) => {
@@ -1882,7 +2227,6 @@ export const processInboundEmail = functions
       const textBody = fullEmail.text || eventData.text || "";
       const htmlBody = fullEmail.html || eventData.html || "";
       const toAddresses = eventData.to || [];
-
       // Extract lead_id from the plus-addressed reply-to
       const leadIdFromAddress = extractLeadIdFromTo(
         Array.isArray(toAddresses) ? toAddresses : [toAddresses]
@@ -2620,16 +2964,40 @@ export const scheduledFollowups = functions
   .pubsub.schedule("0 8 * * 1-5")
   .timeZone("Europe/London")
   .onRun(async () => {
-    // Skip blackout days (bank holidays, Dec 24 - Jan 3)
     const now = new Date();
     const london = new Date(now.toLocaleString("en-US", { timeZone: "Europe/London" }));
     if (isBlackoutDay(london)) {
       console.log("Scheduled follow-ups skipped: blackout day");
+      await db.collection("pipeline_jobs").add({
+        type: "scheduled_followups",
+        status: "skipped",
+        started_at: now.toISOString(),
+        completed_at: now.toISOString(),
+        result: { reason: "blackout day" },
+      });
       return null;
     }
 
-    const result = await runFollowUpGeneration();
-    console.log("Scheduled follow-up generation:", JSON.stringify(result));
+    const jobRef = db.collection("pipeline_jobs").doc();
+    await jobRef.set({
+      type: "scheduled_followups",
+      status: "running",
+      started_at: now.toISOString(),
+      completed_at: null,
+      result: null,
+    });
+
+    try {
+      const result = await runFollowUpGeneration();
+      console.log("Scheduled follow-up generation:", JSON.stringify(result));
+      await jobRef.update({
+        status: "completed",
+        completed_at: new Date().toISOString(),
+        result,
+      });
+    } catch (err) {
+      await jobRef.update({ status: "failed", completed_at: new Date().toISOString(), result: { error: err.message } });
+    }
     return null;
   });
 
@@ -2686,8 +3054,18 @@ export const scheduledSendFollowups = functions
       .filter((m) => (m.step_number ?? 1) > 1 && m.scheduled_send_date && m.scheduled_send_date <= todayStr)
       .slice(0, remaining);
 
+    const jobRef = db.collection("pipeline_jobs").doc();
+    await jobRef.set({
+      type: "scheduled_send_followups",
+      status: "running",
+      started_at: new Date().toISOString(),
+      completed_at: null,
+      result: null,
+    });
+
     if (!dueMessages.length) {
       console.log("Scheduled follow-up send: no due messages");
+      await jobRef.update({ status: "completed", completed_at: new Date().toISOString(), result: { sent: 0, failed: 0, reason: "no due messages" } });
       return null;
     }
 
@@ -2835,6 +3213,11 @@ export const scheduledSendFollowups = functions
     }
 
     console.log("Scheduled follow-up send complete:", JSON.stringify({ sent, failed, total: dueMessages.length }));
+    await jobRef.update({
+      status: "completed",
+      completed_at: new Date().toISOString(),
+      result: { sent, failed, total: dueMessages.length },
+    });
     return null;
   });
 
@@ -3186,11 +3569,21 @@ export const scheduledAnalyticsSummary = functions
       return null;
     }
 
+    const jobRef = db.collection("pipeline_jobs").doc();
+    await jobRef.set({
+      type: "scheduled_analytics",
+      status: "running",
+      started_at: new Date().toISOString(),
+      completed_at: null,
+      result: null,
+    });
+
     // 1. Get admin recipient list
     const adminSnap = await db.collection("users").where("role", "==", "admin").get();
     const adminEmails = adminSnap.docs.map(d => d.data().email).filter(Boolean);
     if (!adminEmails.length) {
       console.log("No admin emails found, skipping analytics summary");
+      await jobRef.update({ status: "skipped", completed_at: new Date().toISOString(), result: { reason: "no admin emails" } });
       return null;
     }
 
@@ -3290,7 +3683,166 @@ export const scheduledAnalyticsSummary = functions
     }
 
     console.log(`Analytics summary completed: sent to ${adminEmails.length} admin(s), stats: ${JSON.stringify(stats)}`);
+    await jobRef.update({
+      status: "completed",
+      completed_at: new Date().toISOString(),
+      result: { recipients: adminEmails.length, ...stats },
+    });
     return null;
+  });
+
+// ---- Client System Prompt ----
+
+const CLIENT_SYSTEM_PROMPT = `You are Rob, founder of Asterley Bros, an independent English Vermouth, Amaro, and Aperitivo producer based in SE26, London. You are writing an outreach email to an existing stockist — a current client who already stocks and sells your products.
+
+YOUR VOICE: Warm, personal, direct. Not a newsletter. This reads like a message from a founder to a trusted trade partner.
+- You know this venue. You have a real relationship with them.
+- Use "we" for Asterley Bros, "you" for the venue.
+- Keep the tone collegial, not salesy. This isn't cold outreach.
+- You CAN reference the ongoing relationship: "hope the Dispense is still flying," "great to hear the Negronis are going well."
+
+PRODUCT NAMES, RULES, and VOICE are identical to your cold outreach — same tone, same capitalisation, same do-not-say list.
+
+CAMPAIGN TYPES:
+- seasonal: Highlight a seasonal opportunity (e.g. summer aperitivo, Christmas gift sets) with a relevant product + serve angle.
+- reorder: Check in on stock levels, make it easy for them to reorder. Mention any low-stock risk or popular serves that might need topping up.
+- new_product: Introduce a new or updated product to an existing client first — "wanted you to see this before it goes anywhere else."
+- new_menu: Offer to help them develop a serve or update their menu listing around a particular product.
+- event: Propose a collaboration, tasting event, or feature they could run with Asterley products.
+
+EMAIL STRUCTURE:
+1. GREETING (use first name if known, otherwise "Hi team")
+2. BRIEF CHECK-IN (1 sentence — warm acknowledgement of the relationship, no more)
+3. REASON FOR REACHING OUT (2-3 sentences — clear purpose tied to the campaign type and brief provided)
+4. SPECIFIC PRODUCT + SERVE SUGGESTION (1-2 sentences — concrete, relevant to this venue)
+5. CTA (one clear ask — a call, drop-in, or response. Keep it light. "Worth a quick call?" / "Fancy trying it before it goes wider?")
+6. SIGN-OFF: "Cheers," only
+
+WORD COUNT: 90-130 words. Shorter than cold outreach — they know you.
+NO send window rules apply (you can email clients any day).
+
+Output ONLY "Subject:" on the first line, then the full email body. Nothing else.`;
+
+/**
+ * Generate client campaign drafts for selected clients.
+ * Called from frontend: generateClientDrafts({ lead_ids, campaign_type, campaign_brief })
+ */
+export const generateClientDrafts = functions
+  .runWith({ timeoutSeconds: 300, memory: "512MB", secrets: ["ANTHROPIC_API_KEY"] })
+  .https.onCall(async (data, context) => {
+    if (!context.auth) {
+      throw new HttpsError("unauthenticated", "Must be signed in.");
+    }
+
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) {
+      throw new HttpsError("failed-precondition", "ANTHROPIC_API_KEY not configured.");
+    }
+
+    const { lead_ids, campaign_type, campaign_brief } = data;
+    if (!lead_ids || !Array.isArray(lead_ids) || lead_ids.length === 0) {
+      throw new HttpsError("invalid-argument", "lead_ids required.");
+    }
+    if (!campaign_type || !campaign_brief) {
+      throw new HttpsError("invalid-argument", "campaign_type and campaign_brief required.");
+    }
+
+    const anthropic = new Anthropic({ apiKey });
+
+    // Fetch lead docs
+    const promises = lead_ids.map((id) => db.collection("leads").doc(id).get());
+    const snaps = await Promise.all(promises);
+    const docs = snaps.filter((s) => s.exists).map((s) => ({ id: s.id, ...s.data() }));
+
+    let generated = 0;
+    let failed = 0;
+
+    for (const leadDoc of docs) {
+      try {
+        const enrichment = leadDoc.enrichment || {};
+        const contact = enrichment.contact || {};
+        const contactName = leadDoc.contact_name || contact.name || "";
+        const contactConf = leadDoc.contact_confidence || contact.confidence || "uncertain";
+        const greeting = (contactName && (contactConf === "verified" || contactConf === "likely"))
+          ? contactName.split(" ")[0]
+          : "team";
+
+        const venueCat = enrichment.venue_category || leadDoc.category || "bar";
+        const season = getCurrentSeason();
+
+        const prompt = `CLIENT DATA:
+- Name: ${leadDoc.business_name}
+- Category: ${venueCat}
+- Location: ${leadDoc.address || "London"}
+- Greeting to use: Hi ${greeting}
+- Drinks programme: ${enrichment.drinks_programme || "not available"}
+- Context notes: ${enrichment.context_notes || "none"}
+
+CAMPAIGN TYPE: ${campaign_type}
+CAMPAIGN BRIEF: ${campaign_brief}
+
+SEASON: ${season}
+
+Write a client retention email for this stockist based on the campaign brief above. Remember: they are an existing client who stocks our products.`;
+
+        const response = await anthropic.messages.create({
+          model: CLAUDE_MODEL,
+          max_tokens: 512,
+          system: CLIENT_SYSTEM_PROMPT,
+          messages: [{ role: "user", content: prompt }],
+        });
+
+        let content = response.content[0].text || "";
+        let subject = null;
+
+        if (content.includes("Subject:")) {
+          const lines = content.split("\n");
+          for (let i = 0; i < lines.length; i++) {
+            if (lines[i].trim().startsWith("Subject:")) {
+              subject = lines[i].trim().replace("Subject:", "").trim();
+              content = lines.slice(i + 1).join("\n").trim();
+              break;
+            }
+          }
+        }
+
+        const msgId = crypto.randomUUID();
+        await db.collection("outreach_messages").doc(msgId).set({
+          id: msgId,
+          lead_id: leadDoc.id,
+          business_name: leadDoc.business_name,
+          venue_category: enrichment.venue_category || null,
+          channel: "email",
+          subject,
+          content,
+          status: "draft",
+          step_number: 1,
+          follow_up_label: campaign_type,
+          scheduled_send_date: null,
+          created_at: new Date().toISOString(),
+          tone_tier: enrichment.tone_tier || null,
+          lead_products: enrichment.lead_products || [],
+          contact_name: leadDoc.contact_name || contact.name || null,
+          context_notes: enrichment.context_notes || null,
+          menu_fit: enrichment.menu_fit || null,
+          recipient_email: leadDoc.email || leadDoc.contact_email || null,
+          website: leadDoc.website || null,
+          workspace_id: leadDoc.workspace_id || "",
+          assigned_to: leadDoc.assigned_to || null,
+          original_content: content,
+          original_subject: subject,
+          was_edited: false,
+          is_client_campaign: true,
+        });
+
+        generated++;
+      } catch (err) {
+        console.error("Client draft failed for", leadDoc.business_name, err.message);
+        failed++;
+      }
+    }
+
+    return { generated, failed, total: docs.length };
   });
 
 // ---- Prompt Rules Generation ----

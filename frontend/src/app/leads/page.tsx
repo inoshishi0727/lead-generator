@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { LeadsTable } from "@/components/leads-table";
 import { useLeads, useEnrichLeads } from "@/hooks/use-leads";
@@ -12,13 +12,14 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/lib/auth-context";
 import { getTeamMembers } from "@/lib/auth-admin";
-import { Search, Sparkles, Loader2, Plus, Settings2 } from "lucide-react";
+import { Search, Sparkles, Loader2, Plus, Settings2, Link2Off, Mail, X } from "lucide-react";
 
 const SOURCE_OPTIONS = [
   { value: "", label: "All Sources" },
   { value: "google_maps", label: "Google Maps" },
   { value: "instagram", label: "Instagram" },
   { value: "manual", label: "Manual" },
+  { value: "email_ingestion", label: "Via Email" },
 ];
 
 const STAGE_GROUPS = [
@@ -47,6 +48,7 @@ const STAGE_GROUPS = [
     options: [
       { value: "responded", label: "Responded" },
       { value: "converted", label: "Converted" },
+      { value: "client", label: "Client" },
       { value: "declined", label: "Declined" },
     ],
   },
@@ -62,7 +64,10 @@ export default function LeadsPage() {
   const [postcode, setPostcode] = useState("");
   const [assignedToFilter, setAssignedToFilter] = useState("");
   const [emailOnly, setEmailOnly] = useState(true);
+  const [noMenuUrl, setNoMenuUrl] = useState(false);
+  const [menuUrlLoading, setMenuUrlLoading] = useState(false);
   const [showQuickAdd, setShowQuickAdd] = useState(false);
+  const [emailBannerDismissed, setEmailBannerDismissed] = useState(false);
   const [showQueries, setShowQueries] = useState(false);
   const [selectedLeadIds, setSelectedLeadIds] = useState<string[]>([]);
   const enrichMutation = useEnrichLeads();
@@ -80,7 +85,7 @@ export default function LeadsPage() {
 
   // "pending_enrichment" is a virtual stage filtered client-side, not a real Firestore value
   const firestoreStage = stage === "pending_enrichment" ? undefined : stage;
-  const firestoreSource = source === "manual" ? undefined : source;
+  const firestoreSource = (source === "manual" || source === "email_ingestion") ? undefined : source;
 
   // Member auto-scopes to own leads; admin uses client-side filter for unassigned
   const effectiveAssignedTo = isMember
@@ -141,6 +146,7 @@ export default function LeadsPage() {
   const leads = useMemo(() => {
     let filtered = allLeads;
     if (source === "manual") filtered = filtered.filter((l) => l.source === "manual");
+    if (source === "email_ingestion") filtered = filtered.filter((l) => l.source === "email_ingestion");
     if (stage === "pending_enrichment")
       filtered = filtered.filter((l) => l.enrichment_status !== "success");
     if (emailOnly) filtered = filtered.filter((l) => l.email);
@@ -148,14 +154,58 @@ export default function LeadsPage() {
     if (fit) filtered = filtered.filter((l) => l.menu_fit === fit);
     if (postcode) filtered = filtered.filter((l) => getDistrict(l.location_postcode) === postcode);
     if (assignedToFilter === "__unassigned__") filtered = filtered.filter((l) => !l.assigned_to);
+    if (noMenuUrl) filtered = filtered.filter((l) => !l.menu_url || l.menu_url === "not_found");
     return filtered;
-  }, [allLeads, source, stage, emailOnly, category, fit, postcode, assignedToFilter]);
+  }, [allLeads, source, stage, emailOnly, category, fit, postcode, assignedToFilter, noMenuUrl]);
 
   const total = leads.length;
   const totalRaw = allLeads.length;
 
+  const DISMISS_KEY = "email_ingestion_banner_dismissed_at";
+  const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+
+  const newEmailLeads = useMemo(() => {
+    const dismissedAt = typeof window !== "undefined"
+      ? Number(localStorage.getItem(DISMISS_KEY) ?? 0)
+      : 0;
+    return allLeads.filter(
+      (l) =>
+        l.source === "email_ingestion" &&
+        l.scraped_at &&
+        new Date(l.scraped_at).getTime() > Math.max(cutoff, dismissedAt)
+    );
+  }, [allLeads]);
+
+  useEffect(() => {
+    if (emailBannerDismissed) {
+      localStorage.setItem(DISMISS_KEY, String(Date.now()));
+    }
+  }, [emailBannerDismissed]);
+
+  const showEmailBanner = newEmailLeads.length > 0 && !emailBannerDismissed;
+
   return (
     <div className="space-y-6">
+      {showEmailBanner && (
+        <div className="flex items-start justify-between gap-3 rounded-lg border border-sky-500/30 bg-sky-500/10 px-4 py-3 text-sm text-sky-300">
+          <div className="flex items-center gap-2">
+            <Mail className="h-4 w-4 shrink-0 text-sky-400" />
+            <span>
+              <span className="font-semibold">{newEmailLeads.length} new lead{newEmailLeads.length !== 1 ? "s" : ""} via email</span>
+              {" — "}
+              {newEmailLeads.slice(0, 3).map((l) => l.business_name).join(", ")}
+              {newEmailLeads.length > 3 ? ` +${newEmailLeads.length - 3} more` : ""}
+            </span>
+          </div>
+          <button
+            onClick={() => setEmailBannerDismissed(true)}
+            className="shrink-0 text-sky-400 hover:text-sky-200 transition-colors"
+            aria-label="Dismiss"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
       <div className="flex items-end justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Leads</h1>
@@ -193,6 +243,30 @@ export default function LeadsPage() {
                 <Sparkles className="mr-1.5 h-3.5 w-3.5" />
               )}
               Enrich All
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={menuUrlLoading}
+              onClick={async () => {
+                setMenuUrlLoading(true);
+                try {
+                  const res = await fetch("/api/enrich-menu-url", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ limit: 50 }) });
+                  const data = await res.json();
+                  alert(`Menu URL scan done: ${data.found} found, ${data.not_found} not found, ${data.failed} failed`);
+                } catch (e: any) {
+                  alert("Menu URL scan failed: " + e.message);
+                } finally {
+                  setMenuUrlLoading(false);
+                }
+              }}
+            >
+              {menuUrlLoading ? (
+                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Link2Off className="mr-1.5 h-3.5 w-3.5" />
+              )}
+              Find Menu URLs
             </Button>
           </div>
         )}
@@ -323,6 +397,16 @@ export default function LeadsPage() {
               ({totalRaw - total} hidden)
             </span>
           )}
+        </label>
+
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={noMenuUrl}
+            onChange={(e) => setNoMenuUrl(e.target.checked)}
+            className="rounded accent-primary"
+          />
+          No menu URL
         </label>
       </div>
 

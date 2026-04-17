@@ -1,9 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
 import { vpsApi } from "@/lib/vps-api";
 import type { ScrapeRequest, ScrapeStatus } from "@/lib/types";
 import { useJobs } from "@/components/jobs-provider";
 import { getActiveJobs } from "@/lib/job-store";
-import { getScrapeRuns } from "@/lib/firestore-api";
+import { getScrapeRuns, watchLatestScrapeRun, watchPipelineActivity, type ScrapeRunRecord, type PipelineJobRecord } from "@/lib/firestore-api";
 
 export function useScrape() {
   const queryClient = useQueryClient();
@@ -58,4 +59,24 @@ export function useScrapeHistory() {
     queryFn: () => getScrapeRuns(10),
     refetchInterval: 60_000,
   });
+}
+
+/** Live Firestore listener for the most recent scrape run (manual or scheduled via GitHub Actions). */
+export function useLiveScrapeRun() {
+  const [run, setRun] = useState<ScrapeRunRecord | null>(null);
+  useEffect(() => {
+    const unsub = watchLatestScrapeRun(setRun);
+    return unsub;
+  }, []);
+  return run;
+}
+
+/** Live Firestore listener for recent pipeline job activity (scheduled Cloud Functions). */
+export function usePipelineActivity() {
+  const [jobs, setJobs] = useState<PipelineJobRecord[]>([]);
+  useEffect(() => {
+    const unsub = watchPipelineActivity(setJobs, 10);
+    return unsub;
+  }, []);
+  return jobs;
 }

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { BarChart3, Mail, Search, Settings, TrendingUp, LogOut, User, HelpCircle } from "lucide-react";
+import { BarChart3, Building2, Mail, Search, Settings, TrendingUp, LogOut, User, HelpCircle } from "lucide-react";
 import { useTour } from "@/components/tour-provider";
 import { DarkModeToggle } from "@/components/dark-mode-toggle";
 import { useAuth } from "@/lib/auth-context";
@@ -17,6 +17,7 @@ export function Navbar() {
   const links = [
     { href: "/", label: "Dashboard", icon: BarChart3, show: true },
     { href: "/leads", label: "Leads", icon: Search, show: true },
+    { href: "/clients", label: "Clients", icon: Building2, show: true },
     { href: "/outreach", label: "Outreach", icon: Mail, show: true },
     { href: "/analytics", label: "Analytics", icon: TrendingUp, show: true },
     { href: "/settings", label: "Settings", icon: Settings, show: true },
