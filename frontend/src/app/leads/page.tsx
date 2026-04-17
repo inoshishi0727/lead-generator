@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { LeadsTable } from "@/components/leads-table";
 import { useLeads, useEnrichLeads } from "@/hooks/use-leads";
@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/lib/auth-context";
 import { getTeamMembers } from "@/lib/auth-admin";
-import { Search, Sparkles, Loader2, Plus, Settings2, Link2Off } from "lucide-react";
+import { Search, Sparkles, Loader2, Plus, Settings2, Link2Off, Mail, X } from "lucide-react";
 
 const SOURCE_OPTIONS = [
   { value: "", label: "All Sources" },
@@ -67,6 +67,7 @@ export default function LeadsPage() {
   const [noMenuUrl, setNoMenuUrl] = useState(false);
   const [menuUrlLoading, setMenuUrlLoading] = useState(false);
   const [showQuickAdd, setShowQuickAdd] = useState(false);
+  const [emailBannerDismissed, setEmailBannerDismissed] = useState(false);
   const [showQueries, setShowQueries] = useState(false);
   const [selectedLeadIds, setSelectedLeadIds] = useState<string[]>([]);
   const enrichMutation = useEnrichLeads();
@@ -160,8 +161,51 @@ export default function LeadsPage() {
   const total = leads.length;
   const totalRaw = allLeads.length;
 
+  const DISMISS_KEY = "email_ingestion_banner_dismissed_at";
+  const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+
+  const newEmailLeads = useMemo(() => {
+    const dismissedAt = typeof window !== "undefined"
+      ? Number(localStorage.getItem(DISMISS_KEY) ?? 0)
+      : 0;
+    return allLeads.filter(
+      (l) =>
+        l.source === "email_ingestion" &&
+        l.scraped_at &&
+        new Date(l.scraped_at).getTime() > Math.max(cutoff, dismissedAt)
+    );
+  }, [allLeads]);
+
+  useEffect(() => {
+    if (emailBannerDismissed) {
+      localStorage.setItem(DISMISS_KEY, String(Date.now()));
+    }
+  }, [emailBannerDismissed]);
+
+  const showEmailBanner = newEmailLeads.length > 0 && !emailBannerDismissed;
+
   return (
     <div className="space-y-6">
+      {showEmailBanner && (
+        <div className="flex items-start justify-between gap-3 rounded-lg border border-sky-500/30 bg-sky-500/10 px-4 py-3 text-sm text-sky-300">
+          <div className="flex items-center gap-2">
+            <Mail className="h-4 w-4 shrink-0 text-sky-400" />
+            <span>
+              <span className="font-semibold">{newEmailLeads.length} new lead{newEmailLeads.length !== 1 ? "s" : ""} via email</span>
+              {" — "}
+              {newEmailLeads.slice(0, 3).map((l) => l.business_name).join(", ")}
+              {newEmailLeads.length > 3 ? ` +${newEmailLeads.length - 3} more` : ""}
+            </span>
+          </div>
+          <button
+            onClick={() => setEmailBannerDismissed(true)}
+            className="shrink-0 text-sky-400 hover:text-sky-200 transition-colors"
+            aria-label="Dismiss"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
       <div className="flex items-end justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Leads</h1>
