@@ -1813,12 +1813,109 @@ function extractLeadIdFromTo(toAddresses) {
 }
 
 /**
- * Separate inbound endpoint for lead ingestion via email.
- * Email leads@replies.asterleybros.com with Subject = business name, Body = website URL.
- * Creates a lead with source: "email_ingestion", stage: "scraped".
+ * Use Gemini to parse email content (text + attachments) into structured lead data.
+ * Returns an array of leads: [{ business_name, website, phone, address, notes }]
+ */
+async function parseLeadsFromEmail(subject, textBody, _htmlBody, attachments) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) return [];
+
+  const ai = new GoogleGenAI({ apiKey });
+
+  const emailText = [
+    subject ? `Subject: ${subject}` : "",
+    textBody || "",
+  ].filter(Boolean).join("\n\n").slice(0, 4000);
+
+  // Decode text-based attachments (CSV, TSV, TXT) and append to email text
+  const TEXT_MIME = ["text/csv", "text/tab-separated-values", "text/plain", "application/csv"];
+  const BINARY_MIME = ["image/jpeg", "image/png", "image/gif", "image/webp", "application/pdf"];
+  const MAX_BYTES = 10 * 1024 * 1024;
+
+  let attachmentText = "";
+  const binaryParts = [];
+
+  for (const att of attachments || []) {
+    const mime = att.content_type || att.type || "";
+    const filename = att.filename || "";
+    const raw = att.content || att.data || "";
+    const bytes = Buffer.byteLength(raw, "base64");
+
+    if (bytes > MAX_BYTES) {
+      console.warn(`Attachment ${filename} too large (${bytes} bytes), skipping`);
+      continue;
+    }
+
+    // CSV/TSV/TXT — decode and include as text
+    const isTextFile = TEXT_MIME.includes(mime) ||
+      /\.(csv|tsv|txt)$/i.test(filename);
+    if (isTextFile) {
+      const decoded = Buffer.from(raw, "base64").toString("utf-8").slice(0, 8000);
+      attachmentText += `\n\nAttachment (${filename}):\n${decoded}`;
+      console.log(`Decoded text attachment ${filename} (${bytes} bytes)`);
+      continue;
+    }
+
+    // Images + PDFs — pass as inline binary to Gemini
+    if (BINARY_MIME.includes(mime)) {
+      binaryParts.push({ inlineData: { mimeType: mime, data: raw } });
+      console.log(`Attached binary ${filename} (${mime}, ${bytes} bytes) to Gemini prompt`);
+    }
+  }
+
+  const fullContent = emailText + attachmentText;
+
+  const parts = [
+    {
+      text: `You are extracting venue/business lead data from an email sent to a drinks sales team.
+
+Email content:
+${fullContent}
+
+Extract ALL businesses/venues mentioned anywhere in the content — including in attachments, lists, tables, or CSVs. For each, return:
+- business_name (required)
+- website (URL if present, null if not)
+- phone (if present, null if not)
+- address (if present, null if not)
+- notes (any relevant context, null if nothing useful)
+- google_maps_url (if any URL is a Google Maps link, put it here instead of website)
+
+Return ONLY a valid JSON array. Example:
+[{"business_name":"The Copper Kettle","website":"https://copperkettle.co.uk","phone":null,"address":"12 High St, London","notes":null,"google_maps_url":null}]
+
+If the content contains a list or table of venues, extract every single one.
+If nothing useful found, return [].`,
+    },
+    ...binaryParts,
+  ];
+
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-2.0-flash",
+      contents: [{ role: "user", parts }],
+      config: { maxOutputTokens: 1024, temperature: 0.1 },
+    });
+
+    let text = (response.text || "").replace(/```json\s*/g, "").replace(/```/g, "").trim();
+    const start = text.indexOf("[");
+    const end = text.lastIndexOf("]");
+    if (start >= 0 && end > start) {
+      const parsed = JSON.parse(text.slice(start, end + 1));
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch (err) {
+    console.warn("Gemini lead parsing failed:", err.message);
+  }
+  return [];
+}
+
+/**
+ * Inbound endpoint for lead ingestion via email.
+ * Email leads@replies.asterleybros.com with any content — text, links, images, PDFs.
+ * Gemini parses the content and creates one or more leads automatically.
  */
 export const processLeadIngestion = functions
-  .runWith({ timeoutSeconds: 30, memory: "256MB", secrets: ["RESEND_API_KEY"] })
+  .runWith({ timeoutSeconds: 60, memory: "512MB", secrets: ["RESEND_API_KEY", "GEMINI_API_KEY"] })
   .https.onRequest(async (req, res) => {
     if (req.method !== "POST") {
       res.status(405).send("Method not allowed");
@@ -1843,15 +1940,29 @@ export const processLeadIngestion = functions
       // Fetch full email content via Resend Receiving API
       let fullEmail = {};
       if (process.env.RESEND_API_KEY && resendEmailId) {
-        try {
-          const emailRes = await fetch(`https://api.resend.com/emails/receiving/${resendEmailId}`, {
-            headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}` },
-          });
-          if (emailRes.ok) {
-            fullEmail = await emailRes.json();
+        const MAX_RETRIES = 3;
+        const RETRY_DELAY_MS = 2000;
+        for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+          try {
+            if (attempt > 1) await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
+            const emailRes = await fetch(`https://api.resend.com/emails/receiving/${resendEmailId}`, {
+              headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}` },
+            });
+            if (!emailRes.ok) {
+              console.warn(`Receiving API returned ${emailRes.status} on attempt ${attempt}`);
+              if (attempt < MAX_RETRIES) continue;
+              break;
+            }
+            const received = await emailRes.json();
+            if (received.text || received.html || (received.attachments || []).length > 0) {
+              fullEmail = received;
+              break;
+            }
+            if (attempt < MAX_RETRIES) continue;
+          } catch (err) {
+            console.warn(`Receiving API error (attempt ${attempt}):`, err.message);
+            if (attempt < MAX_RETRIES) continue;
           }
-        } catch (err) {
-          console.warn("Failed to fetch email body:", err.message);
         }
       }
 
@@ -1860,60 +1971,84 @@ export const processLeadIngestion = functions
       const subject = eventData.subject || "";
       const textBody = fullEmail.text || eventData.text || "";
       const htmlBody = fullEmail.html || eventData.html || "";
+      const attachments = fullEmail.attachments || eventData.attachments || [];
 
-      // Parse business name from subject (strip Re:/Fwd: prefixes)
-      const businessName = subject.replace(/^(re|fwd?):\s*/i, "").trim() || "Unknown";
+      // Parse leads from email content via Gemini
+      const parsedLeads = await parseLeadsFromEmail(subject, textBody, htmlBody, attachments);
 
-      // Extract first URL from body
-      const urlMatch = (textBody || htmlBody).match(/https?:\/\/[^\s"<>]+/);
-      const website = urlMatch ? urlMatch[0].replace(/[.,;)]+$/, "") : null;
-
-      // Check for Google Maps URL
-      const isMapsUrl = website && /maps\.google|google\.com\/maps|goo\.gl\/maps/i.test(website);
-
-      // Duplicate lead check — skip if a lead with the same business name already exists
-      const dupeSnap = await db.collection("leads")
-        .where("business_name", "==", businessName)
-        .limit(1)
-        .get();
-      if (!dupeSnap.empty) {
-        console.log("Lead already exists, skipping:", businessName);
+      if (parsedLeads.length === 0) {
+        console.log("No leads extracted from email, skipping");
         if (resendEmailId) {
           await db.collection("webhook_events").doc(resendEmailId).set({
             event_type: "lead_ingestion",
             resend_email_id: resendEmailId,
             processed_at: new Date().toISOString(),
             status: "skipped",
-            reason: "duplicate_lead",
+            reason: "no_leads_extracted",
           });
         }
-        res.status(200).json({ status: "skipped", reason: "duplicate_lead", business_name: businessName });
+        res.status(200).json({ status: "skipped", reason: "no_leads_extracted" });
         return;
       }
 
-      const leadId = crypto.randomUUID();
       const now = new Date().toISOString();
+      const createdLeads = [];
+      const skippedLeads = [];
 
-      await db.collection("leads").doc(leadId).set({
-        id: leadId,
-        business_name: businessName,
-        website: isMapsUrl ? null : website,
-        google_maps_url: isMapsUrl ? website : null,
-        source: "email_ingestion",
-        stage: "scraped",
-        added_by_email: fromEmail,
-        added_by_name: fromName,
-        scraped_at: now,
-        email: null,
-        phone: null,
-        address: null,
-        score: null,
-        enrichment_status: null,
-      });
+      for (const lead of parsedLeads) {
+        if (!lead.business_name || lead.business_name === "Unknown") continue;
+
+        // Deduplicate by business name
+        const dupeSnap = await db.collection("leads")
+          .where("business_name", "==", lead.business_name)
+          .limit(1)
+          .get();
+        if (!dupeSnap.empty) {
+          console.log("Lead already exists, skipping:", lead.business_name);
+          skippedLeads.push(lead.business_name);
+          continue;
+        }
+
+        const isMapsUrl = lead.website && /maps\.google|google\.com\/maps|goo\.gl\/maps/i.test(lead.website);
+        const leadId = crypto.randomUUID();
+
+        await db.collection("leads").doc(leadId).set({
+          id: leadId,
+          business_name: lead.business_name,
+          website: isMapsUrl ? null : (lead.website || null),
+          google_maps_url: isMapsUrl ? lead.website : (lead.google_maps_url || null),
+          phone: lead.phone || null,
+          address: lead.address || null,
+          notes: lead.notes || null,
+          source: "email_ingestion",
+          stage: "scraped",
+          added_by_email: fromEmail,
+          added_by_name: fromName,
+          scraped_at: now,
+          email: null,
+          score: null,
+          enrichment_status: null,
+        });
+
+        await db.collection("activity_log").add({
+          type: "lead_ingested_via_email",
+          lead_id: leadId,
+          business_name: lead.business_name,
+          from_email: fromEmail,
+          created_at: now,
+        });
+
+        createdLeads.push({ id: leadId, business_name: lead.business_name });
+        console.log("Lead ingested via email:", { leadId, business_name: lead.business_name });
+      }
 
       // Send confirmation reply
-      if (process.env.RESEND_API_KEY) {
+      if (process.env.RESEND_API_KEY && createdLeads.length > 0) {
         try {
+          const leadList = createdLeads.map((l) => `• ${l.business_name}`).join("\n");
+          const skipNote = skippedLeads.length > 0
+            ? `\n\nAlready existed (skipped):\n${skippedLeads.map((n) => `• ${n}`).join("\n")}`
+            : "";
           await fetch("https://api.resend.com/emails", {
             method: "POST",
             headers: {
@@ -1921,10 +2056,10 @@ export const processLeadIngestion = functions
               "Content-Type": "application/json",
             },
             body: JSON.stringify({
-              from: "Asterley Leads <leads@replies.asterleybros.com>",
+              from: "Asterley Leads <leads@leads.asterleybros.com>",
               to: fromEmail,
-              subject: `Lead added: ${businessName}`,
-              text: `Got it — "${businessName}" has been added to the leads pipeline.${website ? `\n\nWebsite: ${website}` : ""}\n\nYou can view it at https://asterleyleadgen.netlify.app/leads`,
+              subject: `${createdLeads.length} lead${createdLeads.length !== 1 ? "s" : ""} added`,
+              text: `Got it — added ${createdLeads.length} lead${createdLeads.length !== 1 ? "s" : ""} to the pipeline:\n\n${leadList}${skipNote}\n\nView them at https://asterleyleadgen.netlify.app/leads`,
             }),
           });
         } catch (err) {
@@ -1938,23 +2073,20 @@ export const processLeadIngestion = functions
           resend_email_id: resendEmailId,
           processed_at: now,
           status: "processed",
-          lead_id: leadId,
+          leads_created: createdLeads.map((l) => l.id),
+          leads_skipped: skippedLeads,
         });
       }
 
-      await db.collection("activity_log").add({
-        type: "lead_ingested_via_email",
-        lead_id: leadId,
-        business_name: businessName,
-        from_email: fromEmail,
-        created_at: now,
+      res.status(200).json({
+        status: "ok",
+        created: createdLeads.length,
+        skipped: skippedLeads.length,
+        leads: createdLeads,
       });
-
-      console.log("Lead ingested via email:", { leadId, businessName, website, fromEmail });
-      res.status(200).json({ status: "ok", lead_id: leadId, business_name: businessName });
     } catch (err) {
       console.error("processLeadIngestion error:", err);
-      res.status(500).json({ error: err.message });
+      res.status(200).json({ error: err.message });
     }
   });
 
