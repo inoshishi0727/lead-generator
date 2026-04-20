@@ -574,6 +574,11 @@ export async function getCampaigns(): Promise<Campaign[]> {
   return snap.docs.map((d) => ({ id: d.id, ...d.data() } as Campaign));
 }
 
+export async function updateCampaign(id: string, data: Partial<Omit<Campaign, "id">>): Promise<void> {
+  const ref = doc(db, "campaigns", id);
+  await updateDoc(ref, data as Record<string, unknown>);
+}
+
 export async function restoreOriginalEmail(messageId: string): Promise<void> {
   const ref = doc(db, "outreach_messages", messageId);
   const snap = await getDoc(ref);

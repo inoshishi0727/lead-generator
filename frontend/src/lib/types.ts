@@ -105,10 +105,14 @@ export interface Campaign {
   hook: string;
   brief: string;
   extra_context: string | null;
+  timeframe: string | null;
+  notes: string | null;
   recommended_lead_ids: string[];
-  status: "active" | "completed";
+  status: "draft" | "active" | "completed";
   created_at: string;
   created_by: string;
+  approved_by: string | null;
+  approved_at: string | null;
 }
 
 export interface OutreachMessage {
