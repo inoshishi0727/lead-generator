@@ -2,8 +2,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { httpsCallable } from "firebase/functions";
 import { functions } from "@/lib/firebase";
 import { api } from "@/lib/api";
-import { getOutreachMessages, updateOutreachMessage, restoreOriginalEmail, getInboundReplies, deleteInboundReply, deleteOutreachMessage } from "@/lib/firestore-api";
-import type { OutreachMessage, InboundReply } from "@/lib/types";
+import { getOutreachMessages, updateOutreachMessage, restoreOriginalEmail, getInboundReplies, deleteInboundReply, deleteOutreachMessage, getCampaigns } from "@/lib/firestore-api";
+import type { OutreachMessage, InboundReply, Campaign } from "@/lib/types";
 
 const hasBackend = !!process.env.NEXT_PUBLIC_API_URL;
 
@@ -377,11 +377,11 @@ export function useGenerateClientDrafts() {
   return useMutation({
     mutationFn: async (params: {
       lead_ids: string[];
-      campaign_type: string;
-      campaign_brief: string;
+      campaign_type?: string;
+      campaign_id?: string;
     }) => {
       const fn = httpsCallable<
-        { lead_ids: string[]; campaign_type: string; campaign_brief: string },
+        { lead_ids: string[]; campaign_type?: string; campaign_id?: string },
         { generated: number; failed: number; total: number }
       >(functions, "generateClientDrafts");
       const result = await fn(params);
@@ -389,6 +389,30 @@ export function useGenerateClientDrafts() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["outreach"] });
+    },
+  });
+}
+
+export function useCampaigns() {
+  return useQuery({
+    queryKey: ["campaigns"],
+    queryFn: getCampaigns,
+  });
+}
+
+export function useCreateCampaign() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (params: { campaign_type: string; extra_context?: string }) => {
+      const fn = httpsCallable<
+        { campaign_type: string; extra_context?: string },
+        Campaign
+      >(functions, "createCampaign");
+      const result = await fn(params);
+      return result.data;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["campaigns"] });
     },
   });
 }
