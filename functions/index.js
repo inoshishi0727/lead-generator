@@ -3222,6 +3222,111 @@ export const scheduledSendFollowups = functions
   });
 
 /**
+ * Automatically sends approved campaign emails whose scheduled_send_date is due today.
+ * Campaign emails go to existing clients — no stage changes or follow-up card creation.
+ * Runs Mon-Fri at 9:05am London time (5 min offset from scheduledSendFollowups to avoid contention).
+ */
+export const scheduledSendCampaigns = functions
+  .runWith({ timeoutSeconds: 540, memory: "512MB", secrets: ["RESEND_API_KEY"] })
+  .pubsub.schedule("5 9 * * 1-5")
+  .timeZone("Europe/London")
+  .onRun(async () => {
+    const now = new Date();
+    const london = new Date(now.toLocaleString("en-US", { timeZone: "Europe/London" }));
+
+    if (isBlackoutDay(london)) {
+      console.log("Scheduled campaign send skipped: blackout day");
+      return null;
+    }
+
+    const apiKey = process.env.RESEND_API_KEY;
+    if (!apiKey) {
+      console.error("RESEND_API_KEY not configured");
+      return null;
+    }
+
+    const todayStr = london.toISOString().split("T")[0];
+
+    const todayMidnight = new Date(Date.UTC(london.getFullYear(), london.getMonth(), london.getDate()));
+    const sentTodaySnap = await db.collection("outreach_messages")
+      .where("status", "==", "sent")
+      .where("sent_at", ">=", todayMidnight.toISOString())
+      .get();
+
+    if (sentTodaySnap.size >= DAILY_CAP) {
+      console.log(`Campaign send skipped: daily cap of ${DAILY_CAP} reached`);
+      return null;
+    }
+
+    const remaining = DAILY_CAP - sentTodaySnap.size;
+
+    // Find approved campaign messages due today
+    const approvedSnap = await db.collection("outreach_messages")
+      .where("status", "==", "approved")
+      .where("channel", "==", "email")
+      .get();
+
+    const dueMessages = approvedSnap.docs
+      .map((d) => ({ id: d.id, ...d.data() }))
+      .filter((m) => m.campaign_id && m.scheduled_send_date && m.scheduled_send_date <= todayStr)
+      .slice(0, remaining);
+
+    if (!dueMessages.length) {
+      console.log("Scheduled campaign send: no due messages");
+      return null;
+    }
+
+    const resend = new Resend(apiKey);
+    let sent = 0;
+    let failed = 0;
+
+    for (const msg of dueMessages) {
+      try {
+        const leadSnap = await db.collection("leads").doc(msg.lead_id).get();
+        if (!leadSnap.exists) { failed++; continue; }
+
+        const lead = leadSnap.data();
+        const toEmail = lead.contact_email || lead.email;
+        if (!toEmail) {
+          console.error("No email for client", msg.lead_id, lead.business_name);
+          failed++;
+          continue;
+        }
+
+        const replyToAddress = `reply+${msg.lead_id}@${REPLY_DOMAIN}`;
+
+        const { data: resendData, error } = await resend.emails.send({
+          from: `${SENDER_NAME} <${SENDER_EMAIL}>`,
+          to: toEmail,
+          replyTo: replyToAddress,
+          subject: msg.subject || "Asterley Bros",
+          text: msg.content,
+          html: buildHtmlEmail(msg.content),
+        });
+
+        if (error) throw new Error(error.message);
+
+        const sentAt = new Date().toISOString();
+        await db.collection("outreach_messages").doc(msg.id).update({
+          status: "sent",
+          sent_at: sentAt,
+          reply_to_address: replyToAddress,
+          email_message_id: resendData?.id ?? null,
+        });
+
+        console.log(`Sent campaign email to ${lead.business_name} (${toEmail})`);
+        sent++;
+      } catch (err) {
+        console.error("Failed to send campaign email for", msg.lead_id, err.message);
+        failed++;
+      }
+    }
+
+    console.log("Scheduled campaign send complete:", JSON.stringify({ sent, failed, total: dueMessages.length }));
+    return null;
+  });
+
+/**
  * One-time migration — callable from admin UI.
  * Creates planned cards for existing sent emails that don't have a next-step card yet.
  * Safe to run multiple times (idempotent via duplicate check).
@@ -3724,8 +3829,72 @@ NO send window rules apply (you can email clients any day).
 Output ONLY "Subject:" on the first line, then the full email body. Nothing else.`;
 
 /**
+ * Auto-generate a campaign brief based on type and current season.
+ * No user input needed.
+ */
+function buildCampaignBrief(campaignType, overrideLeadProduct) {
+  const season = getCurrentSeason();
+  const seasonData = SEASONAL_PRODUCTS[season] || SEASONAL_PRODUCTS["Spring/Summer"];
+  const leadProduct = overrideLeadProduct || seasonData.lead[0];
+  const leadServe = seasonData.serves[leadProduct] || "a seasonal serve";
+  const hook = seasonData.hook;
+
+  switch (campaignType) {
+    case "seasonal":
+      return `Season: ${season}. Lead product: ${leadProduct}. Serve suggestion: ${leadServe}. Seasonal hook: ${hook}.
+
+This email should feel like a timely nudge from Rob, not a generic newsletter. Open with a brief nod to the season and why now is the right moment for ${leadProduct} — the ${hook} angle is what makes it timely. Offer a concrete serve idea the venue can use immediately (${leadServe}). Frame it as "here's what's working for other stockists right now" — not a pitch, but a useful heads-up from someone who knows their programme. The tone should be warm and specific to this venue's style. One serve suggestion, one clear ask (a call, a drop-in visit, or a quick reply).`;
+
+    case "reorder":
+      return `Season: ${season}. Lead product: ${leadProduct}. Seasonal hook: ${hook}.
+
+This is a practical stock check-in timed to ${hook}. Rob knows this venue stocks Asterley products and wants to make sure they're not caught short before demand picks up. The email should feel low-pressure and helpful — not chasing a sale but flagging a genuine opportunity. Open with a warm acknowledgement of the relationship, then make the reorder easy: reference the timing (${hook} is coming), note that stock moves quickly this time of year, and give them a clear next step (reply to confirm, or Rob can arrange delivery directly). Keep it brief and practical — this is an admin-style outreach dressed up warmly.`;
+
+    case "new_product":
+      return `Season: ${season}. Lead product: ${leadProduct}. Serve suggestion: ${leadServe}.
+
+This client is getting early access to ${leadProduct} before it goes to new accounts — frame it as a favour, not a pitch. Rob is reaching out because this venue is a trusted stockist and he wanted them to see it first. The email should feel exclusive and personal: "wanted you to have a look before we go wider." Introduce the product briefly — what it is, what makes it different, and how it fits their programme. Suggest the ${leadServe} as a ready-made serve they can drop straight onto their menu or bar list. One clear ask: can they take a small allocation, or would they like to try it first?`;
+
+    case "new_menu":
+      return `Season: ${season}. Lead product: ${leadProduct}. Serve suggestion: ${leadServe}. Seasonal hook: ${hook}.
+
+Rob is reaching out to offer genuine menu support — not to push product, but to help this venue get more out of what they already stock. The ${hook} period is a natural moment for a menu refresh, and this email should position Rob as a useful resource. Offer to help develop a new serve around ${leadProduct}, update their existing listing, or suggest a seasonal special they can run for ${hook}. The ${leadServe} is a good concrete starting point to reference. Keep it collaborative and practical — Rob has done this for other stockists and it's worked well. The ask is light: a quick call or visit to talk through what would work for their menu.`;
+
+    case "event":
+      return `Season: ${season}. Lead product: ${leadProduct}. Seasonal hook: ${hook}.
+
+Rob is proposing a collaboration tied to ${hook} — a tasting event, a pop-up, or a featured serve on their board. This should feel like an exciting opportunity, not a formal proposal. Open with the idea clearly: "we'd love to do something with you around ${hook}." Keep the ask flexible — a one-off tasting slot, a feature on their cocktail list for the season, or a small event Rob can support with product and presence. Reference ${leadProduct} as the focus and explain briefly why it fits the venue and the timing. One clear next step: can they get on a call to work out what would be feasible?`;
+
+    default:
+      return `Season: ${season}. Lead product: ${leadProduct}. Serve suggestion: ${leadServe}. Hook: ${hook}. Warm, direct seasonal check-in from Rob. Reference the timing, suggest a serve, one clear ask.`;
+  }
+}
+
+function buildTimeframeSuggestion(campaignType) {
+  const now = new Date();
+  const startDate = new Date(now);
+  startDate.setDate(now.getDate() + 2); // Start in 2 days
+
+  const fmt = (d) => d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+
+  const durations = {
+    seasonal: 21,
+    reorder: 7,
+    new_product: 14,
+    new_menu: 21,
+    event: 42,
+  };
+  const days = durations[campaignType] || 14;
+  const endDate = new Date(startDate);
+  endDate.setDate(startDate.getDate() + days);
+
+  return `${fmt(startDate)} – ${fmt(endDate)}`;
+}
+
+/**
  * Generate client campaign drafts for selected clients.
- * Called from frontend: generateClientDrafts({ lead_ids, campaign_type, campaign_brief })
+ * Called from frontend: generateClientDrafts({ lead_ids, campaign_type })
+ * Campaign brief is auto-generated based on type and current season.
  */
 export const generateClientDrafts = functions
   .runWith({ timeoutSeconds: 300, memory: "512MB", secrets: ["ANTHROPIC_API_KEY"] })
@@ -3739,12 +3908,26 @@ export const generateClientDrafts = functions
       throw new HttpsError("failed-precondition", "ANTHROPIC_API_KEY not configured.");
     }
 
-    const { lead_ids, campaign_type, campaign_brief } = data;
+    const { lead_ids, campaign_type, campaign_id } = data;
     if (!lead_ids || !Array.isArray(lead_ids) || lead_ids.length === 0) {
       throw new HttpsError("invalid-argument", "lead_ids required.");
     }
-    if (!campaign_type || !campaign_brief) {
-      throw new HttpsError("invalid-argument", "campaign_type and campaign_brief required.");
+    if (!campaign_type && !campaign_id) {
+      throw new HttpsError("invalid-argument", "campaign_type or campaign_id required.");
+    }
+
+    let campaign_brief;
+    let resolved_campaign_type = campaign_type;
+    if (campaign_id) {
+      const campaignSnap = await db.collection("campaigns").doc(campaign_id).get();
+      if (!campaignSnap.exists) {
+        throw new HttpsError("not-found", "Campaign not found.");
+      }
+      const campaignDoc = campaignSnap.data();
+      campaign_brief = campaignDoc.brief;
+      resolved_campaign_type = campaignDoc.campaign_type;
+    } else {
+      campaign_brief = buildCampaignBrief(campaign_type);
     }
 
     const anthropic = new Anthropic({ apiKey });
@@ -3778,7 +3961,7 @@ export const generateClientDrafts = functions
 - Drinks programme: ${enrichment.drinks_programme || "not available"}
 - Context notes: ${enrichment.context_notes || "none"}
 
-CAMPAIGN TYPE: ${campaign_type}
+CAMPAIGN TYPE: ${resolved_campaign_type}
 CAMPAIGN BRIEF: ${campaign_brief}
 
 SEASON: ${season}
@@ -3817,7 +4000,8 @@ Write a client retention email for this stockist based on the campaign brief abo
           content,
           status: "draft",
           step_number: 1,
-          follow_up_label: campaign_type,
+          follow_up_label: resolved_campaign_type,
+          campaign_id: campaign_id || null,
           scheduled_send_date: null,
           created_at: new Date().toISOString(),
           tone_tier: enrichment.tone_tier || null,
@@ -3843,6 +4027,134 @@ Write a client retention email for this stockist based on the campaign brief abo
     }
 
     return { generated, failed, total: docs.length };
+  });
+
+// ---- Campaign Management ----
+
+/**
+ * Create a campaign, auto-generate the brief, and score clients for recommendations.
+ * Called from frontend: createCampaign({ campaign_type, extra_context? })
+ */
+export const createCampaign = functions
+  .runWith({ timeoutSeconds: 60, memory: "256MB" })
+  .https.onCall(async (data, context) => {
+    if (!context.auth) {
+      throw new HttpsError("unauthenticated", "Must be signed in.");
+    }
+
+    const { campaign_type, extra_context, lead_product: requestedProduct } = data;
+    if (!campaign_type) {
+      throw new HttpsError("invalid-argument", "campaign_type required.");
+    }
+
+    const season = getCurrentSeason();
+    const seasonData = SEASONAL_PRODUCTS[season] || SEASONAL_PRODUCTS["Spring/Summer"];
+    const leadProduct = requestedProduct || seasonData.lead[0];
+    let brief = buildCampaignBrief(campaign_type, leadProduct);
+    if (extra_context && extra_context.trim()) {
+      brief += ` Additional context: ${extra_context.trim()}`;
+    }
+
+    // Fetch all clients (stage: client or converted)
+    const [clientSnaps, convertedSnaps] = await Promise.all([
+      db.collection("leads").where("stage", "==", "client").get(),
+      db.collection("leads").where("stage", "==", "converted").get(),
+    ]);
+
+    const seenIds = new Set();
+    const clients = [];
+    for (const snap of [...clientSnaps.docs, ...convertedSnaps.docs]) {
+      if (!seenIds.has(snap.id)) {
+        seenIds.add(snap.id);
+        clients.push({ id: snap.id, ...snap.data() });
+      }
+    }
+
+    // Score each client: recommended if their venue category stocks the campaign's lead product
+    const recommended_lead_ids = clients
+      .filter((client) => {
+        const enrichment = client.enrichment || {};
+        const venueCat = enrichment.venue_category || client.category || "cocktail_bar";
+        const venueConfig = VENUE_PRODUCT_MAP[venueCat] || VENUE_PRODUCT_MAP.cocktail_bar;
+        return venueConfig.products.includes(leadProduct);
+      })
+      .map((c) => c.id);
+
+    const timeframe = buildTimeframeSuggestion(campaign_type);
+
+    const CAMPAIGN_TYPE_LABELS = {
+      seasonal: "Seasonal Promo",
+      reorder: "Reorder Nudge",
+      new_product: "New Product Launch",
+      new_menu: "Menu Support",
+      event: "Event / Collab",
+    };
+    const typeLabel = CAMPAIGN_TYPE_LABELS[campaign_type] || campaign_type;
+    const monthYear = new Date().toLocaleString("en-GB", { month: "short", year: "numeric" });
+    const campaignName = `${season} ${typeLabel} – ${monthYear}`;
+
+    const campaignId = crypto.randomUUID();
+    const now = new Date().toISOString();
+    const campaignData = {
+      id: campaignId,
+      name: campaignName,
+      campaign_type,
+      season,
+      lead_product: leadProduct,
+      serve: seasonData.serves[leadProduct] || "a seasonal serve",
+      hook: seasonData.hook,
+      brief,
+      extra_context: extra_context || null,
+      timeframe,
+      notes: null,
+      recommended_lead_ids,
+      status: "draft",
+      created_at: now,
+      created_by: context.auth.uid,
+      approved_by: null,
+      approved_at: null,
+    };
+
+    await db.collection("campaigns").doc(campaignId).set(campaignData);
+    return campaignData;
+  });
+
+export const regenerateCampaignBrief = functions
+  .runWith({ timeoutSeconds: 30, memory: "256MB" })
+  .https.onCall(async (data, context) => {
+    if (!context.auth) throw new HttpsError("unauthenticated", "Must be signed in.");
+    const { campaign_id } = data;
+    if (!campaign_id) throw new HttpsError("invalid-argument", "campaign_id required.");
+
+    const ref = db.collection("campaigns").doc(campaign_id);
+    const snap = await ref.get();
+    if (!snap.exists) throw new HttpsError("not-found", "Campaign not found.");
+
+    const campaign = snap.data();
+    let brief = buildCampaignBrief(campaign.campaign_type, campaign.lead_product);
+    if (campaign.extra_context && campaign.extra_context.trim()) {
+      brief += ` Additional context: ${campaign.extra_context.trim()}`;
+    }
+
+    await ref.update({ brief });
+    return { brief };
+  });
+
+export const approveCampaign = functions
+  .runWith({ timeoutSeconds: 30, memory: "256MB" })
+  .https.onCall(async (data, context) => {
+    if (!context.auth) throw new HttpsError("unauthenticated", "Must be signed in.");
+    const { campaign_id } = data;
+    if (!campaign_id) throw new HttpsError("invalid-argument", "campaign_id required.");
+
+    const ref = db.collection("campaigns").doc(campaign_id);
+    const snap = await ref.get();
+    if (!snap.exists) throw new HttpsError("not-found", "Campaign not found.");
+    if (snap.data().status !== "draft") throw new HttpsError("failed-precondition", "Campaign is not in draft status.");
+
+    const now = new Date().toISOString();
+    await ref.update({ status: "active", approved_by: context.auth.uid, approved_at: now });
+    return { status: "active", approved_at: now };
   });
 
 // ---- Prompt Rules Generation ----
