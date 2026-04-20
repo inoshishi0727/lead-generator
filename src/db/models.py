@@ -15,11 +15,18 @@ class LeadSource(str, Enum):
     GOOGLE_SEARCH = "google_search"
     BING_SEARCH = "bing_search"
     INSTAGRAM = "instagram"
+    LINKEDIN = "linkedin"
     TRUSTPILOT = "trustpilot"
     YELL = "yell"
     INDUSTRY_DIRECTORY = "industry_directory"
     APOLLO = "apollo"
     MANUAL = "manual"
+
+
+class LinkedInConfidence(str, Enum):
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
 
 
 class VenueCategory(str, Enum):
@@ -160,6 +167,11 @@ class Lead(BaseModel):
     score_breakdown: Optional[dict[str, ScoreBreakdownItem]] = None
     enrichment: Optional[EnrichmentData] = None
     enriched_at: Optional[datetime] = None
+    # LinkedIn employee discovery
+    linkedin_company_url: Optional[str] = None
+    linkedin_scraped_at: Optional[datetime] = None
+    linkedin_employee_count: Optional[int] = None
+    linkedin_scrape_status: Optional[str] = None
     # Pipeline & workflow
     stage: PipelineStage = PipelineStage.SCRAPED
     batch_id: Optional[str] = None
@@ -169,6 +181,30 @@ class Lead(BaseModel):
     provider_qa_notes: Optional[str] = None
     scraped_at: datetime = Field(default_factory=datetime.now)
     updated_at: datetime = Field(default_factory=datetime.now)
+
+
+class LinkedInEmployee(BaseModel):
+    id: UUID = Field(default_factory=uuid4)
+    lead_id: UUID
+    company_linkedin_url: Optional[str] = None  # null when sourced from people-search (no company page)
+    source: str = "company_people"  # "company_people" | "people_search"
+    name: str
+    name_lower: str
+    profile_url: str
+    profile_slug: str
+    profile_image_url: Optional[str] = None
+    title: Optional[str] = None
+    title_lower: Optional[str] = None
+    role_seniority: Optional[str] = None
+    is_decision_maker: bool = False
+    location: Optional[str] = None
+    connection_degree: Optional[str] = None
+    confidence: LinkedInConfidence = LinkedInConfidence.HIGH
+    scraped_at: datetime = Field(default_factory=datetime.now)
+    last_seen_at: datetime = Field(default_factory=datetime.now)
+    promoted_to_outreach: bool = False
+    promoted_at: Optional[datetime] = None
+    notes: Optional[str] = None
 
 
 class OutreachMessage(BaseModel):
