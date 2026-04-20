@@ -17,7 +17,7 @@ import {
   onSnapshot,
 } from "firebase/firestore";
 import { db } from "./firebase";
-import type { Lead, LeadDetail, OutreachMessage, InboundReply, EditFeedback, ReflectionCategory } from "./types";
+import type { Lead, LeadDetail, OutreachMessage, InboundReply, EditFeedback, ReflectionCategory, Campaign } from "./types";
 
 // --- Leads ---
 
@@ -183,6 +183,7 @@ export async function getOutreachMessages(filters?: {
   status?: string;
   channel?: string;
   lead_id?: string;
+  campaign_id?: string;
   limit?: number;
   assignedTo?: string;
 }): Promise<OutreachMessage[]> {
@@ -192,6 +193,7 @@ export async function getOutreachMessages(filters?: {
   if (filters?.status) constraints.push(where("status", "==", filters.status));
   if (filters?.channel) constraints.push(where("channel", "==", filters.channel));
   if (filters?.lead_id) constraints.push(where("lead_id", "==", filters.lead_id));
+  if (filters?.campaign_id) constraints.push(where("campaign_id", "==", filters.campaign_id));
   if (filters?.assignedTo) constraints.push(where("assigned_to", "==", filters.assignedTo));
 
   const q = constraints.length > 0 ? query(ref, ...constraints) : ref;
@@ -563,6 +565,28 @@ export async function getClients(): Promise<Lead[]> {
     }
   }
   return merged.sort((a, b) => a.business_name.localeCompare(b.business_name));
+}
+
+// --- Campaigns ---
+
+export async function getCampaigns(): Promise<Campaign[]> {
+  const ref = collection(db, "campaigns");
+  const q = query(ref, orderBy("created_at", "desc"), fbLimit(50));
+  const snap = await getDocs(q);
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() } as Campaign));
+}
+
+export async function updateCampaign(id: string, data: Partial<Omit<Campaign, "id">>): Promise<void> {
+  const ref = doc(db, "campaigns", id);
+  await updateDoc(ref, data as Record<string, unknown>);
+}
+
+export async function bulkSetScheduledSendDate(messageIds: string[], sendDate: string): Promise<void> {
+  await Promise.all(
+    messageIds.map((id) =>
+      updateDoc(doc(db, "outreach_messages", id), { scheduled_send_date: sendDate })
+    )
+  );
 }
 
 export async function restoreOriginalEmail(messageId: string): Promise<void> {
