@@ -98,6 +98,7 @@ export interface LeadDetail extends Lead {
 
 export interface Campaign {
   id: string;
+  name: string;
   campaign_type: string;
   season: string;
   lead_product: string;
@@ -108,7 +109,8 @@ export interface Campaign {
   timeframe: string | null;
   notes: string | null;
   recommended_lead_ids: string[];
-  status: "draft" | "active" | "completed";
+  status: "draft" | "active" | "completed" | "archived";
+  send_date: string | null;
   created_at: string;
   created_by: string;
   approved_by: string | null;

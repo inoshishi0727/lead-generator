@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { getClients } from "@/lib/firestore-api";
 import {
@@ -8,7 +8,14 @@ import {
   useCreateCampaign,
   useUpdateCampaign,
   useApproveCampaign,
+  useRegenerateCampaignBrief,
   useGenerateClientDrafts,
+  useCampaignDrafts,
+  useUpdateMessage,
+  useRegenerateMessage,
+  useSendMessage,
+  useSendMessages,
+  useScheduleCampaignDrafts,
 } from "@/hooks/use-outreach";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -29,9 +36,17 @@ import {
   Check,
   X,
   CheckCircle2,
+  ThumbsUp,
+  ThumbsDown,
+  Mail,
+  RefreshCw,
+  Archive,
+  Search,
+  SlidersHorizontal,
+  CalendarClock,
 } from "lucide-react";
 import { toast } from "sonner";
-import type { Lead, Campaign } from "@/lib/types";
+import type { Lead, Campaign, OutreachMessage } from "@/lib/types";
 
 const CAMPAIGN_TYPES = [
   { value: "seasonal", label: "Seasonal Promo", hint: "Timely product and serve angle tied to the current season" },
@@ -46,6 +61,12 @@ type SendMode = "recommended" | "all" | "custom";
 export default function CampaignsPage() {
   const [activeCampaign, setActiveCampaign] = useState<Campaign | null>(null);
   const [showNewCampaign, setShowNewCampaign] = useState(false);
+  const [filter, setFilter] = useState<"all" | "active" | "draft">("all");
+  const [search, setSearch] = useState("");
+  const [showFilters, setShowFilters] = useState(false);
+  const [typeFilter, setTypeFilter] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
 
   const { data: clients = [] } = useQuery({ queryKey: ["clients"], queryFn: getClients });
   const { data: campaigns = [], isLoading } = useCampaigns();
@@ -64,12 +85,33 @@ export default function CampaignsPage() {
     );
   }
 
-  const drafts = campaigns.filter((c) => c.status === "draft");
-  const active = campaigns.filter((c) => c.status === "active");
-  const completed = campaigns.filter((c) => c.status === "completed");
+  const visible = campaigns.filter((c) => c.status !== "archived");
+  const drafts = visible.filter((c) => c.status === "draft");
+  const active = visible.filter((c) => c.status === "active");
+
+  const byStatus = filter === "all" ? visible : filter === "active" ? active : drafts;
+
+  const filtered = byStatus.filter((c) => {
+    if (search) {
+      const q = search.toLowerCase();
+      const match =
+        c.campaign_type.toLowerCase().includes(q) ||
+        c.lead_product.toLowerCase().includes(q) ||
+        c.season.toLowerCase().includes(q) ||
+        c.hook.toLowerCase().includes(q) ||
+        c.brief.toLowerCase().includes(q);
+      if (!match) return false;
+    }
+    if (typeFilter && c.campaign_type !== typeFilter) return false;
+    if (dateFrom && c.created_at < dateFrom) return false;
+    if (dateTo && c.created_at > dateTo + "T23:59:59") return false;
+    return true;
+  });
+
+  const hasActiveFilters = !!(typeFilter || dateFrom || dateTo);
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-6">
       <div className="flex items-end justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Campaigns</h1>
@@ -83,55 +125,128 @@ export default function CampaignsPage() {
         </Button>
       </div>
 
+      {/* Search + filter bar */}
+      <div className="space-y-3">
+        <div className="flex items-center gap-2">
+          {/* Status tabs */}
+          <div className="flex gap-1 rounded-lg border border-border/50 bg-muted/30 p-1">
+            {([
+              { key: "all", label: "All", count: visible.length },
+              { key: "active", label: "Active", count: active.length },
+              { key: "draft", label: "Pending Review", count: drafts.length },
+            ] as const).map(({ key, label, count }) => (
+              <button
+                key={key}
+                onClick={() => setFilter(key)}
+                className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                  filter === key
+                    ? "bg-card text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {label}
+                {count > 0 && (
+                  <span className="ml-1.5 text-xs text-muted-foreground">{count}</span>
+                )}
+              </button>
+            ))}
+          </div>
+
+          {/* Search */}
+          <div className="relative flex-1 max-w-xs">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search campaigns…"
+              className="w-full rounded-md border border-input bg-background pl-8 pr-3 py-1.5 text-sm placeholder:text-muted-foreground/50"
+            />
+          </div>
+
+          {/* Filters toggle */}
+          <button
+            onClick={() => setShowFilters((v) => !v)}
+            className={`flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors ${
+              hasActiveFilters
+                ? "border-primary text-primary bg-primary/10"
+                : "border-border/50 text-muted-foreground hover:text-foreground hover:border-border"
+            }`}
+          >
+            <SlidersHorizontal className="h-3.5 w-3.5" />
+            Filters
+            {hasActiveFilters && (
+              <span className="rounded-full bg-primary text-primary-foreground text-[9px] px-1.5 py-0.5 leading-none">
+                {[typeFilter, dateFrom, dateTo].filter(Boolean).length}
+              </span>
+            )}
+          </button>
+        </div>
+
+        {/* Expanded filters */}
+        {showFilters && (
+          <div className="flex items-end gap-3 flex-wrap rounded-lg border border-border/50 bg-muted/20 p-3">
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1">Campaign type</label>
+              <select
+                value={typeFilter}
+                onChange={(e) => setTypeFilter(e.target.value)}
+                className="rounded-md border border-input bg-background px-3 py-1.5 text-sm"
+              >
+                <option value="">All types</option>
+                {CAMPAIGN_TYPES.map((t) => (
+                  <option key={t.value} value={t.value}>{t.label}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1">From</label>
+              <input
+                type="date"
+                value={dateFrom}
+                onChange={(e) => setDateFrom(e.target.value)}
+                className="rounded-md border border-input bg-background px-3 py-1.5 text-sm"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1">To</label>
+              <input
+                type="date"
+                value={dateTo}
+                onChange={(e) => setDateTo(e.target.value)}
+                className="rounded-md border border-input bg-background px-3 py-1.5 text-sm"
+              />
+            </div>
+            {hasActiveFilters && (
+              <button
+                onClick={() => { setTypeFilter(""); setDateFrom(""); setDateTo(""); }}
+                className="text-xs text-muted-foreground hover:text-foreground transition-colors pb-1.5"
+              >
+                Clear filters
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+
       {isLoading ? (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-36 w-full" />)}
         </div>
-      ) : campaigns.length === 0 ? (
+      ) : filtered.length === 0 ? (
         <Card className="py-12 text-center text-muted-foreground">
           <Sparkles className="mx-auto mb-3 h-8 w-8 opacity-30" />
-          <p className="text-sm">No campaigns yet.</p>
-          <p className="mt-1 text-xs">Create one to generate targeted outreach for your clients.</p>
+          <p className="text-sm">{visible.length === 0 ? "No campaigns yet." : "No campaigns in this view."}</p>
+          {visible.length === 0 && (
+            <p className="mt-1 text-xs">Create one to generate targeted outreach for your clients.</p>
+          )}
         </Card>
       ) : (
-        <>
-          {drafts.length > 0 && (
-            <section>
-              <h2 className="text-xs font-semibold uppercase tracking-widest text-muted-foreground mb-3">
-                Pending Review
-              </h2>
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                {drafts.map((c) => (
-                  <CampaignCard key={c.id} campaign={c} onClick={() => setActiveCampaign(c)} />
-                ))}
-              </div>
-            </section>
-          )}
-          {active.length > 0 && (
-            <section>
-              <h2 className="text-xs font-semibold uppercase tracking-widest text-muted-foreground mb-3">
-                Active
-              </h2>
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                {active.map((c) => (
-                  <CampaignCard key={c.id} campaign={c} onClick={() => setActiveCampaign(c)} />
-                ))}
-              </div>
-            </section>
-          )}
-          {completed.length > 0 && (
-            <section>
-              <h2 className="text-xs font-semibold uppercase tracking-widest text-muted-foreground mb-3">
-                Completed
-              </h2>
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                {completed.map((c) => (
-                  <CampaignCard key={c.id} campaign={c} onClick={() => setActiveCampaign(c)} />
-                ))}
-              </div>
-            </section>
-          )}
-        </>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {filtered.map((c) => (
+            <CampaignCard key={c.id} campaign={c} onClick={() => setActiveCampaign(c)} />
+          ))}
+        </div>
       )}
 
       {showNewCampaign && (
@@ -171,7 +286,7 @@ function CampaignCard({ campaign, onClick }: { campaign: Campaign; onClick: () =
         </div>
         <span className="text-[10px] text-muted-foreground shrink-0">{campaign.season}</span>
       </div>
-      <p className="text-xs font-semibold mb-1">{campaign.lead_product}</p>
+      <p className="text-sm font-semibold mb-1">{campaign.name || campaign.lead_product}</p>
       {campaign.timeframe && (
         <p className="text-[11px] text-muted-foreground mb-1">{campaign.timeframe}</p>
       )}
@@ -185,7 +300,7 @@ function CampaignCard({ campaign, onClick }: { campaign: Campaign; onClick: () =
 
 // ---- Campaign detail view ----
 
-type EditableField = "brief" | "type" | "timeframe" | "notes" | null;
+type EditableField = "brief" | "type" | "timeframe" | "notes" | "name" | "send_date" | null;
 
 function CampaignDetailView({
   campaign,
@@ -199,14 +314,55 @@ function CampaignDetailView({
   const [sendMode, setSendMode] = useState<SendMode>("recommended");
   const [customIds, setCustomIds] = useState<string[]>([]);
   const [editing, setEditing] = useState<EditableField>(null);
+  const [showArchiveConfirm, setShowArchiveConfirm] = useState(false);
+  const [draftName, setDraftName] = useState(campaign.name ?? "");
   const [draftBrief, setDraftBrief] = useState(campaign.brief);
   const [draftType, setDraftType] = useState(campaign.campaign_type);
   const [draftTimeframe, setDraftTimeframe] = useState(campaign.timeframe ?? "");
   const [draftNotes, setDraftNotes] = useState(campaign.notes ?? "");
+  const [sendDate, setSendDate] = useState(campaign.send_date ?? "");
 
   const generateMutation = useGenerateClientDrafts();
   const updateMutation = useUpdateCampaign();
   const approveMutation = useApproveCampaign();
+  const regenerateBriefMutation = useRegenerateCampaignBrief();
+  const updateMessageMutation = useUpdateMessage();
+  const sendMessagesMutation = useSendMessages();
+  const scheduleMutation = useScheduleCampaignDrafts();
+  const { data: drafts = [], isLoading: draftsLoading } = useCampaignDrafts(campaign.id);
+
+  const pendingDrafts = drafts.filter((d) => d.status === "draft");
+  const approvedDrafts = drafts.filter((d) => d.status === "approved");
+  const hasDrafts = drafts.length > 0;
+
+  async function handleApproveAll() {
+    if (pendingDrafts.length === 0) return;
+    toast.promise(
+      Promise.all(
+        pendingDrafts.map((d) =>
+          updateMessageMutation.mutateAsync({ id: d.id, status: "approved", lead_id: d.lead_id })
+        )
+      ),
+      {
+        loading: "Approving all drafts…",
+        success: `${pendingDrafts.length} draft${pendingDrafts.length !== 1 ? "s" : ""} approved`,
+        error: "Failed to approve drafts",
+      }
+    );
+  }
+
+  function handleSendAll() {
+    const toSend = approvedDrafts.map((d) => d.id);
+    if (toSend.length === 0) { toast.error("No approved drafts to send"); return; }
+    toast.promise(
+      sendMessagesMutation.mutateAsync(toSend),
+      {
+        loading: `Sending ${toSend.length} email${toSend.length !== 1 ? "s" : ""}…`,
+        success: (data: any) => `${data.sent} sent`,
+        error: "Send failed",
+      }
+    );
+  }
 
   const typeLabel = CAMPAIGN_TYPES.find((t) => t.value === campaign.campaign_type)?.label ?? campaign.campaign_type;
   const recommendedSet = new Set(campaign.recommended_lead_ids);
@@ -232,10 +388,12 @@ function CampaignDetailView({
   async function saveField(field: EditableField, value: string) {
     const trimmed = value.trim();
     const updates: Partial<Campaign> = {};
+    if (field === "name") updates.name = trimmed || campaign.name;
     if (field === "brief") updates.brief = trimmed;
     if (field === "type") updates.campaign_type = trimmed;
     if (field === "timeframe") updates.timeframe = trimmed || null;
     if (field === "notes") updates.notes = trimmed || null;
+    if (field === "send_date") updates.send_date = trimmed || null;
     await updateMutation.mutateAsync({ id: campaign.id, ...updates });
     setEditing(null);
     toast.success("Updated");
@@ -264,8 +422,25 @@ function CampaignDetailView({
       {
         loading: "Generating drafts…",
         success: (data: any) =>
-          `${data.generated} draft${data.generated !== 1 ? "s" : ""} generated — review them in Outreach`,
+          `${data.generated} draft${data.generated !== 1 ? "s" : ""} generated`,
         error: "Draft generation failed",
+      }
+    );
+  }
+
+  function handleScheduleAll() {
+    const toSchedule = drafts.filter((d) => d.status === "approved").map((d) => d.id);
+    if (!sendDate) { toast.error("Set a send date first"); return; }
+    if (toSchedule.length === 0) { toast.error("No approved drafts to schedule"); return; }
+    toast.promise(
+      Promise.all([
+        scheduleMutation.mutateAsync({ messageIds: toSchedule, sendDate }),
+        updateMutation.mutateAsync({ id: campaign.id, send_date: sendDate }),
+      ]),
+      {
+        loading: "Scheduling drafts…",
+        success: `${toSchedule.length} draft${toSchedule.length !== 1 ? "s" : ""} scheduled for ${sendDate}`,
+        error: "Scheduling failed",
       }
     );
   }
@@ -278,30 +453,55 @@ function CampaignDetailView({
           <ChevronLeft className="h-5 w-5" />
         </button>
         <div className="flex-1 min-w-0">
-          {editing === "type" ? (
-            <InlineSelect
-              value={draftType}
-              options={CAMPAIGN_TYPES.map((t) => ({ value: t.value, label: t.label }))}
-              onChange={setDraftType}
-              onSave={() => saveField("type", draftType)}
-              onCancel={() => { setEditing(null); setDraftType(campaign.campaign_type); }}
+
+          {editing === "name" ? (
+            <InlineInput
+              value={draftName}
+              onChange={setDraftName}
+              onSave={() => saveField("name", draftName)}
+              onCancel={() => { setEditing(null); setDraftName(campaign.name ?? ""); }}
               saving={updateMutation.isPending}
+              placeholder="Campaign name"
             />
           ) : (
             <div className="flex items-center gap-2 flex-wrap">
-              <h1 className="text-xl font-bold tracking-tight">{typeLabel}</h1>
-              <Badge variant="secondary" className="text-[10px]">{campaign.season}</Badge>
-              {isDraft && (
-                <Badge variant="outline" className="text-[9px] border-amber-500/30 text-amber-400">Draft</Badge>
-              )}
-              {campaign.extra_context && (
-                <Badge variant="outline" className="text-[9px] border-blue-500/30 text-blue-400">custom context</Badge>
-              )}
-              <EditButton onClick={() => setEditing("type")} />
+              <h1 className="text-xl font-bold tracking-tight">{campaign.name || typeLabel}</h1>
+              <EditButton onClick={() => setEditing("name")} />
             </div>
           )}
+          <div className="flex items-center gap-1.5 flex-wrap mt-1">
+            {editing === "type" ? (
+              <InlineSelect
+                value={draftType}
+                options={CAMPAIGN_TYPES.map((t) => ({ value: t.value, label: t.label }))}
+                onChange={setDraftType}
+                onSave={() => saveField("type", draftType)}
+                onCancel={() => { setEditing(null); setDraftType(campaign.campaign_type); }}
+                saving={updateMutation.isPending}
+              />
+            ) : (
+              <>
+                <Badge variant="secondary" className="text-[10px]">{typeLabel}</Badge>
+                <EditButton onClick={() => setEditing("type")} />
+              </>
+            )}
+            <Badge variant="secondary" className="text-[10px]">{campaign.season}</Badge>
+            {isDraft && (
+              <Badge variant="outline" className="text-[9px] border-amber-500/30 text-amber-400">Draft</Badge>
+            )}
+            {campaign.extra_context && (
+              <Badge variant="outline" className="text-[9px] border-blue-500/30 text-blue-400">custom context</Badge>
+            )}
+          </div>
           <p className="text-sm text-muted-foreground mt-0.5">{campaign.lead_product} — {campaign.hook}</p>
         </div>
+        <button
+          onClick={() => setShowArchiveConfirm(true)}
+          className="mt-1 flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground hover:text-red-400 transition-colors"
+        >
+          <Archive className="h-3.5 w-3.5" />
+          Archive
+        </button>
       </div>
 
       {/* Draft approval banner */}
@@ -363,6 +563,40 @@ function CampaignDetailView({
           <span className="text-sm">{campaign.hook}</span>
         </DetailRow>
 
+        {/* Send date */}
+        <DetailRow
+          label="Scheduled send"
+          editing={editing === "send_date"}
+          onEdit={() => { setEditing("send_date"); }}
+        >
+          {editing === "send_date" ? (
+            <div className="flex items-center gap-2">
+              <input
+                type="date"
+                value={sendDate}
+                onChange={(e) => setSendDate(e.target.value)}
+                min={new Date().toISOString().split("T")[0]}
+                className="rounded-md border border-input bg-background px-2 py-1 text-sm"
+              />
+              <button
+                onClick={() => { saveField("send_date", sendDate); setSendDate(sendDate); }}
+                disabled={updateMutation.isPending}
+                className="text-xs text-primary hover:underline disabled:opacity-50"
+              >Save</button>
+              <button
+                onClick={() => { setEditing(null); setSendDate(campaign.send_date ?? ""); }}
+                className="text-xs text-muted-foreground hover:text-foreground"
+              >Cancel</button>
+            </div>
+          ) : (
+            <span className="text-sm text-muted-foreground">
+              {campaign.send_date
+                ? new Date(campaign.send_date).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })
+                : "Not set"}
+            </span>
+          )}
+        </DetailRow>
+
         {/* Notes */}
         <DetailRow
           label="Internal notes"
@@ -392,7 +626,23 @@ function CampaignDetailView({
         <div className="flex items-center justify-between mb-2">
           <p className="text-xs font-medium text-muted-foreground">Campaign brief</p>
           {editing !== "brief" && (
-            <EditButton onClick={() => { setEditing("brief"); setDraftBrief(campaign.brief); }} />
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => {
+                  toast.promise(regenerateBriefMutation.mutateAsync(campaign.id), {
+                    loading: "Regenerating brief…",
+                    success: "Brief regenerated",
+                    error: "Failed to regenerate brief",
+                  });
+                }}
+                disabled={regenerateBriefMutation.isPending}
+                title="Regenerate brief"
+                className="text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
+              >
+                <RefreshCw className={`h-3.5 w-3.5 ${regenerateBriefMutation.isPending ? "animate-spin" : ""}`} />
+              </button>
+              <EditButton onClick={() => { setEditing("brief"); setDraftBrief(campaign.brief); }} />
+            </div>
           )}
         </div>
         {editing === "brief" ? (
@@ -478,10 +728,14 @@ function CampaignDetailView({
             >
               {generateMutation.isPending ? (
                 <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+              ) : hasDrafts ? (
+                <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
               ) : (
                 <MessageSquare className="mr-1.5 h-3.5 w-3.5" />
               )}
-              Generate {targetIds.length > 0 ? `${targetIds.length} ` : ""}Draft{targetIds.length !== 1 ? "s" : ""}
+              {hasDrafts
+                ? `Regenerate ${targetIds.length > 0 ? `${targetIds.length} ` : ""}Draft${targetIds.length !== 1 ? "s" : ""}`
+                : `Generate ${targetIds.length > 0 ? `${targetIds.length} ` : ""}Draft${targetIds.length !== 1 ? "s" : ""}`}
             </Button>
           </div>
         </>
@@ -491,6 +745,115 @@ function CampaignDetailView({
         <p className="text-xs text-muted-foreground text-center pb-4">
           Approve the campaign above to unlock draft generation.
         </p>
+      )}
+
+      {showArchiveConfirm && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
+          onClick={(e) => { if (e.target === e.currentTarget) setShowArchiveConfirm(false); }}
+        >
+          <div className="w-full max-w-sm rounded-lg border border-border/50 bg-card p-6 shadow-2xl">
+            <div className="flex items-start gap-3 mb-4">
+              <Archive className="h-5 w-5 shrink-0 text-muted-foreground mt-0.5" />
+              <div>
+                <p className="text-sm font-semibold">Archive this campaign?</p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  It will be hidden from the campaigns list but kept in the database. You can restore it later if needed.
+                </p>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" size="sm" onClick={() => setShowArchiveConfirm(false)}>
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                variant="destructive"
+                disabled={updateMutation.isPending}
+                onClick={() => {
+                  updateMutation.mutate(
+                    { id: campaign.id, status: "archived" },
+                    { onSuccess: () => { setShowArchiveConfirm(false); onBack(); } }
+                  );
+                }}
+              >
+                {updateMutation.isPending ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Archive className="mr-1.5 h-3.5 w-3.5" />}
+                Archive
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Campaign drafts */}
+      {drafts.length > 0 && (
+        <div className="space-y-3">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <p className="text-sm font-semibold">
+              Drafts
+              <span className="ml-2 text-xs font-normal text-muted-foreground">{drafts.length}</span>
+            </p>
+            <div className="flex items-center gap-2">
+              {pendingDrafts.length > 0 && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleApproveAll}
+                  disabled={updateMessageMutation.isPending}
+                >
+                  <ThumbsUp className="mr-1.5 h-3.5 w-3.5" />
+                  Approve All ({pendingDrafts.length})
+                </Button>
+              )}
+              {approvedDrafts.length > 0 && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleScheduleAll}
+                  disabled={scheduleMutation.isPending || !sendDate}
+                  title={!sendDate ? "Set a send date in Details first" : undefined}
+                >
+                  <CalendarClock className="mr-1.5 h-3.5 w-3.5" />
+                  Schedule All ({approvedDrafts.length})
+                </Button>
+              )}
+              {approvedDrafts.length > 0 && (
+                <Button
+                  size="sm"
+                  onClick={handleSendAll}
+                  disabled={sendMessagesMutation.isPending}
+                >
+                  {sendMessagesMutation.isPending ? (
+                    <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Mail className="mr-1.5 h-3.5 w-3.5" />
+                  )}
+                  Send All ({approvedDrafts.length})
+                </Button>
+              )}
+            </div>
+          </div>
+          {draftsLoading ? (
+            <div className="space-y-2">
+              {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-20 w-full" />)}
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {drafts.map((msg) => (
+                <DraftCard
+                  key={msg.id}
+                  message={msg}
+                  onApprove={() =>
+                    updateMessageMutation.mutate({ id: msg.id, status: "approved", lead_id: msg.lead_id })
+                  }
+                  onReject={() =>
+                    updateMessageMutation.mutate({ id: msg.id, status: "rejected", lead_id: msg.lead_id })
+                  }
+                />
+              ))}
+            </div>
+          )}
+        </div>
       )}
     </div>
   );
@@ -635,6 +998,15 @@ function InlineSelect({
 
 // ---- New Campaign modal ----
 
+const ALL_PRODUCTS = [
+  "Asterley Original",
+  "Schofield's",
+  "Rosé",
+  "Dispense",
+  "Estate",
+  "Britannica",
+];
+
 function NewCampaignModal({
   onClose,
   onCreated,
@@ -643,6 +1015,7 @@ function NewCampaignModal({
   onCreated: (campaign: Campaign) => void;
 }) {
   const [campaignType, setCampaignType] = useState("seasonal");
+  const [leadProduct, setLeadProduct] = useState("");
   const [showSuggest, setShowSuggest] = useState(false);
   const [extraContext, setExtraContext] = useState("");
   const createMutation = useCreateCampaign();
@@ -651,7 +1024,11 @@ function NewCampaignModal({
     toast.promise(
       new Promise<Campaign>((resolve, reject) => {
         createMutation.mutate(
-          { campaign_type: campaignType, extra_context: extraContext.trim() || undefined },
+          {
+            campaign_type: campaignType,
+            extra_context: extraContext.trim() || undefined,
+            lead_product: leadProduct || undefined,
+          },
           { onSuccess: resolve, onError: reject }
         );
       }),
@@ -686,6 +1063,19 @@ function NewCampaignModal({
         </select>
         {hint && <p className="mb-4 mt-1.5 text-xs text-muted-foreground">{hint}</p>}
 
+        <label className="mb-1 block text-xs font-medium text-muted-foreground">
+          Product focus
+          <span className="ml-1 font-normal text-muted-foreground/60">(optional — defaults to seasonal lead)</span>
+        </label>
+        <select
+          value={leadProduct}
+          onChange={(e) => setLeadProduct(e.target.value)}
+          className="mb-4 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+        >
+          <option value="">Auto (seasonal default)</option>
+          {ALL_PRODUCTS.map((p) => <option key={p} value={p}>{p}</option>)}
+        </select>
+
         <div className="mb-5">
           <button
             className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
@@ -718,6 +1108,124 @@ function NewCampaignModal({
         </div>
       </div>
     </div>
+  );
+}
+
+// ---- Draft card ----
+
+function DraftCard({
+  message,
+  onApprove,
+  onReject,
+}: {
+  message: OutreachMessage;
+  onApprove: () => void;
+  onReject: () => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const regenerateMutation = useRegenerateMessage();
+  const sendMutation = useSendMessage();
+
+  const statusColor =
+    message.status === "approved"
+      ? "border-emerald-500/30 text-emerald-400"
+      : message.status === "rejected"
+      ? "border-red-500/30 text-red-400"
+      : "border-border/50 text-muted-foreground";
+
+  function handleRegenerate() {
+    toast.promise(
+      regenerateMutation.mutateAsync({ id: message.id }),
+      {
+        loading: `Regenerating draft for ${message.business_name}…`,
+        success: "Draft regenerated",
+        error: "Failed to regenerate draft",
+      }
+    );
+  }
+
+  return (
+    <Card className="p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 mb-0.5">
+            <Mail className="h-3 w-3 shrink-0 text-muted-foreground" />
+            <p className="text-sm font-medium truncate">{message.business_name}</p>
+            <Badge variant="outline" className={`text-[9px] shrink-0 ${statusColor}`}>
+              {message.status}
+            </Badge>
+          </div>
+          {message.subject && (
+            <p className="text-xs text-muted-foreground truncate">{message.subject}</p>
+          )}
+          {message.scheduled_send_date && message.status !== "sent" && (
+            <p className="text-[11px] text-blue-400/80 mt-0.5 flex items-center gap-1">
+              <CalendarClock className="h-3 w-3" />
+              Scheduled {new Date(message.scheduled_send_date).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}
+            </p>
+          )}
+        </div>
+        <div className="flex items-center gap-1 shrink-0">
+          <button
+            onClick={handleRegenerate}
+            disabled={regenerateMutation.isPending}
+            title="Regenerate"
+            className="rounded p-1.5 text-muted-foreground hover:text-foreground hover:bg-accent transition-colors disabled:opacity-50"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${regenerateMutation.isPending ? "animate-spin" : ""}`} />
+          </button>
+          {message.status === "draft" && (
+            <>
+              <button
+                onClick={onApprove}
+                title="Approve"
+                className="rounded p-1.5 text-muted-foreground hover:text-emerald-400 hover:bg-emerald-500/10 transition-colors"
+              >
+                <ThumbsUp className="h-3.5 w-3.5" />
+              </button>
+              <button
+                onClick={onReject}
+                title="Reject"
+                className="rounded p-1.5 text-muted-foreground hover:text-red-400 hover:bg-red-500/10 transition-colors"
+              >
+                <ThumbsDown className="h-3.5 w-3.5" />
+              </button>
+            </>
+          )}
+          {message.status === "approved" && (
+            <button
+              onClick={() =>
+                toast.promise(sendMutation.mutateAsync(message.id), {
+                  loading: `Sending to ${message.business_name}…`,
+                  success: "Sent",
+                  error: "Failed to send",
+                })
+              }
+              disabled={sendMutation.isPending}
+              title="Send"
+              className="rounded p-1.5 text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors disabled:opacity-50"
+            >
+              {sendMutation.isPending ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Mail className="h-3.5 w-3.5" />
+              )}
+            </button>
+          )}
+          <button
+            onClick={() => setExpanded((v) => !v)}
+            className="rounded p-1.5 text-muted-foreground hover:text-foreground transition-colors text-xs"
+          >
+            {expanded ? "Hide" : "View"}
+          </button>
+        </div>
+      </div>
+      {expanded && (
+        <p className="mt-3 text-sm text-foreground/80 leading-relaxed whitespace-pre-line border-t border-border/40 pt-3">
+          {message.content}
+        </p>
+      )}
+    </Card>
   );
 }
 
