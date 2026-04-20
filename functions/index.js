@@ -3222,6 +3222,111 @@ export const scheduledSendFollowups = functions
   });
 
 /**
+ * Automatically sends approved campaign emails whose scheduled_send_date is due today.
+ * Campaign emails go to existing clients — no stage changes or follow-up card creation.
+ * Runs Mon-Fri at 9:05am London time (5 min offset from scheduledSendFollowups to avoid contention).
+ */
+export const scheduledSendCampaigns = functions
+  .runWith({ timeoutSeconds: 540, memory: "512MB", secrets: ["RESEND_API_KEY"] })
+  .pubsub.schedule("5 9 * * 1-5")
+  .timeZone("Europe/London")
+  .onRun(async () => {
+    const now = new Date();
+    const london = new Date(now.toLocaleString("en-US", { timeZone: "Europe/London" }));
+
+    if (isBlackoutDay(london)) {
+      console.log("Scheduled campaign send skipped: blackout day");
+      return null;
+    }
+
+    const apiKey = process.env.RESEND_API_KEY;
+    if (!apiKey) {
+      console.error("RESEND_API_KEY not configured");
+      return null;
+    }
+
+    const todayStr = london.toISOString().split("T")[0];
+
+    const todayMidnight = new Date(Date.UTC(london.getFullYear(), london.getMonth(), london.getDate()));
+    const sentTodaySnap = await db.collection("outreach_messages")
+      .where("status", "==", "sent")
+      .where("sent_at", ">=", todayMidnight.toISOString())
+      .get();
+
+    if (sentTodaySnap.size >= DAILY_CAP) {
+      console.log(`Campaign send skipped: daily cap of ${DAILY_CAP} reached`);
+      return null;
+    }
+
+    const remaining = DAILY_CAP - sentTodaySnap.size;
+
+    // Find approved campaign messages due today
+    const approvedSnap = await db.collection("outreach_messages")
+      .where("status", "==", "approved")
+      .where("channel", "==", "email")
+      .get();
+
+    const dueMessages = approvedSnap.docs
+      .map((d) => ({ id: d.id, ...d.data() }))
+      .filter((m) => m.campaign_id && m.scheduled_send_date && m.scheduled_send_date <= todayStr)
+      .slice(0, remaining);
+
+    if (!dueMessages.length) {
+      console.log("Scheduled campaign send: no due messages");
+      return null;
+    }
+
+    const resend = new Resend(apiKey);
+    let sent = 0;
+    let failed = 0;
+
+    for (const msg of dueMessages) {
+      try {
+        const leadSnap = await db.collection("leads").doc(msg.lead_id).get();
+        if (!leadSnap.exists) { failed++; continue; }
+
+        const lead = leadSnap.data();
+        const toEmail = lead.contact_email || lead.email;
+        if (!toEmail) {
+          console.error("No email for client", msg.lead_id, lead.business_name);
+          failed++;
+          continue;
+        }
+
+        const replyToAddress = `reply+${msg.lead_id}@${REPLY_DOMAIN}`;
+
+        const { data: resendData, error } = await resend.emails.send({
+          from: `${SENDER_NAME} <${SENDER_EMAIL}>`,
+          to: toEmail,
+          replyTo: replyToAddress,
+          subject: msg.subject || "Asterley Bros",
+          text: msg.content,
+          html: buildHtmlEmail(msg.content),
+        });
+
+        if (error) throw new Error(error.message);
+
+        const sentAt = new Date().toISOString();
+        await db.collection("outreach_messages").doc(msg.id).update({
+          status: "sent",
+          sent_at: sentAt,
+          reply_to_address: replyToAddress,
+          email_message_id: resendData?.id ?? null,
+        });
+
+        console.log(`Sent campaign email to ${lead.business_name} (${toEmail})`);
+        sent++;
+      } catch (err) {
+        console.error("Failed to send campaign email for", msg.lead_id, err.message);
+        failed++;
+      }
+    }
+
+    console.log("Scheduled campaign send complete:", JSON.stringify({ sent, failed, total: dueMessages.length }));
+    return null;
+  });
+
+/**
  * One-time migration — callable from admin UI.
  * Creates planned cards for existing sent emails that don't have a next-step card yet.
  * Safe to run multiple times (idempotent via duplicate check).
@@ -3727,10 +3832,10 @@ Output ONLY "Subject:" on the first line, then the full email body. Nothing else
  * Auto-generate a campaign brief based on type and current season.
  * No user input needed.
  */
-function buildCampaignBrief(campaignType) {
+function buildCampaignBrief(campaignType, overrideLeadProduct) {
   const season = getCurrentSeason();
   const seasonData = SEASONAL_PRODUCTS[season] || SEASONAL_PRODUCTS["Spring/Summer"];
-  const leadProduct = seasonData.lead[0];
+  const leadProduct = overrideLeadProduct || seasonData.lead[0];
   const leadServe = seasonData.serves[leadProduct] || "a seasonal serve";
   const hook = seasonData.hook;
 
@@ -3937,15 +4042,15 @@ export const createCampaign = functions
       throw new HttpsError("unauthenticated", "Must be signed in.");
     }
 
-    const { campaign_type, extra_context } = data;
+    const { campaign_type, extra_context, lead_product: requestedProduct } = data;
     if (!campaign_type) {
       throw new HttpsError("invalid-argument", "campaign_type required.");
     }
 
     const season = getCurrentSeason();
     const seasonData = SEASONAL_PRODUCTS[season] || SEASONAL_PRODUCTS["Spring/Summer"];
-    const leadProduct = seasonData.lead[0];
-    let brief = buildCampaignBrief(campaign_type);
+    const leadProduct = requestedProduct || seasonData.lead[0];
+    let brief = buildCampaignBrief(campaign_type, leadProduct);
     if (extra_context && extra_context.trim()) {
       brief += ` Additional context: ${extra_context.trim()}`;
     }
@@ -3977,10 +4082,22 @@ export const createCampaign = functions
 
     const timeframe = buildTimeframeSuggestion(campaign_type);
 
+    const CAMPAIGN_TYPE_LABELS = {
+      seasonal: "Seasonal Promo",
+      reorder: "Reorder Nudge",
+      new_product: "New Product Launch",
+      new_menu: "Menu Support",
+      event: "Event / Collab",
+    };
+    const typeLabel = CAMPAIGN_TYPE_LABELS[campaign_type] || campaign_type;
+    const monthYear = new Date().toLocaleString("en-GB", { month: "short", year: "numeric" });
+    const campaignName = `${season} ${typeLabel} – ${monthYear}`;
+
     const campaignId = crypto.randomUUID();
     const now = new Date().toISOString();
     const campaignData = {
       id: campaignId,
+      name: campaignName,
       campaign_type,
       season,
       lead_product: leadProduct,
@@ -4000,6 +4117,27 @@ export const createCampaign = functions
 
     await db.collection("campaigns").doc(campaignId).set(campaignData);
     return campaignData;
+  });
+
+export const regenerateCampaignBrief = functions
+  .runWith({ timeoutSeconds: 30, memory: "256MB" })
+  .https.onCall(async (data, context) => {
+    if (!context.auth) throw new HttpsError("unauthenticated", "Must be signed in.");
+    const { campaign_id } = data;
+    if (!campaign_id) throw new HttpsError("invalid-argument", "campaign_id required.");
+
+    const ref = db.collection("campaigns").doc(campaign_id);
+    const snap = await ref.get();
+    if (!snap.exists) throw new HttpsError("not-found", "Campaign not found.");
+
+    const campaign = snap.data();
+    let brief = buildCampaignBrief(campaign.campaign_type, campaign.lead_product);
+    if (campaign.extra_context && campaign.extra_context.trim()) {
+      brief += ` Additional context: ${campaign.extra_context.trim()}`;
+    }
+
+    await ref.update({ brief });
+    return { brief };
   });
 
 export const approveCampaign = functions
