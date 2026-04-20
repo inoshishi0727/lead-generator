@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { httpsCallable } from "firebase/functions";
 import { functions } from "@/lib/firebase";
 import { api } from "@/lib/api";
-import { getOutreachMessages, updateOutreachMessage, restoreOriginalEmail, getInboundReplies, deleteInboundReply, deleteOutreachMessage, getCampaigns } from "@/lib/firestore-api";
+import { getOutreachMessages, updateOutreachMessage, restoreOriginalEmail, getInboundReplies, deleteInboundReply, deleteOutreachMessage, getCampaigns, updateCampaign } from "@/lib/firestore-api";
 import type { OutreachMessage, InboundReply, Campaign } from "@/lib/types";
 
 const hasBackend = !!process.env.NEXT_PUBLIC_API_URL;
@@ -397,6 +397,35 @@ export function useCampaigns() {
   return useQuery({
     queryKey: ["campaigns"],
     queryFn: getCampaigns,
+  });
+}
+
+export function useUpdateCampaign() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, ...data }: { id: string } & Partial<Campaign>) => {
+      await updateCampaign(id, data);
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["campaigns"] });
+    },
+  });
+}
+
+export function useApproveCampaign() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (campaignId: string) => {
+      const fn = httpsCallable<{ campaign_id: string }, { status: string; approved_at: string }>(
+        functions,
+        "approveCampaign"
+      );
+      const result = await fn({ campaign_id: campaignId });
+      return result.data;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["campaigns"] });
+    },
   });
 }
 

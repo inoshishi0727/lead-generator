@@ -3736,18 +3736,54 @@ function buildCampaignBrief(campaignType) {
 
   switch (campaignType) {
     case "seasonal":
-      return `It's ${season}. Lead with ${leadProduct} — the seasonal hook is ${hook}. Suggest a ${leadServe} as the serve angle. Keep it timely and specific to this time of year.`;
+      return `Season: ${season}. Lead product: ${leadProduct}. Serve suggestion: ${leadServe}. Seasonal hook: ${hook}.
+
+This email should feel like a timely nudge from Rob, not a generic newsletter. Open with a brief nod to the season and why now is the right moment for ${leadProduct} — the ${hook} angle is what makes it timely. Offer a concrete serve idea the venue can use immediately (${leadServe}). Frame it as "here's what's working for other stockists right now" — not a pitch, but a useful heads-up from someone who knows their programme. The tone should be warm and specific to this venue's style. One serve suggestion, one clear ask (a call, a drop-in visit, or a quick reply).`;
+
     case "reorder":
-      return `Check in on stock levels and make it easy to reorder. Mention that ${hook} is coming up and it's worth topping up before demand picks up. Keep it low-pressure and practical.`;
+      return `Season: ${season}. Lead product: ${leadProduct}. Seasonal hook: ${hook}.
+
+This is a practical stock check-in timed to ${hook}. Rob knows this venue stocks Asterley products and wants to make sure they're not caught short before demand picks up. The email should feel low-pressure and helpful — not chasing a sale but flagging a genuine opportunity. Open with a warm acknowledgement of the relationship, then make the reorder easy: reference the timing (${hook} is coming), note that stock moves quickly this time of year, and give them a clear next step (reply to confirm, or Rob can arrange delivery directly). Keep it brief and practical — this is an admin-style outreach dressed up warmly.`;
+
     case "new_product":
-      return `Introduce ${leadProduct} to this client as an existing stockist getting early access — frame it as a favour, not a sales pitch. Suggest the ${leadServe} as a way to try it.`;
+      return `Season: ${season}. Lead product: ${leadProduct}. Serve suggestion: ${leadServe}.
+
+This client is getting early access to ${leadProduct} before it goes to new accounts — frame it as a favour, not a pitch. Rob is reaching out because this venue is a trusted stockist and he wanted them to see it first. The email should feel exclusive and personal: "wanted you to have a look before we go wider." Introduce the product briefly — what it is, what makes it different, and how it fits their programme. Suggest the ${leadServe} as a ready-made serve they can drop straight onto their menu or bar list. One clear ask: can they take a small allocation, or would they like to try it first?`;
+
     case "new_menu":
-      return `Offer to help them update their menu listing or develop a new serve around ${leadProduct}. The ${leadServe} is a good starting point. Position it as support for their upcoming ${hook} menu refresh.`;
+      return `Season: ${season}. Lead product: ${leadProduct}. Serve suggestion: ${leadServe}. Seasonal hook: ${hook}.
+
+Rob is reaching out to offer genuine menu support — not to push product, but to help this venue get more out of what they already stock. The ${hook} period is a natural moment for a menu refresh, and this email should position Rob as a useful resource. Offer to help develop a new serve around ${leadProduct}, update their existing listing, or suggest a seasonal special they can run for ${hook}. The ${leadServe} is a good concrete starting point to reference. Keep it collaborative and practical — Rob has done this for other stockists and it's worked well. The ask is light: a quick call or visit to talk through what would work for their menu.`;
+
     case "event":
-      return `Propose a collaboration, tasting event, or featured serve around ${leadProduct} tied to ${hook}. Keep the ask light — a pop-up, a tasting slot, or a special on their board.`;
+      return `Season: ${season}. Lead product: ${leadProduct}. Seasonal hook: ${hook}.
+
+Rob is proposing a collaboration tied to ${hook} — a tasting event, a pop-up, or a featured serve on their board. This should feel like an exciting opportunity, not a formal proposal. Open with the idea clearly: "we'd love to do something with you around ${hook}." Keep the ask flexible — a one-off tasting slot, a feature on their cocktail list for the season, or a small event Rob can support with product and presence. Reference ${leadProduct} as the focus and explain briefly why it fits the venue and the timing. One clear next step: can they get on a call to work out what would be feasible?`;
+
     default:
-      return `Seasonal check-in for ${hook}. Lead with ${leadProduct} and the ${leadServe} serve. Warm, short, personal.`;
+      return `Season: ${season}. Lead product: ${leadProduct}. Serve suggestion: ${leadServe}. Hook: ${hook}. Warm, direct seasonal check-in from Rob. Reference the timing, suggest a serve, one clear ask.`;
   }
+}
+
+function buildTimeframeSuggestion(campaignType) {
+  const now = new Date();
+  const startDate = new Date(now);
+  startDate.setDate(now.getDate() + 2); // Start in 2 days
+
+  const fmt = (d) => d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+
+  const durations = {
+    seasonal: 21,
+    reorder: 7,
+    new_product: 14,
+    new_menu: 21,
+    event: 42,
+  };
+  const days = durations[campaignType] || 14;
+  const endDate = new Date(startDate);
+  endDate.setDate(startDate.getDate() + days);
+
+  return `${fmt(startDate)} – ${fmt(endDate)}`;
 }
 
 /**
@@ -3939,6 +3975,8 @@ export const createCampaign = functions
       })
       .map((c) => c.id);
 
+    const timeframe = buildTimeframeSuggestion(campaign_type);
+
     const campaignId = crypto.randomUUID();
     const now = new Date().toISOString();
     const campaignData = {
@@ -3950,14 +3988,35 @@ export const createCampaign = functions
       hook: seasonData.hook,
       brief,
       extra_context: extra_context || null,
+      timeframe,
+      notes: null,
       recommended_lead_ids,
-      status: "active",
+      status: "draft",
       created_at: now,
       created_by: context.auth.uid,
+      approved_by: null,
+      approved_at: null,
     };
 
     await db.collection("campaigns").doc(campaignId).set(campaignData);
     return campaignData;
+  });
+
+export const approveCampaign = functions
+  .runWith({ timeoutSeconds: 30, memory: "256MB" })
+  .https.onCall(async (data, context) => {
+    if (!context.auth) throw new HttpsError("unauthenticated", "Must be signed in.");
+    const { campaign_id } = data;
+    if (!campaign_id) throw new HttpsError("invalid-argument", "campaign_id required.");
+
+    const ref = db.collection("campaigns").doc(campaign_id);
+    const snap = await ref.get();
+    if (!snap.exists) throw new HttpsError("not-found", "Campaign not found.");
+    if (snap.data().status !== "draft") throw new HttpsError("failed-precondition", "Campaign is not in draft status.");
+
+    const now = new Date().toISOString();
+    await ref.update({ status: "active", approved_by: context.auth.uid, approved_at: now });
+    return { status: "active", approved_at: now };
   });
 
 // ---- Prompt Rules Generation ----
