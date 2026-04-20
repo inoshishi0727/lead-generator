@@ -18,7 +18,7 @@ _client = None
 _init_attempted = False
 _init_lock = threading.Lock()
 
-_CONNECT_TIMEOUT = 5  # seconds
+_CONNECT_TIMEOUT = 15  # seconds — cold gRPC + JWT mint can take 3-10s on first call
 
 
 def _try_connect(result_holder: list, event: threading.Event):
