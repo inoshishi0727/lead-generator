@@ -143,6 +143,38 @@ scraping:
     max_profiles_per_hashtag: 20
     headless: false
 
+  linkedin:
+    enabled: true
+    headless: false
+    session_path: "data/linkedin_session.json"
+    max_employees_per_company: 100
+    max_companies_per_run: 10
+    max_companies_per_day: 30
+    scroll_pause_seconds: 3.0
+    max_scroll_rounds: 20
+    company_resolution_strategy: "auto_with_fallback"
+    abort_on_captcha: true
+    rescrape_after_days: 90
+    resolver_min_confidence: "medium"
+    resolver_results_to_consider: 5
+    decision_maker_keywords:
+      - owner
+      - founder
+      - director
+      - ceo
+      - md
+      - managing director
+      - general manager
+      - gm
+      - head of
+      - manager
+      - buyer
+      - procurement
+      - bar manager
+      - beverage
+      - sommelier
+      - drinks
+
   enrichment:
     enabled: true
     camoufox_timeout_seconds: 20
@@ -224,6 +256,7 @@ rate_limits:
   directory_rpm: 10
   industry_sites_rpm: 8
   instagram_rpm: 5
+  linkedin_rpm: 3
   gemini_rpm: 30
   resend_rpm: 10
   enrichment_rpm: 20

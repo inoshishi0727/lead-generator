@@ -95,6 +95,29 @@ class InstagramConfig(BaseModel):
     max_parallel_browsers: int = 2
 
 
+class LinkedInConfig(BaseModel):
+    enabled: bool = True
+    headless: bool = False
+    session_path: str = "data/linkedin_session.json"
+    max_employees_per_company: int = 100
+    max_companies_per_run: int = 10
+    max_companies_per_day: int = 30
+    scroll_pause_seconds: float = 3.0
+    max_scroll_rounds: int = 20
+    decision_maker_keywords: list[str] = [
+        "owner", "founder", "director", "ceo", "md", "managing director",
+        "general manager", "gm", "head of", "manager", "buyer", "procurement",
+        "bar manager", "beverage", "sommelier", "drinks",
+    ]
+    company_resolution_strategy: str = "auto_with_fallback"
+    abort_on_captcha: bool = True
+    rescrape_after_days: int = 90
+    # Gemini-agentic company resolver (reuses scraping.enrichment.gemini_model
+    # for the model; these two fields are the LinkedIn-specific resolver knobs).
+    resolver_min_confidence: str = "medium"   # "high" | "medium" | "low"
+    resolver_results_to_consider: int = 5
+
+
 class EmailExtractionConfig(BaseModel):
     gemini_enabled: bool = True
     gemini_max_text_chars: int = 8000
@@ -119,6 +142,7 @@ class ScrapingConfig(BaseModel):
     directory: DirectoryConfig = DirectoryConfig()
     industry_sites: IndustrySiteConfig = IndustrySiteConfig()
     instagram: InstagramConfig = InstagramConfig()
+    linkedin: LinkedInConfig = LinkedInConfig()
     email_extraction: EmailExtractionConfig = EmailExtractionConfig()
     enrichment: EnrichmentConfig = EnrichmentConfig()
 
@@ -177,6 +201,7 @@ class RateLimitsConfig(BaseModel):
     directory_rpm: int = 10
     industry_sites_rpm: int = 8
     instagram_rpm: int = 5
+    linkedin_rpm: int = 3
     gemini_rpm: int = 30
     resend_rpm: int = 10
     enrichment_rpm: int = 20

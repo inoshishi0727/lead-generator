@@ -284,3 +284,42 @@ class GenerateFollowupsStatusResponse(BaseModel):
     total: int = 0
     generated: int = 0
     failed: int = 0
+
+
+class LinkedInScrapeRequest(BaseModel):
+    lead_ids: Optional[list[str]] = None
+    auto_select_count: int = Field(
+        default=0, ge=0, le=50,
+        description="If lead_ids is empty, auto-pick N highest-score leads missing LinkedIn data",
+    )
+
+
+class LinkedInScrapeStatusResponse(BaseModel):
+    run_id: str
+    status: str  # pending | running | completed | failed
+    leads_processed: int = 0
+    employees_found: int = 0
+    decision_makers: int = 0
+    error: Optional[str] = None
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    current_lead: Optional[str] = None
+
+
+class LinkedInEmployeeResponse(BaseModel):
+    id: str
+    lead_id: str
+    name: str
+    profile_url: str
+    profile_slug: str
+    profile_image_url: Optional[str] = None
+    title: Optional[str] = None
+    role_seniority: Optional[str] = None
+    is_decision_maker: bool = False
+    location: Optional[str] = None
+    connection_degree: Optional[str] = None
+    confidence: str = "high"
+    scraped_at: Optional[datetime] = None
+    last_seen_at: Optional[datetime] = None
+    promoted_to_outreach: bool = False
+    notes: Optional[str] = None
