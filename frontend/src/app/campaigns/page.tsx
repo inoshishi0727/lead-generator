@@ -300,7 +300,7 @@ function CampaignCard({ campaign, onClick }: { campaign: Campaign; onClick: () =
 
 // ---- Campaign detail view ----
 
-type EditableField = "brief" | "type" | "timeframe" | "notes" | "name" | "send_date" | null;
+type EditableField = "brief" | "type" | "timeframe" | "notes" | "name" | "send_date" | "product" | null;
 
 function CampaignDetailView({
   campaign,
@@ -318,6 +318,7 @@ function CampaignDetailView({
   const [draftName, setDraftName] = useState(campaign.name ?? "");
   const [draftBrief, setDraftBrief] = useState(campaign.brief);
   const [draftType, setDraftType] = useState(campaign.campaign_type);
+  const [draftProduct, setDraftProduct] = useState(campaign.lead_product);
   const [draftTimeframe, setDraftTimeframe] = useState(campaign.timeframe ?? "");
   const [draftNotes, setDraftNotes] = useState(campaign.notes ?? "");
   const [sendDate, setSendDate] = useState(campaign.send_date ?? "");
@@ -391,6 +392,7 @@ function CampaignDetailView({
     if (field === "name") updates.name = trimmed || campaign.name;
     if (field === "brief") updates.brief = trimmed;
     if (field === "type") updates.campaign_type = trimmed;
+    if (field === "product") updates.lead_product = trimmed || campaign.lead_product;
     if (field === "timeframe") updates.timeframe = trimmed || null;
     if (field === "notes") updates.notes = trimmed || null;
     if (field === "send_date") updates.send_date = trimmed || null;
@@ -554,8 +556,23 @@ function CampaignDetailView({
         </DetailRow>
 
         {/* Lead product + serve */}
-        <DetailRow label="Product focus">
-          <span className="text-sm">{campaign.lead_product} — {campaign.serve}</span>
+        <DetailRow
+          label="Product focus"
+          editing={editing === "product"}
+          onEdit={() => { setEditing("product"); setDraftProduct(campaign.lead_product); }}
+        >
+          {editing === "product" ? (
+            <InlineSelect
+              value={draftProduct}
+              options={ALL_PRODUCTS.map((p) => ({ value: p, label: p }))}
+              onChange={setDraftProduct}
+              onSave={() => saveField("product", draftProduct)}
+              onCancel={() => { setEditing(null); setDraftProduct(campaign.lead_product); }}
+              saving={updateMutation.isPending}
+            />
+          ) : (
+            <span className="text-sm">{campaign.lead_product} — {campaign.serve}</span>
+          )}
         </DetailRow>
 
         {/* Hook */}
