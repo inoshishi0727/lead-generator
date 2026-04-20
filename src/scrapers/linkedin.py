@@ -6,11 +6,11 @@ Gemini to identify which profiles are actually current or past employees.
 No company-page lookup — many small venues don't have one, and People in
 the All-tab surface employees directly via their job titles.
 
-Auth uses Playwright storage_state — no stored credentials. Bootstrap via:
-    python -m src.scrapers.linkedin --save-session
-which opens a browser for manual login, then dumps cookies/localStorage to
-data/linkedin_session.json. Future runs load that file and skip login.
-When the session expires, re-run --save-session.
+Auth uses a persistent browser profile at data/linkedin_browser_profile/
+(cloakbrowser `launch_persistent_context_async`). The first save-session
+logs in; every subsequent run reopens the same profile and stays logged in.
+The profile stores cookies + localStorage + fingerprint data, so LinkedIn
+sees the same "device" across runs and doesn't revoke the session.
 
 CLI:
     python -m src.scrapers.linkedin --save-session
@@ -62,17 +62,21 @@ ALL_TAB_SEARCH_URL_TEMPLATE = (
 )
 
 # Gemini filter — small task, small budget. Not config knobs.
-FILTER_MAX_TOKENS = 1200
+# Budget sized to comfortably fit a structured JSON response for ~25 candidates
+# even if the 2.5 thinking-models eat some headroom before answering.
+FILTER_MAX_TOKENS = 4000
 FILTER_TEMPERATURE = 0.1
 _CONFIDENCE_RANK = {"none": 0, "low": 1, "medium": 2, "high": 3}
 
-# Fallback model chain. If the configured `gemini_model` returns 5xx after
-# the in-built retry loop, we cycle through these in order. Different models
-# often run on different infrastructure so one being overloaded doesn't
-# necessarily mean the next is too.
+# Fallback chain. If the configured `gemini_model` returns 5xx after the
+# in-built retry loop, we cycle through these. Different models run on
+# different infrastructure so one being overloaded doesn't necessarily
+# mean the next is too. `gemini-flash-latest` is an alias to the current
+# stable flash model and is less likely to be congested than a specific
+# version string.
 FALLBACK_MODELS = [
     "gemini-2.5-flash-lite",
-    "gemini-2.0-flash",
+    "gemini-flash-latest",
     "gemini-2.5-pro",
 ]
 
@@ -138,6 +142,11 @@ class LinkedInCompanyScraper(BaseScraper):
     ) -> None:
         super().__init__(config)
         self.linkedin_config = self.config.scraping.linkedin
+        # Persistent browser profile directory — stores cookies, localStorage,
+        # cache, and fingerprint-relevant state so LinkedIn sees the same
+        # device across runs. Replaces the old storage_state JSON approach.
+        self.profile_dir = Path("data/linkedin_browser_profile")
+        # Kept for backwards-compat with older code paths / log messages.
         self.session_path = Path(self.linkedin_config.session_path)
         self.lead_ids = lead_ids or []
         self.auto_select_count = auto_select_count
@@ -163,7 +172,8 @@ class LinkedInCompanyScraper(BaseScraper):
         return self.linkedin_config.max_companies_per_day
 
     def _sticky_id_path(self) -> Path:
-        return self.session_path.with_name("linkedin_proxy_sticky_id.txt")
+        # Co-locate with the profile dir's parent so cleanup is straightforward.
+        return Path("data/linkedin_proxy_sticky_id.txt")
 
     def _load_or_create_sticky_id(self, create_if_missing: bool) -> str | None:
         """Return a stable sticky proxy-session ID, persisting it next to the
@@ -187,51 +197,98 @@ class LinkedInCompanyScraper(BaseScraper):
 
     # ---------------------------------------------------------------- session
 
-    async def save_session(self) -> None:
-        """Open a real browser for manual login, then persist storage_state.
+    async def _launch_persistent_browser(self, headless: bool = False) -> Any:
+        """Open a cloakbrowser persistent context for LinkedIn.
 
-        Creates a sticky proxy session ID on first run so subsequent scrapes
-        land on the same exit IP and LinkedIn doesn't invalidate the session.
+        Persistent profile = stable fingerprint + cookies survive across runs.
+        LinkedIn sees one consistent device instead of a fresh browser each
+        launch, which prevents the session-revocation we hit with the old
+        ephemeral + storage_state approach.
+        """
+        from cloakbrowser import launch_persistent_context_async
+        from src.scrapers.browser import get_proxy_config, get_sticky_proxy_config
+
+        self.profile_dir.mkdir(parents=True, exist_ok=True)
+
+        proxy: dict | None = None
+        if not self.no_proxy:
+            if self.sticky_proxy:
+                sticky_id = self._load_or_create_sticky_id(create_if_missing=True)
+                proxy = get_sticky_proxy_config(sticky_id) if sticky_id else get_proxy_config()
+            else:
+                proxy = get_proxy_config()
+
+        kwargs: dict = {
+            "user_data_dir": str(self.profile_dir),
+            "headless": headless,
+            "locale": "en-GB",
+            "timezone": "Europe/London",
+            "viewport": {"width": 1280, "height": 720},
+        }
+        if proxy:
+            kwargs["proxy"] = proxy
+            kwargs["geoip"] = True
+
+        self._context = await launch_persistent_context_async(**kwargs)
+        self._browser_engine = "cloakbrowser_persistent"
+        self._browser = None  # persistent context has no separate browser handle
+        log.info(
+            "linkedin_persistent_browser_ready",
+            profile_dir=str(self.profile_dir),
+            proxy_at_launch=bool(proxy),
+        )
+        return self._context
+
+    async def _close_persistent_browser(self) -> None:
+        if self._context is not None:
+            try:
+                await self._context.close()
+            except Exception:
+                pass
+            self._context = None
+            log.info("linkedin_persistent_browser_closed")
+
+    async def save_session(self) -> None:
+        """Open the persistent profile for manual login. State auto-persists.
+
+        After the user completes login, cookies/localStorage/fingerprint are
+        already written to the profile directory. Subsequent scrape runs
+        reopen the same profile and are still logged in.
         """
         if self.no_proxy:
-            log.warning(
+            log.info(
                 "linkedin_session_save_without_proxy",
                 msg=(
-                    "Saving session without proxy. Future scrapes must also run "
-                    "without proxy (or from the same IP) — LinkedIn will invalidate "
-                    "a session seen from a very different origin."
+                    "Saving profile without proxy — future scrapes must also "
+                    "run with --no-proxy (or from a consistent IP)."
                 ),
             )
-            sticky_id = None
-        elif self.sticky_proxy:
-            sticky_id = self._load_or_create_sticky_id(create_if_missing=True)
-        else:
-            sticky_id = None
 
-        ctx = await self._launch_browser(
-            headless=False,
-            use_proxy=not self.no_proxy,
-            sticky_session_id=sticky_id,
-        )
-        page = await ctx.new_page()
+        await self._launch_persistent_browser(headless=False)
+        ctx = self._context
+        assert ctx is not None
+
+        # Use any open page if present; otherwise create one. Persistent
+        # contexts sometimes auto-open an initial about:blank tab.
+        page = ctx.pages[0] if ctx.pages else await ctx.new_page()
         await page.goto("https://www.linkedin.com/login", wait_until="domcontentloaded")
         log.info(
             "linkedin_session_bootstrap",
             msg="Log in manually. When you land on /feed/, press ENTER in the terminal.",
         )
-        # Block here until the user confirms login is complete.
         await asyncio.get_event_loop().run_in_executor(
             None, input, "Press ENTER once you are logged in and can see /feed/... "
         )
-        self.session_path.parent.mkdir(parents=True, exist_ok=True)
-        await ctx.storage_state(path=str(self.session_path))
-        log.info("linkedin_session_saved", path=str(self.session_path))
-        await self._close_browser()
+        log.info("linkedin_session_saved", profile_dir=str(self.profile_dir))
+        await self._close_persistent_browser()
 
     def _ensure_session_exists(self) -> None:
-        if not self.session_path.exists():
+        # A populated profile dir means a previous save-session completed.
+        # We check for the presence of any file inside the dir (Firefox profile
+        # writes a `prefs.js`, cookies DB, etc. on first run).
+        if not self.profile_dir.exists() or not any(self.profile_dir.iterdir()):
             raise LinkedInSessionExpired(
-                f"No LinkedIn session at {self.session_path}. "
+                f"No LinkedIn profile at {self.profile_dir}. "
                 "Run: python -m src.scrapers.linkedin --save-session"
             )
 
@@ -426,18 +483,32 @@ class LinkedInCompanyScraper(BaseScraper):
 
         for attempt_idx, model in enumerate(model_chain):
             try:
+                # thinking_budget=0 disables "thinking" on flash models so
+                # the whole max_output_tokens budget goes to the JSON reply
+                # (this task is structured classification — no deep reasoning
+                # needed). Pro models reject budget=0; leave thinking on.
+                gen_config: dict = {
+                    "max_output_tokens": FILTER_MAX_TOKENS,
+                    "temperature": FILTER_TEMPERATURE,
+                    "response_mime_type": "application/json",
+                }
+                if "pro" not in model:
+                    gen_config["thinking_config"] = {"thinking_budget": 0}
                 response = call_gemini_with_retry(
                     client,
                     model=model,
                     contents=prompt,
-                    config={
-                        "max_output_tokens": FILTER_MAX_TOKENS,
-                        "temperature": FILTER_TEMPERATURE,
-                        "response_mime_type": "application/json",
-                    },
+                    config=gen_config,
                 )
                 raw_text = response.text or ""
                 used_model = model
+                if not raw_text:
+                    log.warning(
+                        "linkedin_filter_empty_response",
+                        model=model,
+                    )
+                    last_error = RuntimeError("empty response")
+                    continue
                 if attempt_idx > 0:
                     log.info(
                         "linkedin_filter_fallback_ok",
@@ -454,12 +525,21 @@ class LinkedInCompanyScraper(BaseScraper):
                 )
                 last_error = exc
                 continue
+            except genai_errors.ClientError as exc:
+                # 4xx from a specific model (404 unknown model, 400 bad
+                # config, etc.) is often model-specific — log and try next.
+                log.warning(
+                    "linkedin_filter_model_client_error",
+                    model=model,
+                    error=str(exc)[:160],
+                )
+                last_error = exc
+                continue
             except Exception as exc:
-                # Non-5xx errors (auth, bad request, etc.) won't be fixed by
-                # swapping model — stop the chain.
+                # Truly unexpected errors — network, SDK bugs. Try next.
                 log.warning("linkedin_filter_gemini_error", model=model, error=str(exc))
                 last_error = exc
-                break
+                continue
 
         if not raw_text:
             log.warning(
@@ -641,26 +721,9 @@ class LinkedInCompanyScraper(BaseScraper):
             dry_run=self.dry_run,
         )
 
-        sticky_id = None
-        if not self.no_proxy and self.sticky_proxy:
-            sticky_id = self._load_or_create_sticky_id(create_if_missing=False)
-            if sticky_id is None:
-                log.warning(
-                    "linkedin_no_sticky_id",
-                    msg=(
-                        "No sticky proxy session ID found. Run --save-session "
-                        "with --sticky-proxy first so login and scrapes share "
-                        "the same exit IP."
-                    ),
-                )
-
-        ctx = await self._launch_browser(
-            headless=False,
-            storage_state=str(self.session_path),
-            use_proxy=not self.no_proxy,
-            sticky_session_id=sticky_id,
-        )
-        page = await ctx.new_page()
+        ctx = await self._launch_persistent_browser(headless=False)
+        # Reuse any initial tab the persistent context opens; otherwise create one.
+        page = ctx.pages[0] if ctx.pages else await ctx.new_page()
 
         await self._verify_session_valid(page)
 
@@ -735,7 +798,11 @@ class LinkedInCompanyScraper(BaseScraper):
             self._emit_progress(idx, total_targets, business_name, per_lead_status, per_lead_employees)
             await self._rate_limit(self.config.rate_limits.linkedin_rpm)
 
-        await page.close()
+        try:
+            await page.close()
+        except Exception:
+            pass
+        await self._close_persistent_browser()
         log.info(
             "linkedin_scrape_done",
             leads_processed=len(self.collected_leads),
