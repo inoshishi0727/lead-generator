@@ -3724,8 +3724,36 @@ NO send window rules apply (you can email clients any day).
 Output ONLY "Subject:" on the first line, then the full email body. Nothing else.`;
 
 /**
+ * Auto-generate a campaign brief based on type and current season.
+ * No user input needed.
+ */
+function buildCampaignBrief(campaignType) {
+  const season = getCurrentSeason();
+  const seasonData = SEASONAL_PRODUCTS[season] || SEASONAL_PRODUCTS["Spring/Summer"];
+  const leadProduct = seasonData.lead[0];
+  const leadServe = seasonData.serves[leadProduct] || "a seasonal serve";
+  const hook = seasonData.hook;
+
+  switch (campaignType) {
+    case "seasonal":
+      return `It's ${season}. Lead with ${leadProduct} — the seasonal hook is ${hook}. Suggest a ${leadServe} as the serve angle. Keep it timely and specific to this time of year.`;
+    case "reorder":
+      return `Check in on stock levels and make it easy to reorder. Mention that ${hook} is coming up and it's worth topping up before demand picks up. Keep it low-pressure and practical.`;
+    case "new_product":
+      return `Introduce ${leadProduct} to this client as an existing stockist getting early access — frame it as a favour, not a sales pitch. Suggest the ${leadServe} as a way to try it.`;
+    case "new_menu":
+      return `Offer to help them update their menu listing or develop a new serve around ${leadProduct}. The ${leadServe} is a good starting point. Position it as support for their upcoming ${hook} menu refresh.`;
+    case "event":
+      return `Propose a collaboration, tasting event, or featured serve around ${leadProduct} tied to ${hook}. Keep the ask light — a pop-up, a tasting slot, or a special on their board.`;
+    default:
+      return `Seasonal check-in for ${hook}. Lead with ${leadProduct} and the ${leadServe} serve. Warm, short, personal.`;
+  }
+}
+
+/**
  * Generate client campaign drafts for selected clients.
- * Called from frontend: generateClientDrafts({ lead_ids, campaign_type, campaign_brief })
+ * Called from frontend: generateClientDrafts({ lead_ids, campaign_type })
+ * Campaign brief is auto-generated based on type and current season.
  */
 export const generateClientDrafts = functions
   .runWith({ timeoutSeconds: 300, memory: "512MB", secrets: ["ANTHROPIC_API_KEY"] })
@@ -3739,12 +3767,26 @@ export const generateClientDrafts = functions
       throw new HttpsError("failed-precondition", "ANTHROPIC_API_KEY not configured.");
     }
 
-    const { lead_ids, campaign_type, campaign_brief } = data;
+    const { lead_ids, campaign_type, campaign_id } = data;
     if (!lead_ids || !Array.isArray(lead_ids) || lead_ids.length === 0) {
       throw new HttpsError("invalid-argument", "lead_ids required.");
     }
-    if (!campaign_type || !campaign_brief) {
-      throw new HttpsError("invalid-argument", "campaign_type and campaign_brief required.");
+    if (!campaign_type && !campaign_id) {
+      throw new HttpsError("invalid-argument", "campaign_type or campaign_id required.");
+    }
+
+    let campaign_brief;
+    let resolved_campaign_type = campaign_type;
+    if (campaign_id) {
+      const campaignSnap = await db.collection("campaigns").doc(campaign_id).get();
+      if (!campaignSnap.exists) {
+        throw new HttpsError("not-found", "Campaign not found.");
+      }
+      const campaignDoc = campaignSnap.data();
+      campaign_brief = campaignDoc.brief;
+      resolved_campaign_type = campaignDoc.campaign_type;
+    } else {
+      campaign_brief = buildCampaignBrief(campaign_type);
     }
 
     const anthropic = new Anthropic({ apiKey });
@@ -3778,7 +3820,7 @@ export const generateClientDrafts = functions
 - Drinks programme: ${enrichment.drinks_programme || "not available"}
 - Context notes: ${enrichment.context_notes || "none"}
 
-CAMPAIGN TYPE: ${campaign_type}
+CAMPAIGN TYPE: ${resolved_campaign_type}
 CAMPAIGN BRIEF: ${campaign_brief}
 
 SEASON: ${season}
@@ -3817,7 +3859,8 @@ Write a client retention email for this stockist based on the campaign brief abo
           content,
           status: "draft",
           step_number: 1,
-          follow_up_label: campaign_type,
+          follow_up_label: resolved_campaign_type,
+          campaign_id: campaign_id || null,
           scheduled_send_date: null,
           created_at: new Date().toISOString(),
           tone_tier: enrichment.tone_tier || null,
@@ -3843,6 +3886,78 @@ Write a client retention email for this stockist based on the campaign brief abo
     }
 
     return { generated, failed, total: docs.length };
+  });
+
+// ---- Campaign Management ----
+
+/**
+ * Create a campaign, auto-generate the brief, and score clients for recommendations.
+ * Called from frontend: createCampaign({ campaign_type, extra_context? })
+ */
+export const createCampaign = functions
+  .runWith({ timeoutSeconds: 60, memory: "256MB" })
+  .https.onCall(async (data, context) => {
+    if (!context.auth) {
+      throw new HttpsError("unauthenticated", "Must be signed in.");
+    }
+
+    const { campaign_type, extra_context } = data;
+    if (!campaign_type) {
+      throw new HttpsError("invalid-argument", "campaign_type required.");
+    }
+
+    const season = getCurrentSeason();
+    const seasonData = SEASONAL_PRODUCTS[season] || SEASONAL_PRODUCTS["Spring/Summer"];
+    const leadProduct = seasonData.lead[0];
+    let brief = buildCampaignBrief(campaign_type);
+    if (extra_context && extra_context.trim()) {
+      brief += ` Additional context: ${extra_context.trim()}`;
+    }
+
+    // Fetch all clients (stage: client or converted)
+    const [clientSnaps, convertedSnaps] = await Promise.all([
+      db.collection("leads").where("stage", "==", "client").get(),
+      db.collection("leads").where("stage", "==", "converted").get(),
+    ]);
+
+    const seenIds = new Set();
+    const clients = [];
+    for (const snap of [...clientSnaps.docs, ...convertedSnaps.docs]) {
+      if (!seenIds.has(snap.id)) {
+        seenIds.add(snap.id);
+        clients.push({ id: snap.id, ...snap.data() });
+      }
+    }
+
+    // Score each client: recommended if their venue category stocks the campaign's lead product
+    const recommended_lead_ids = clients
+      .filter((client) => {
+        const enrichment = client.enrichment || {};
+        const venueCat = enrichment.venue_category || client.category || "cocktail_bar";
+        const venueConfig = VENUE_PRODUCT_MAP[venueCat] || VENUE_PRODUCT_MAP.cocktail_bar;
+        return venueConfig.products.includes(leadProduct);
+      })
+      .map((c) => c.id);
+
+    const campaignId = crypto.randomUUID();
+    const now = new Date().toISOString();
+    const campaignData = {
+      id: campaignId,
+      campaign_type,
+      season,
+      lead_product: leadProduct,
+      serve: seasonData.serves[leadProduct] || "a seasonal serve",
+      hook: seasonData.hook,
+      brief,
+      extra_context: extra_context || null,
+      recommended_lead_ids,
+      status: "active",
+      created_at: now,
+      created_by: context.auth.uid,
+    };
+
+    await db.collection("campaigns").doc(campaignId).set(campaignData);
+    return campaignData;
   });
 
 // ---- Prompt Rules Generation ----

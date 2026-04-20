@@ -17,7 +17,7 @@ import {
   onSnapshot,
 } from "firebase/firestore";
 import { db } from "./firebase";
-import type { Lead, LeadDetail, OutreachMessage, InboundReply, EditFeedback, ReflectionCategory } from "./types";
+import type { Lead, LeadDetail, OutreachMessage, InboundReply, EditFeedback, ReflectionCategory, Campaign } from "./types";
 
 // --- Leads ---
 
@@ -563,6 +563,15 @@ export async function getClients(): Promise<Lead[]> {
     }
   }
   return merged.sort((a, b) => a.business_name.localeCompare(b.business_name));
+}
+
+// --- Campaigns ---
+
+export async function getCampaigns(): Promise<Campaign[]> {
+  const ref = collection(db, "campaigns");
+  const q = query(ref, orderBy("created_at", "desc"), fbLimit(50));
+  const snap = await getDocs(q);
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() } as Campaign));
 }
 
 export async function restoreOriginalEmail(messageId: string): Promise<void> {

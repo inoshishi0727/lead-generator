@@ -96,6 +96,21 @@ export interface LeadDetail extends Lead {
 
 // --- Outreach ---
 
+export interface Campaign {
+  id: string;
+  campaign_type: string;
+  season: string;
+  lead_product: string;
+  serve: string;
+  hook: string;
+  brief: string;
+  extra_context: string | null;
+  recommended_lead_ids: string[];
+  status: "active" | "completed";
+  created_at: string;
+  created_by: string;
+}
+
 export interface OutreachMessage {
   id: string;
   lead_id: string;
