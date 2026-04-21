@@ -524,6 +524,20 @@ function isSnoozedOrExcluded(doc) {
   return false;
 }
 
+// A lead can have at most one "live" email per step_number at a time —
+// live = draft or approved. Sent messages are past this stage and don't block
+// a fresh outreach at the same step (e.g., rerunning after a send was cleared).
+function buildLiveEmailKeySet(messages) {
+  const keys = new Set();
+  for (const m of messages) {
+    if (m.channel !== "email") continue;
+    if (m.status !== "draft" && m.status !== "approved") continue;
+    const step = m.step_number ?? 1;
+    keys.add(`${m.lead_id}:${step}`);
+  }
+  return keys;
+}
+
 // ---- Cloud Functions ----
 
 /**
@@ -549,6 +563,11 @@ export const generateDrafts = functions
     const anthropic = new Anthropic({ apiKey });
     const leadIds = data?.lead_ids || null;
 
+    // Build live-email key set once so we can enforce the "one live email per
+    // (lead, step)" rule whether the caller passed specific lead_ids or not.
+    const msgsSnap = await db.collection("outreach_messages").get();
+    const liveKeys = buildLiveEmailKeySet(msgsSnap.docs.map((d) => d.data()));
+
     let docs;
     if (leadIds && leadIds.length > 0) {
       // Specific leads
@@ -560,15 +579,11 @@ export const generateDrafts = functions
       const leadsSnap = await db.collection("leads").get();
       const allDocs = leadsSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
 
-      // Get existing drafts
-      const msgsSnap = await db.collection("outreach_messages").get();
-      const leadsWithDrafts = new Set(msgsSnap.docs.map((d) => d.data().lead_id));
-
       docs = allDocs.filter(
         (d) =>
           d.email &&
           hasEnrichment(d) &&
-          !leadsWithDrafts.has(d.id) &&
+          !liveKeys.has(`${d.id}:1`) &&
           !isSnoozedOrExcluded(d)
       );
     }
@@ -583,8 +598,15 @@ export const generateDrafts = functions
 
     let generated = 0;
     let failed = 0;
+    let skipped = 0;
 
     for (const leadDoc of docs) {
+      // Re-check singleton for the explicit lead_ids path (the bulk path already
+      // filtered by liveKeys, but explicit callers bypass that filter).
+      if (liveKeys.has(`${leadDoc.id}:1`)) {
+        skipped++;
+        continue;
+      }
       try {
         const enrichment = leadDoc.enrichment || {};
         const venueCat = enrichment.venue_category || leadDoc.category || "cocktail_bar";
@@ -659,7 +681,7 @@ export const generateDrafts = functions
       }
     }
 
-    return { generated, failed, total: docs.length };
+    return { generated, failed, skipped, total: docs.length };
   });
 
 /**
@@ -2760,6 +2782,18 @@ async function runFollowUpGeneration() {
 
       const { nextStepNumber, followUpLabel, scheduledSendDate } = result;
 
+      // Singleton check: skip if a live email already exists at the target step.
+      const existingAtStep = leadMessages.find(
+        (m) => m.channel === "email" &&
+          (m.step_number ?? 1) === nextStepNumber &&
+          (m.status === "draft" || m.status === "approved")
+      );
+      if (existingAtStep) {
+        console.log(`SKIP [${lead.business_name}]: live email already exists at step ${nextStepNumber}`);
+        skipped++;
+        continue;
+      }
+
       // Find previous subject and message ID for email threading
       const sentMessages2 = leadMessages.filter((m) => m.status === "sent").sort((a, b) => (a.step_number ?? 1) - (b.step_number ?? 1));
       const initialMessage = sentMessages2[0]; // First sent message (step 1)
@@ -4357,10 +4391,22 @@ export const generateClientDrafts = functions
     const snaps = await Promise.all(promises);
     const docs = snaps.filter((s) => s.exists).map((s) => ({ id: s.id, ...s.data() }));
 
+    // Enforce "one live email per (lead, step 1)" — skip leads that already
+    // have a draft or approved step-1 email (regardless of campaign) so a
+    // campaign run cannot create a duplicate alongside an existing outreach.
+    const msgsSnap = await db.collection("outreach_messages").get();
+    const liveKeys = buildLiveEmailKeySet(msgsSnap.docs.map((d) => d.data()));
+
     let generated = 0;
     let failed = 0;
+    let skipped = 0;
 
     for (const leadDoc of docs) {
+      if (liveKeys.has(`${leadDoc.id}:1`)) {
+        console.log(`SKIP client draft [${leadDoc.business_name}]: already has live email`);
+        skipped++;
+        continue;
+      }
       try {
         const enrichment = leadDoc.enrichment || {};
         const contact = enrichment.contact || {};
@@ -4447,6 +4493,9 @@ Write the email following the campaign personality instructions. Use the client 
           is_client_campaign: true,
         });
 
+        // Mark this lead's step-1 slot as taken so a duplicate entry in the
+        // same lead_ids batch doesn't also generate.
+        liveKeys.add(`${leadDoc.id}:1`);
         generated++;
       } catch (err) {
         console.error("Client draft failed for", leadDoc.business_name, err.message);
@@ -4454,7 +4503,7 @@ Write the email following the campaign personality instructions. Use the client 
       }
     }
 
-    return { generated, failed, total: docs.length };
+    return { generated, failed, skipped, total: docs.length };
   });
 
 // ---- Campaign Management ----
