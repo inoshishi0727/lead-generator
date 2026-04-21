@@ -38,7 +38,9 @@ import {
   useDeleteReply,
   useGenerateFollowupForLead,
   useMessages,
+  DuplicateLiveOutreachError,
 } from "@/hooks/use-outreach";
+import { toast } from "sonner";
 import { useGeneratingLeadId } from "@/hooks/use-live-updates";
 import { useAuth } from "@/lib/auth-context";
 import { useLeadDetail } from "@/hooks/use-lead-detail";
@@ -47,6 +49,7 @@ interface Props {
   message: OutreachMessage;
   inConversation?: boolean;
   emailCapReached?: boolean;
+  isDuplicate?: boolean;
 }
 
 const statusColors: Record<string, string> = {
@@ -90,7 +93,7 @@ function rejectionLabel(reason: string): string {
   return REJECTION_LABELS[reason] ?? "rejected";
 }
 
-export function MessageCard({ message, inConversation, emailCapReached }: Props) {
+export function MessageCard({ message, inConversation, emailCapReached, isDuplicate }: Props) {
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [threadOpen, setThreadOpen] = useState(inConversation && !!message.has_reply);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -150,9 +153,24 @@ export function MessageCard({ message, inConversation, emailCapReached }: Props)
   function handleApprove() {
     if (emailCapReached && message.channel === "email") return;
     setActiveAction("approve");
-    updateMutation.mutate({ id: message.id, status: "approved" }, {
-      onSettled: () => setActiveAction(null),
-    });
+    updateMutation.mutate(
+      {
+        id: message.id,
+        status: "approved",
+        lead_id: message.lead_id,
+        step_number: message.step_number,
+        channel: message.channel,
+        business_name: message.business_name,
+      },
+      {
+        onError: (err) => {
+          if (err instanceof DuplicateLiveOutreachError) {
+            toast.warning(`${err.businessName} already has a live email outreach — unapprove it first.`);
+          }
+        },
+        onSettled: () => setActiveAction(null),
+      }
+    );
   }
 
   function handleReject() {
@@ -285,6 +303,15 @@ export function MessageCard({ message, inConversation, emailCapReached }: Props)
             <ChannelIcon className="h-3 w-3" />
             {message.channel === "email" ? "Email" : "DM"}
           </Badge>
+          {isDuplicate && (
+            <Badge
+              variant="outline"
+              className="bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300 border-red-300 dark:border-red-700"
+              title="Another live email outreach exists for this lead — unapprove or reject one to clear the duplicate."
+            >
+              Duplicate
+            </Badge>
+          )}
           {message.venue_category && (
             <Badge variant="secondary" className="capitalize">
               {message.venue_category.replace(/_/g, " ")}

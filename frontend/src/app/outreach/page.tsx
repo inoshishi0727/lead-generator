@@ -29,6 +29,7 @@ import {
 import { getOutreachMessages } from "@/lib/firestore-api";
 import { EditReflectionBanner } from "@/components/edit-reflection-banner";
 import { ThreadCard } from "@/components/thread-card";
+import { toast } from "sonner";
 
 const STATUS_FILTERS = ["draft", "approved", "scheduled", "sent", "conversations", "rejected", "follow-ups", "clients", "all"] as const;
 
@@ -141,6 +142,31 @@ export default function OutreachPage() {
   const { data: approvedEmailCount = 0 } = useApprovedEmailCount();
   const emailCapReached = approvedEmailCount >= 20;
 
+  // A lead/step should have at most one live email (draft or approved). When
+  // two or more appear in the current view, mark every offending row so the
+  // user can resolve the collision manually.
+  const duplicateIds = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const m of messages ?? []) {
+      if (m.channel !== "email") continue;
+      if (m.status !== "draft" && m.status !== "approved") continue;
+      const key = `${m.lead_id}:${m.step_number ?? 1}`;
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    const dupKeys = new Set<string>();
+    for (const [key, count] of counts) {
+      if (count > 1) dupKeys.add(key);
+    }
+    const ids = new Set<string>();
+    for (const m of messages ?? []) {
+      if (m.channel !== "email") continue;
+      if (m.status !== "draft" && m.status !== "approved") continue;
+      const key = `${m.lead_id}:${m.step_number ?? 1}`;
+      if (dupKeys.has(key)) ids.add(m.id);
+    }
+    return ids;
+  }, [messages]);
+
   const draftCount = allMessages.filter((m) => m.status === "draft").length;
   const approvedCount = allMessages.filter((m) => m.status === "approved").length;
   const sentCount = allMessages.filter((m) => m.status === "sent").length;
@@ -155,7 +181,16 @@ export default function OutreachPage() {
 
   function handleApproveAll() {
     if (draftIds.length > 0) {
-      batchApproveMutation.mutate(draftIds);
+      batchApproveMutation.mutate(draftIds, {
+        onSuccess: (data) => {
+          const skipped = (data as { skipped_duplicates?: number }).skipped_duplicates ?? 0;
+          if (skipped > 0) {
+            toast.warning(
+              `${skipped} draft${skipped > 1 ? "s" : ""} skipped — lead already has a live email outreach.`
+            );
+          }
+        },
+      });
     }
   }
 
@@ -426,7 +461,7 @@ export default function OutreachPage() {
         ) : (
           <div className="space-y-4">
             {allMessages.map((msg) => (
-              <MessageCard key={msg.id} message={msg} emailCapReached={emailCapReached} />
+              <MessageCard key={msg.id} message={msg} emailCapReached={emailCapReached} isDuplicate={duplicateIds.has(msg.id)} />
             ))}
           </div>
         )}
