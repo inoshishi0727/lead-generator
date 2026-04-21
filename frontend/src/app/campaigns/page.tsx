@@ -329,7 +329,15 @@ function CampaignDetailView({
   const [draftProduct, setDraftProduct] = useState(campaign.lead_product);
   const [draftTimeframe, setDraftTimeframe] = useState(campaign.timeframe ?? "");
   const [draftNotes, setDraftNotes] = useState(campaign.notes ?? "");
-  const [sendDate, setSendDate] = useState(campaign.send_date ?? "");
+  const [sendDate, setSendDate] = useState(() => {
+    if (campaign.send_date) return campaign.send_date;
+    const d = new Date();
+    d.setDate(d.getDate() + 2);
+    const day = d.getDay();
+    if (day === 6) d.setDate(d.getDate() + 2);
+    if (day === 0) d.setDate(d.getDate() + 1);
+    return d.toISOString().split("T")[0];
+  });
 
   const generateMutation = useGenerateClientDrafts();
   const updateMutation = useUpdateCampaign();
@@ -642,7 +650,7 @@ function CampaignDetailView({
             <span className="text-sm text-muted-foreground">
               {campaign.send_date
                 ? new Date(campaign.send_date).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })
-                : "Not set"}
+                : <span className="italic opacity-60">{new Date(sendDate).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })} (unsaved — click to confirm)</span>}
             </span>
           )}
         </DetailRow>
@@ -875,7 +883,7 @@ function CampaignDetailView({
       )}
 
       {/* Campaign timeline */}
-      {campaign.send_date && <CampaignTimeline drafts={drafts} campaign={campaign} />}
+      <CampaignTimeline drafts={drafts} campaign={campaign} />
 
       {/* Campaign drafts */}
       {drafts.length > 0 && (
@@ -1108,6 +1116,14 @@ function NewCampaignModal({
 }) {
   const [campaignType, setCampaignType] = useState("seasonal");
   const [leadProduct, setLeadProduct] = useState("");
+  const [sendDate, setSendDate] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 2);
+    const day = d.getDay();
+    if (day === 6) d.setDate(d.getDate() + 2);
+    if (day === 0) d.setDate(d.getDate() + 1);
+    return d.toISOString().split("T")[0];
+  });
   const [showSuggest, setShowSuggest] = useState(false);
   const [extraContext, setExtraContext] = useState("");
   const createMutation = useCreateCampaign();
@@ -1120,6 +1136,7 @@ function NewCampaignModal({
             campaign_type: campaignType,
             extra_context: extraContext.trim() || undefined,
             lead_product: leadProduct || undefined,
+            send_date: sendDate || undefined,
           },
           { onSuccess: resolve, onError: reject }
         );
@@ -1167,6 +1184,17 @@ function NewCampaignModal({
           <option value="">Auto (seasonal default)</option>
           {ALL_PRODUCTS.map((p) => <option key={p} value={p}>{p}</option>)}
         </select>
+
+        <label className="mb-1 block text-xs font-medium text-muted-foreground">
+          Send date
+          <span className="ml-1 font-normal text-muted-foreground/60">(first email — follow-ups auto-scheduled at +4 days)</span>
+        </label>
+        <input
+          type="date"
+          value={sendDate}
+          onChange={(e) => setSendDate(e.target.value)}
+          className="mb-4 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+        />
 
         <div className="mb-5">
           <button
@@ -1270,6 +1298,15 @@ function CampaignTimeline({ drafts, campaign }: { drafts: OutreachMessage[]; cam
     skipped: "Skipped",
   };
 
+  if (!campaign.send_date) {
+    return (
+      <Card className="p-4">
+        <p className="text-xs font-medium text-muted-foreground mb-2">Campaign timeline</p>
+        <p className="text-xs text-muted-foreground/60">Set a send date in Details above to see the projected schedule.</p>
+      </Card>
+    );
+  }
+
   return (
     <Card className="p-4">
       <p className="text-xs font-medium text-muted-foreground mb-4">Campaign timeline</p>
@@ -1324,7 +1361,11 @@ function DraftCard({
   onReject: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [editSubject, setEditSubject] = useState(message.subject ?? "");
+  const [editContent, setEditContent] = useState(message.content);
   const regenerateMutation = useRegenerateMessage();
+  const updateMutation = useUpdateMessage();
   const sendMutation = useSendMessage();
 
   const statusColor =
@@ -1345,6 +1386,27 @@ function DraftCard({
     );
   }
 
+  function handleSaveEdit() {
+    toast.promise(
+      updateMutation.mutateAsync({
+        id: message.id,
+        subject: editSubject || undefined,
+        content: editContent,
+      }),
+      {
+        loading: "Saving edits…",
+        success: () => { setEditing(false); return "Draft updated"; },
+        error: "Failed to save",
+      }
+    );
+  }
+
+  function handleCancelEdit() {
+    setEditSubject(message.subject ?? "");
+    setEditContent(message.content);
+    setEditing(false);
+  }
+
   return (
     <Card className="p-4">
       <div className="flex items-start justify-between gap-3">
@@ -1361,7 +1423,7 @@ function DraftCard({
               </Badge>
             )}
           </div>
-          {message.subject && (
+          {message.subject && !editing && (
             <p className="text-xs text-muted-foreground truncate">{message.subject}</p>
           )}
           {message.scheduled_send_date && message.status !== "sent" && (
@@ -1372,15 +1434,26 @@ function DraftCard({
           )}
         </div>
         <div className="flex items-center gap-1 shrink-0">
-          <button
-            onClick={handleRegenerate}
-            disabled={regenerateMutation.isPending}
-            title="Regenerate"
-            className="rounded p-1.5 text-muted-foreground hover:text-foreground hover:bg-accent transition-colors disabled:opacity-50"
-          >
-            <RefreshCw className={`h-3.5 w-3.5 ${regenerateMutation.isPending ? "animate-spin" : ""}`} />
-          </button>
-          {message.status === "draft" && (
+          {!editing && (
+            <button
+              onClick={handleRegenerate}
+              disabled={regenerateMutation.isPending}
+              title="Regenerate"
+              className="rounded p-1.5 text-muted-foreground hover:text-foreground hover:bg-accent transition-colors disabled:opacity-50"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${regenerateMutation.isPending ? "animate-spin" : ""}`} />
+            </button>
+          )}
+          {!editing && message.status !== "sent" && (
+            <button
+              onClick={() => { setEditing(true); setExpanded(false); }}
+              title="Edit"
+              className="rounded p-1.5 text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+            >
+              <Pencil className="h-3.5 w-3.5" />
+            </button>
+          )}
+          {!editing && message.status === "draft" && (
             <>
               <button
                 onClick={onApprove}
@@ -1398,7 +1471,7 @@ function DraftCard({
               </button>
             </>
           )}
-          {message.status === "approved" && (
+          {!editing && message.status === "approved" && (
             <button
               onClick={() =>
                 toast.promise(sendMutation.mutateAsync(message.id), {
@@ -1418,15 +1491,45 @@ function DraftCard({
               )}
             </button>
           )}
-          <button
-            onClick={() => setExpanded((v) => !v)}
-            className="rounded p-1.5 text-muted-foreground hover:text-foreground transition-colors text-xs"
-          >
-            {expanded ? "Hide" : "View"}
-          </button>
+          {!editing && (
+            <button
+              onClick={() => setExpanded((v) => !v)}
+              className="rounded p-1.5 text-muted-foreground hover:text-foreground transition-colors text-xs"
+            >
+              {expanded ? "Hide" : "View"}
+            </button>
+          )}
         </div>
       </div>
-      {expanded && (
+
+      {editing && (
+        <div className="mt-3 border-t border-border/40 pt-3 space-y-2">
+          {message.subject != null && (
+            <input
+              type="text"
+              value={editSubject}
+              onChange={(e) => setEditSubject(e.target.value)}
+              placeholder="Subject line"
+              className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm"
+            />
+          )}
+          <textarea
+            value={editContent}
+            onChange={(e) => setEditContent(e.target.value)}
+            rows={10}
+            className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm leading-relaxed resize-y"
+          />
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" size="sm" onClick={handleCancelEdit}>Cancel</Button>
+            <Button size="sm" disabled={updateMutation.isPending} onClick={handleSaveEdit}>
+              {updateMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : <Check className="h-3.5 w-3.5 mr-1" />}
+              Save
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {expanded && !editing && (
         <p className="mt-3 text-sm text-foreground/80 leading-relaxed whitespace-pre-line border-t border-border/40 pt-3">
           {message.content}
         </p>

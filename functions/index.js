@@ -3414,6 +3414,85 @@ export const scheduledSendCampaigns = functions
   });
 
 /**
+ * Sends approved outreach messages (non-campaign) whose scheduled_send_date is <= now.
+ * Runs every 30 minutes so time-specific schedules (e.g. 5:30pm) are respected.
+ */
+export const scheduledSendOutreach = functions
+  .runWith({ timeoutSeconds: 300, memory: "256MB", secrets: ["RESEND_API_KEY"] })
+  .pubsub.schedule("*/30 * * * *")
+  .timeZone("Europe/London")
+  .onRun(async () => {
+    const apiKey = process.env.RESEND_API_KEY;
+    if (!apiKey) { console.error("RESEND_API_KEY not configured"); return null; }
+
+    const nowIso = new Date().toISOString(); // UTC — frontend stores scheduled_send_date as UTC
+
+    // Fetch all approved email messages that have a scheduled_send_date
+    const approvedSnap = await db.collection("outreach_messages")
+      .where("status", "==", "approved")
+      .where("channel", "==", "email")
+      .get();
+
+    const dueMessages = approvedSnap.docs
+      .map((d) => ({ id: d.id, ...d.data() }))
+      // Non-campaign only (campaigns handled by scheduledSendCampaigns)
+      // scheduled_send_date must exist and be <= now (supports both date-only and full datetime)
+      .filter((m) => !m.campaign_id && m.scheduled_send_date && m.scheduled_send_date <= nowIso);
+
+    if (!dueMessages.length) {
+      console.log("scheduledSendOutreach: no due messages");
+      return null;
+    }
+
+    const resend = new Resend(apiKey);
+    let sent = 0;
+    let failed = 0;
+
+    for (const msg of dueMessages) {
+      try {
+        const leadSnap = await db.collection("leads").doc(msg.lead_id).get();
+        if (!leadSnap.exists) { failed++; continue; }
+
+        const lead = leadSnap.data();
+        const toEmail = msg.recipient_email || lead.contact_email || lead.email;
+        if (!toEmail) {
+          console.error("No email for lead", msg.lead_id);
+          failed++;
+          continue;
+        }
+
+        const replyToAddress = `reply+${msg.lead_id}@${REPLY_DOMAIN}`;
+
+        const { data: resendData, error } = await resend.emails.send({
+          from: `${SENDER_NAME} <${SENDER_EMAIL}>`,
+          to: toEmail,
+          replyTo: replyToAddress,
+          subject: msg.subject || "Asterley Bros",
+          text: msg.content,
+          html: buildHtmlEmail(msg.content),
+        });
+
+        if (error) throw new Error(error.message);
+
+        await db.collection("outreach_messages").doc(msg.id).update({
+          status: "sent",
+          sent_at: new Date().toISOString(),
+          reply_to_address: replyToAddress,
+          email_message_id: resendData?.id ?? null,
+        });
+
+        console.log(`scheduledSendOutreach: sent to ${toEmail} (${msg.business_name})`);
+        sent++;
+      } catch (err) {
+        console.error("scheduledSendOutreach: failed for", msg.lead_id, err.message);
+        failed++;
+      }
+    }
+
+    console.log(`scheduledSendOutreach complete: ${sent} sent, ${failed} failed`);
+    return null;
+  });
+
 /**
  * Generates Claude drafts for planned campaign follow-up messages due tomorrow.
  * Runs Mon-Fri at 8am London — before scheduledSendCampaigns at 9:05am.
@@ -4391,7 +4470,7 @@ export const createCampaign = functions
       throw new HttpsError("unauthenticated", "Must be signed in.");
     }
 
-    const { campaign_type, extra_context, lead_product: requestedProduct } = data;
+    const { campaign_type, extra_context, lead_product: requestedProduct, send_date: requestedSendDate } = data;
     if (!campaign_type) {
       throw new HttpsError("invalid-argument", "campaign_type required.");
     }
@@ -4457,7 +4536,7 @@ export const createCampaign = functions
       timeframe,
       timeframe_end: buildTimeframeEnd(campaign_type),
       notes: null,
-      send_date: null,
+      send_date: requestedSendDate || nextBusinessDay(new Date(), 2),
       recommended_lead_ids,
       status: "draft",
       created_at: now,
