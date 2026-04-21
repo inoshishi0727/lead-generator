@@ -406,7 +406,19 @@ function CampaignDetailView({
     if (field === "send_date") updates.send_date = trimmed || null;
     await updateMutation.mutateAsync({ id: campaign.id, ...updates });
     setEditing(null);
-    toast.success("Updated");
+
+    if (field === "product") {
+      toast.promise(
+        regenerateBriefMutation.mutateAsync(campaign.id),
+        {
+          loading: "Updating brief for new product focus…",
+          success: "Product focus and brief updated",
+          error: "Product saved but brief regeneration failed",
+        }
+      );
+    } else {
+      toast.success("Updated");
+    }
   }
 
   function handleApprove() {
@@ -862,6 +874,9 @@ function CampaignDetailView({
         </div>
       )}
 
+      {/* Campaign timeline */}
+      {drafts.length > 0 && <CampaignTimeline drafts={drafts} campaign={campaign} />}
+
       {/* Campaign drafts */}
       {drafts.length > 0 && (
         <div className="space-y-3">
@@ -1190,6 +1205,93 @@ function NewCampaignModal({
 
 // ---- Draft card ----
 
+function CampaignTimeline({ drafts, campaign }: { drafts: OutreachMessage[]; campaign: Campaign }) {
+  const steps = useMemo(() => {
+    const map = new Map<number, { step: number; messages: OutreachMessage[] }>();
+    drafts.forEach((d) => {
+      const s = d.step_number ?? 1;
+      if (!map.has(s)) map.set(s, { step: s, messages: [] });
+      map.get(s)!.messages.push(d);
+    });
+    return Array.from(map.values()).sort((a, b) => a.step - b.step);
+  }, [drafts]);
+
+  if (steps.length === 0) return null;
+
+  function stepDate(step: { step: number; messages: OutreachMessage[] }) {
+    if (step.step === 1 && campaign.send_date) return campaign.send_date;
+    const dated = step.messages.find((m) => m.scheduled_send_date);
+    return dated?.scheduled_send_date ?? null;
+  }
+
+  function stepStatus(messages: OutreachMessage[]) {
+    const counts = { sent: 0, approved: 0, draft: 0, planned: 0, skipped: 0 };
+    messages.forEach((m) => { if (m.status in counts) counts[m.status as keyof typeof counts]++; });
+    if (counts.sent > 0 && counts.sent === messages.length) return "sent";
+    if (counts.sent > 0) return "partial";
+    if (counts.approved > 0) return "approved";
+    if (counts.draft > 0) return "draft";
+    if (counts.planned > 0) return "planned";
+    return "skipped";
+  }
+
+  const statusStyles: Record<string, { circle: string; label: string }> = {
+    sent:     { circle: "bg-emerald-500 border-emerald-500 text-white", label: "text-emerald-400" },
+    partial:  { circle: "bg-emerald-500/40 border-emerald-500 text-white", label: "text-emerald-400" },
+    approved: { circle: "bg-blue-500 border-blue-500 text-white", label: "text-blue-400" },
+    draft:    { circle: "bg-amber-500/20 border-amber-500 text-amber-400", label: "text-amber-400" },
+    planned:  { circle: "bg-muted border-border text-muted-foreground", label: "text-muted-foreground" },
+    skipped:  { circle: "bg-red-500/20 border-red-500/50 text-red-400", label: "text-red-400" },
+  };
+
+  const statusLabel: Record<string, string> = {
+    sent: "Sent", partial: "Partially sent", approved: "Approved",
+    draft: "Draft", planned: "Planned", skipped: "Skipped",
+  };
+
+  return (
+    <Card className="p-4">
+      <p className="text-xs font-medium text-muted-foreground mb-4">Campaign timeline</p>
+      <div className="flex items-start">
+        {steps.map((step, i) => {
+          const status = stepStatus(step.messages);
+          const styles = statusStyles[status] || statusStyles.planned;
+          const date = stepDate(step);
+          const label = step.step === 1 ? "Initial email" : `Follow-up ${step.step - 1}`;
+          const countSummary = (() => {
+            const sent = step.messages.filter(m => m.status === "sent").length;
+            const total = step.messages.length;
+            return sent > 0 ? `${sent}/${total} sent` : `${total} ${step.messages[0]?.status ?? "planned"}`;
+          })();
+
+          return (
+            <div key={step.step} className="flex items-start flex-1 min-w-0">
+              {/* Node */}
+              <div className="flex flex-col items-center flex-shrink-0">
+                <div className={`w-8 h-8 rounded-full border-2 flex items-center justify-center text-xs font-bold ${styles.circle}`}>
+                  {step.step}
+                </div>
+                <p className={`text-[10px] font-medium mt-1.5 ${styles.label}`}>{label}</p>
+                {date && (
+                  <p className="text-[10px] text-muted-foreground mt-0.5">
+                    {new Date(date).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}
+                  </p>
+                )}
+                <p className="text-[10px] text-muted-foreground/70 mt-0.5">{countSummary}</p>
+                <p className={`text-[9px] mt-0.5 ${styles.label}`}>{statusLabel[status]}</p>
+              </div>
+              {/* Connector line */}
+              {i < steps.length - 1 && (
+                <div className="flex-1 h-px bg-border/60 mt-4 mx-1" />
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </Card>
+  );
+}
+
 function DraftCard({
   message,
   onApprove,
@@ -1231,6 +1333,11 @@ function DraftCard({
             <Badge variant="outline" className={`text-[9px] shrink-0 ${statusColor}`}>
               {message.status}
             </Badge>
+            {(message.step_number ?? 1) > 1 && (
+              <Badge variant="outline" className="text-[9px] shrink-0 border-blue-500/30 text-blue-400">
+                Follow-up {message.step_number - 1}
+              </Badge>
+            )}
           </div>
           {message.subject && (
             <p className="text-xs text-muted-foreground truncate">{message.subject}</p>

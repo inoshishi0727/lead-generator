@@ -3282,6 +3282,21 @@ export const scheduledSendCampaigns = functions
 
     for (const msg of dueMessages) {
       try {
+        // Skip follow-up steps if client has already replied to this campaign
+        if (msg.step_number > 1 && msg.campaign_id) {
+          const replySnap = await db.collection("inbound_replies")
+            .where("lead_id", "==", msg.lead_id)
+            .where("matched", "==", true)
+            .limit(1)
+            .get();
+          if (!replySnap.empty) {
+            console.log(`SKIP follow-up [${msg.business_name}]: client has replied`);
+            await db.collection("outreach_messages").doc(msg.id).update({ status: "skipped" });
+            failed++;
+            continue;
+          }
+        }
+
         const leadSnap = await db.collection("leads").doc(msg.lead_id).get();
         if (!leadSnap.exists) { failed++; continue; }
 
@@ -3313,6 +3328,47 @@ export const scheduledSendCampaigns = functions
           reply_to_address: replyToAddress,
           email_message_id: resendData?.id ?? null,
         });
+
+        // Create planned follow-up if within max steps
+        const nextStep = (msg.step_number ?? 1) + 1;
+        if (msg.campaign_id && nextStep <= MAX_CAMPAIGN_STEPS) {
+          const existingNext = await db.collection("outreach_messages")
+            .where("lead_id", "==", msg.lead_id)
+            .where("campaign_id", "==", msg.campaign_id)
+            .where("step_number", "==", nextStep)
+            .limit(1)
+            .get();
+
+          if (existingNext.empty) {
+            const followUpDate = nextBusinessDay(new Date(sentAt), 4);
+            const followUpId = crypto.randomUUID();
+            await db.collection("outreach_messages").doc(followUpId).set({
+              id: followUpId,
+              lead_id: msg.lead_id,
+              business_name: msg.business_name,
+              venue_category: msg.venue_category || null,
+              channel: "email",
+              subject: null,
+              content: "",
+              status: "planned",
+              step_number: nextStep,
+              follow_up_label: `Campaign follow-up ${nextStep - 1}`,
+              scheduled_send_date: followUpDate,
+              campaign_id: msg.campaign_id,
+              is_client_campaign: true,
+              created_at: new Date().toISOString(),
+              tone_tier: msg.tone_tier || null,
+              lead_products: msg.lead_products || [],
+              contact_name: msg.contact_name || null,
+              context_notes: msg.context_notes || null,
+              menu_fit: msg.menu_fit || null,
+              menu_url: msg.menu_url || null,
+              recipient_email: toEmail,
+              website: msg.website || null,
+            });
+            console.log(`Planned follow-up step ${nextStep} for ${msg.business_name} on ${followUpDate}`);
+          }
+        }
 
         console.log(`Sent campaign email to ${lead.business_name} (${toEmail})`);
         sent++;
@@ -3354,6 +3410,145 @@ export const scheduledSendCampaigns = functions
       console.error("Auto-complete check failed:", err.message);
     }
 
+    return null;
+  });
+
+/**
+/**
+ * Generates Claude drafts for planned campaign follow-up messages due tomorrow.
+ * Runs Mon-Fri at 8am London — before scheduledSendCampaigns at 9:05am.
+ */
+export const scheduledGenerateCampaignFollowups = functions
+  .runWith({ timeoutSeconds: 300, memory: "512MB", secrets: ["ANTHROPIC_API_KEY"] })
+  .pubsub.schedule("0 8 * * 1-5")
+  .timeZone("Europe/London")
+  .onRun(async () => {
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) { console.error("ANTHROPIC_API_KEY not configured"); return null; }
+
+    const now = new Date();
+    const london = new Date(now.toLocaleString("en-US", { timeZone: "Europe/London" }));
+    if (isBlackoutDay(london)) {
+      console.log("Campaign follow-up generation skipped: blackout day");
+      return null;
+    }
+
+    const tomorrowDate = new Date(london);
+    tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+    const tomorrowStr = tomorrowDate.toISOString().split("T")[0];
+
+    // Find planned campaign follow-up messages due by tomorrow
+    const plannedSnap = await db.collection("outreach_messages")
+      .where("status", "==", "planned")
+      .get();
+
+    const duePlanned = plannedSnap.docs
+      .map((d) => ({ id: d.id, ...d.data() }))
+      .filter((m) => m.campaign_id && m.scheduled_send_date && m.scheduled_send_date <= tomorrowStr);
+
+    if (!duePlanned.length) {
+      console.log("No campaign follow-ups to generate");
+      return null;
+    }
+
+    const anthropic = new Anthropic({ apiKey });
+    let generated = 0;
+    let failed = 0;
+
+    for (const msg of duePlanned) {
+      try {
+        // Skip if client has replied
+        const replySnap = await db.collection("inbound_replies")
+          .where("lead_id", "==", msg.lead_id)
+          .where("matched", "==", true)
+          .limit(1)
+          .get();
+        if (!replySnap.empty) {
+          await db.collection("outreach_messages").doc(msg.id).update({ status: "skipped" });
+          console.log(`SKIP follow-up for ${msg.business_name}: client has replied`);
+          continue;
+        }
+
+        // Fetch campaign for type and brief
+        const campaignSnap = await db.collection("campaigns").doc(msg.campaign_id).get();
+        if (!campaignSnap.exists) { failed++; continue; }
+        const campaign = campaignSnap.data();
+
+        // Fetch lead for personalisation
+        const leadSnap = await db.collection("leads").doc(msg.lead_id).get();
+        if (!leadSnap.exists) { failed++; continue; }
+        const lead = leadSnap.data();
+        const enrichment = lead.enrichment || {};
+
+        const contactName = msg.contact_name || enrichment.contact?.name || "";
+        const contactConf = lead.contact_confidence || enrichment.contact?.confidence || "uncertain";
+        const greeting = (contactName && (contactConf === "verified" || contactConf === "likely"))
+          ? contactName.split(" ")[0]
+          : "team";
+
+        const leadProducts = lead.lead_products?.length ? lead.lead_products.join(", ") : "Asterley products";
+
+        const systemPrompt = buildClientSystemPrompt(campaign.campaign_type);
+
+        const prompt = `CLIENT DATA:
+- Business name: ${msg.business_name}
+- Venue type: ${enrichment.venue_category || lead.category || "bar"}
+- Location: ${lead.address || "London"}
+- Greeting: Hi ${greeting}
+- Products they stock: ${leadProducts}
+- Drinks programme: ${enrichment.drinks_programme || "not specified"}
+- Context notes: ${enrichment.context_notes || "none"}
+
+CAMPAIGN TYPE: ${campaign.campaign_type}
+CAMPAIGN BRIEF: ${campaign.brief}
+FOLLOW-UP CONTEXT: This is follow-up email ${msg.step_number - 1} in this campaign. You sent an initial email around 4 days ago that hasn't received a reply yet. Acknowledge the previous outreach briefly and naturally — don't pretend it didn't happen. Keep it shorter than the first email. Re-emphasise the key point from the brief without repeating the whole email. The tone should be warmer and more casual than the opener — this is a gentle nudge, not a second pitch.`;
+
+        // Lock the planned card
+        const locked = await db.runTransaction(async (transaction) => {
+          const docSnap = await transaction.get(db.collection("outreach_messages").doc(msg.id));
+          if (!docSnap.exists || docSnap.data().status !== "planned") return false;
+          transaction.update(db.collection("outreach_messages").doc(msg.id), { status: "generating" });
+          return true;
+        }).catch(() => false);
+
+        if (!locked) { console.log(`SKIP ${msg.business_name}: already being processed`); continue; }
+
+        const response = await anthropic.messages.create({
+          model: CLAUDE_MODEL,
+          max_tokens: 512,
+          system: systemPrompt,
+          messages: [{ role: "user", content: prompt }],
+        });
+
+        let content = response.content[0].text || "";
+        let subject = null;
+        if (content.includes("Subject:")) {
+          const lines = content.split("\n");
+          for (let i = 0; i < lines.length; i++) {
+            if (lines[i].trim().startsWith("Subject:")) {
+              subject = lines[i].trim().replace("Subject:", "").trim();
+              content = lines.slice(i + 1).join("\n").trim();
+              break;
+            }
+          }
+        }
+
+        await db.collection("outreach_messages").doc(msg.id).update({
+          status: "draft",
+          subject,
+          content,
+        });
+
+        console.log(`Generated follow-up step ${msg.step_number} for ${msg.business_name}`);
+        generated++;
+      } catch (err) {
+        console.error(`Failed to generate follow-up for ${msg.lead_id}:`, err.message);
+        await db.collection("outreach_messages").doc(msg.id).update({ status: "planned" }).catch(() => {});
+        failed++;
+      }
+    }
+
+    console.log("Campaign follow-up generation complete:", JSON.stringify({ generated, failed, total: duePlanned.length }));
     return null;
   });
 
@@ -4013,6 +4208,17 @@ function buildTimeframeSuggestion(campaignType) {
   endDate.setDate(startDate.getDate() + days);
 
   return `${fmt(startDate)} – ${fmt(endDate)}`;
+}
+
+const MAX_CAMPAIGN_STEPS = 2; // initial email + 1 follow-up
+
+function nextBusinessDay(baseDate, daysToAdd) {
+  const result = new Date(baseDate);
+  result.setDate(result.getDate() + daysToAdd);
+  const day = result.getDay(); // 0=Sun, 6=Sat
+  if (day === 6) result.setDate(result.getDate() + 2); // Sat → Mon
+  if (day === 0) result.setDate(result.getDate() + 1); // Sun → Mon
+  return result.toISOString().split("T")[0];
 }
 
 function buildTimeframeEnd(campaignType) {
