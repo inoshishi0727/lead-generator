@@ -524,6 +524,20 @@ function isSnoozedOrExcluded(doc) {
   return false;
 }
 
+// A lead can have at most one "live" email per step_number at a time —
+// live = draft or approved. Sent messages are past this stage and don't block
+// a fresh outreach at the same step (e.g., rerunning after a send was cleared).
+function buildLiveEmailKeySet(messages) {
+  const keys = new Set();
+  for (const m of messages) {
+    if (m.channel !== "email") continue;
+    if (m.status !== "draft" && m.status !== "approved") continue;
+    const step = m.step_number ?? 1;
+    keys.add(`${m.lead_id}:${step}`);
+  }
+  return keys;
+}
+
 // ---- Cloud Functions ----
 
 /**
@@ -549,6 +563,11 @@ export const generateDrafts = functions
     const anthropic = new Anthropic({ apiKey });
     const leadIds = data?.lead_ids || null;
 
+    // Build live-email key set once so we can enforce the "one live email per
+    // (lead, step)" rule whether the caller passed specific lead_ids or not.
+    const msgsSnap = await db.collection("outreach_messages").get();
+    const liveKeys = buildLiveEmailKeySet(msgsSnap.docs.map((d) => d.data()));
+
     let docs;
     if (leadIds && leadIds.length > 0) {
       // Specific leads
@@ -560,15 +579,11 @@ export const generateDrafts = functions
       const leadsSnap = await db.collection("leads").get();
       const allDocs = leadsSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
 
-      // Get existing drafts
-      const msgsSnap = await db.collection("outreach_messages").get();
-      const leadsWithDrafts = new Set(msgsSnap.docs.map((d) => d.data().lead_id));
-
       docs = allDocs.filter(
         (d) =>
           d.email &&
           hasEnrichment(d) &&
-          !leadsWithDrafts.has(d.id) &&
+          !liveKeys.has(`${d.id}:1`) &&
           !isSnoozedOrExcluded(d)
       );
     }
@@ -583,8 +598,15 @@ export const generateDrafts = functions
 
     let generated = 0;
     let failed = 0;
+    let skipped = 0;
 
     for (const leadDoc of docs) {
+      // Re-check singleton for the explicit lead_ids path (the bulk path already
+      // filtered by liveKeys, but explicit callers bypass that filter).
+      if (liveKeys.has(`${leadDoc.id}:1`)) {
+        skipped++;
+        continue;
+      }
       try {
         const enrichment = leadDoc.enrichment || {};
         const venueCat = enrichment.venue_category || leadDoc.category || "cocktail_bar";
@@ -659,7 +681,7 @@ export const generateDrafts = functions
       }
     }
 
-    return { generated, failed, total: docs.length };
+    return { generated, failed, skipped, total: docs.length };
   });
 
 /**
@@ -2760,6 +2782,18 @@ async function runFollowUpGeneration() {
 
       const { nextStepNumber, followUpLabel, scheduledSendDate } = result;
 
+      // Singleton check: skip if a live email already exists at the target step.
+      const existingAtStep = leadMessages.find(
+        (m) => m.channel === "email" &&
+          (m.step_number ?? 1) === nextStepNumber &&
+          (m.status === "draft" || m.status === "approved")
+      );
+      if (existingAtStep) {
+        console.log(`SKIP [${lead.business_name}]: live email already exists at step ${nextStepNumber}`);
+        skipped++;
+        continue;
+      }
+
       // Find previous subject and message ID for email threading
       const sentMessages2 = leadMessages.filter((m) => m.status === "sent").sort((a, b) => (a.step_number ?? 1) - (b.step_number ?? 1));
       const initialMessage = sentMessages2[0]; // First sent message (step 1)
@@ -3282,6 +3316,21 @@ export const scheduledSendCampaigns = functions
 
     for (const msg of dueMessages) {
       try {
+        // Skip follow-up steps if client has already replied to this campaign
+        if (msg.step_number > 1 && msg.campaign_id) {
+          const replySnap = await db.collection("inbound_replies")
+            .where("lead_id", "==", msg.lead_id)
+            .where("matched", "==", true)
+            .limit(1)
+            .get();
+          if (!replySnap.empty) {
+            console.log(`SKIP follow-up [${msg.business_name}]: client has replied`);
+            await db.collection("outreach_messages").doc(msg.id).update({ status: "skipped" });
+            failed++;
+            continue;
+          }
+        }
+
         const leadSnap = await db.collection("leads").doc(msg.lead_id).get();
         if (!leadSnap.exists) { failed++; continue; }
 
@@ -3314,6 +3363,47 @@ export const scheduledSendCampaigns = functions
           email_message_id: resendData?.id ?? null,
         });
 
+        // Create planned follow-up if within max steps
+        const nextStep = (msg.step_number ?? 1) + 1;
+        if (msg.campaign_id && nextStep <= MAX_CAMPAIGN_STEPS) {
+          const existingNext = await db.collection("outreach_messages")
+            .where("lead_id", "==", msg.lead_id)
+            .where("campaign_id", "==", msg.campaign_id)
+            .where("step_number", "==", nextStep)
+            .limit(1)
+            .get();
+
+          if (existingNext.empty) {
+            const followUpDate = nextBusinessDay(new Date(sentAt), 4);
+            const followUpId = crypto.randomUUID();
+            await db.collection("outreach_messages").doc(followUpId).set({
+              id: followUpId,
+              lead_id: msg.lead_id,
+              business_name: msg.business_name,
+              venue_category: msg.venue_category || null,
+              channel: "email",
+              subject: null,
+              content: "",
+              status: "planned",
+              step_number: nextStep,
+              follow_up_label: `Campaign follow-up ${nextStep - 1}`,
+              scheduled_send_date: followUpDate,
+              campaign_id: msg.campaign_id,
+              is_client_campaign: true,
+              created_at: new Date().toISOString(),
+              tone_tier: msg.tone_tier || null,
+              lead_products: msg.lead_products || [],
+              contact_name: msg.contact_name || null,
+              context_notes: msg.context_notes || null,
+              menu_fit: msg.menu_fit || null,
+              menu_url: msg.menu_url || null,
+              recipient_email: toEmail,
+              website: msg.website || null,
+            });
+            console.log(`Planned follow-up step ${nextStep} for ${msg.business_name} on ${followUpDate}`);
+          }
+        }
+
         console.log(`Sent campaign email to ${lead.business_name} (${toEmail})`);
         sent++;
       } catch (err) {
@@ -3323,6 +3413,255 @@ export const scheduledSendCampaigns = functions
     }
 
     console.log("Scheduled campaign send complete:", JSON.stringify({ sent, failed, total: dueMessages.length }));
+
+    // Auto-complete: check active campaigns whose timeframe has ended and have no remaining unsent messages
+    try {
+      const activeCampaignsSnap = await db.collection("campaigns")
+        .where("status", "==", "active")
+        .get();
+
+      for (const campaignDoc of activeCampaignsSnap.docs) {
+        const campaign = campaignDoc.data();
+        if (!campaign.timeframe_end || campaign.timeframe_end > todayStr) continue;
+
+        // Check for any messages that are still draft, approved, or planned
+        const pendingSnap = await db.collection("outreach_messages")
+          .where("campaign_id", "==", campaignDoc.id)
+          .where("status", "in", ["draft", "approved", "planned"])
+          .limit(1)
+          .get();
+
+        if (pendingSnap.empty) {
+          // All messages sent and timeframe has ended — mark complete
+          await db.collection("campaigns").doc(campaignDoc.id).update({
+            status: "completed",
+            completed_at: new Date().toISOString(),
+          });
+          console.log(`Campaign ${campaignDoc.id} (${campaign.name || campaign.campaign_type}) auto-completed`);
+        }
+      }
+    } catch (err) {
+      console.error("Auto-complete check failed:", err.message);
+    }
+
+    return null;
+  });
+
+/**
+ * Sends approved outreach messages (non-campaign) whose scheduled_send_date is <= now.
+ * Runs every 30 minutes so time-specific schedules (e.g. 5:30pm) are respected.
+ */
+export const scheduledSendOutreach = functions
+  .runWith({ timeoutSeconds: 300, memory: "256MB", secrets: ["RESEND_API_KEY"] })
+  .pubsub.schedule("*/30 * * * *")
+  .timeZone("Europe/London")
+  .onRun(async () => {
+    const apiKey = process.env.RESEND_API_KEY;
+    if (!apiKey) { console.error("RESEND_API_KEY not configured"); return null; }
+
+    const nowIso = new Date().toISOString(); // UTC — frontend stores scheduled_send_date as UTC
+
+    // Fetch all approved email messages that have a scheduled_send_date
+    const approvedSnap = await db.collection("outreach_messages")
+      .where("status", "==", "approved")
+      .where("channel", "==", "email")
+      .get();
+
+    const dueMessages = approvedSnap.docs
+      .map((d) => ({ id: d.id, ...d.data() }))
+      // Non-campaign only (campaigns handled by scheduledSendCampaigns)
+      // scheduled_send_date must exist and be <= now (supports both date-only and full datetime)
+      .filter((m) => !m.campaign_id && m.scheduled_send_date && m.scheduled_send_date <= nowIso);
+
+    if (!dueMessages.length) {
+      console.log("scheduledSendOutreach: no due messages");
+      return null;
+    }
+
+    const resend = new Resend(apiKey);
+    let sent = 0;
+    let failed = 0;
+
+    for (const msg of dueMessages) {
+      try {
+        const leadSnap = await db.collection("leads").doc(msg.lead_id).get();
+        if (!leadSnap.exists) { failed++; continue; }
+
+        const lead = leadSnap.data();
+        const toEmail = msg.recipient_email || lead.contact_email || lead.email;
+        if (!toEmail) {
+          console.error("No email for lead", msg.lead_id);
+          failed++;
+          continue;
+        }
+
+        const replyToAddress = `reply+${msg.lead_id}@${REPLY_DOMAIN}`;
+
+        const { data: resendData, error } = await resend.emails.send({
+          from: `${SENDER_NAME} <${SENDER_EMAIL}>`,
+          to: toEmail,
+          replyTo: replyToAddress,
+          subject: msg.subject || "Asterley Bros",
+          text: msg.content,
+          html: buildHtmlEmail(msg.content),
+        });
+
+        if (error) throw new Error(error.message);
+
+        await db.collection("outreach_messages").doc(msg.id).update({
+          status: "sent",
+          sent_at: new Date().toISOString(),
+          reply_to_address: replyToAddress,
+          email_message_id: resendData?.id ?? null,
+        });
+
+        console.log(`scheduledSendOutreach: sent to ${toEmail} (${msg.business_name})`);
+        sent++;
+      } catch (err) {
+        console.error("scheduledSendOutreach: failed for", msg.lead_id, err.message);
+        failed++;
+      }
+    }
+
+    console.log(`scheduledSendOutreach complete: ${sent} sent, ${failed} failed`);
+    return null;
+  });
+
+/**
+ * Generates Claude drafts for planned campaign follow-up messages due tomorrow.
+ * Runs Mon-Fri at 8am London — before scheduledSendCampaigns at 9:05am.
+ */
+export const scheduledGenerateCampaignFollowups = functions
+  .runWith({ timeoutSeconds: 300, memory: "512MB", secrets: ["ANTHROPIC_API_KEY"] })
+  .pubsub.schedule("0 8 * * 1-5")
+  .timeZone("Europe/London")
+  .onRun(async () => {
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) { console.error("ANTHROPIC_API_KEY not configured"); return null; }
+
+    const now = new Date();
+    const london = new Date(now.toLocaleString("en-US", { timeZone: "Europe/London" }));
+    if (isBlackoutDay(london)) {
+      console.log("Campaign follow-up generation skipped: blackout day");
+      return null;
+    }
+
+    const tomorrowDate = new Date(london);
+    tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+    const tomorrowStr = tomorrowDate.toISOString().split("T")[0];
+
+    // Find planned campaign follow-up messages due by tomorrow
+    const plannedSnap = await db.collection("outreach_messages")
+      .where("status", "==", "planned")
+      .get();
+
+    const duePlanned = plannedSnap.docs
+      .map((d) => ({ id: d.id, ...d.data() }))
+      .filter((m) => m.campaign_id && m.scheduled_send_date && m.scheduled_send_date <= tomorrowStr);
+
+    if (!duePlanned.length) {
+      console.log("No campaign follow-ups to generate");
+      return null;
+    }
+
+    const anthropic = new Anthropic({ apiKey });
+    let generated = 0;
+    let failed = 0;
+
+    for (const msg of duePlanned) {
+      try {
+        // Skip if client has replied
+        const replySnap = await db.collection("inbound_replies")
+          .where("lead_id", "==", msg.lead_id)
+          .where("matched", "==", true)
+          .limit(1)
+          .get();
+        if (!replySnap.empty) {
+          await db.collection("outreach_messages").doc(msg.id).update({ status: "skipped" });
+          console.log(`SKIP follow-up for ${msg.business_name}: client has replied`);
+          continue;
+        }
+
+        // Fetch campaign for type and brief
+        const campaignSnap = await db.collection("campaigns").doc(msg.campaign_id).get();
+        if (!campaignSnap.exists) { failed++; continue; }
+        const campaign = campaignSnap.data();
+
+        // Fetch lead for personalisation
+        const leadSnap = await db.collection("leads").doc(msg.lead_id).get();
+        if (!leadSnap.exists) { failed++; continue; }
+        const lead = leadSnap.data();
+        const enrichment = lead.enrichment || {};
+
+        const contactName = msg.contact_name || enrichment.contact?.name || "";
+        const contactConf = lead.contact_confidence || enrichment.contact?.confidence || "uncertain";
+        const greeting = (contactName && (contactConf === "verified" || contactConf === "likely"))
+          ? contactName.split(" ")[0]
+          : "team";
+
+        const leadProducts = lead.lead_products?.length ? lead.lead_products.join(", ") : "Asterley products";
+
+        const systemPrompt = buildClientSystemPrompt(campaign.campaign_type);
+
+        const prompt = `CLIENT DATA:
+- Business name: ${msg.business_name}
+- Venue type: ${enrichment.venue_category || lead.category || "bar"}
+- Location: ${lead.address || "London"}
+- Greeting: Hi ${greeting}
+- Products they stock: ${leadProducts}
+- Drinks programme: ${enrichment.drinks_programme || "not specified"}
+- Context notes: ${enrichment.context_notes || "none"}
+
+CAMPAIGN TYPE: ${campaign.campaign_type}
+CAMPAIGN BRIEF: ${campaign.brief}
+FOLLOW-UP CONTEXT: This is follow-up email ${msg.step_number - 1} in this campaign. You sent an initial email around 4 days ago that hasn't received a reply yet. Acknowledge the previous outreach briefly and naturally — don't pretend it didn't happen. Keep it shorter than the first email. Re-emphasise the key point from the brief without repeating the whole email. The tone should be warmer and more casual than the opener — this is a gentle nudge, not a second pitch.`;
+
+        // Lock the planned card
+        const locked = await db.runTransaction(async (transaction) => {
+          const docSnap = await transaction.get(db.collection("outreach_messages").doc(msg.id));
+          if (!docSnap.exists || docSnap.data().status !== "planned") return false;
+          transaction.update(db.collection("outreach_messages").doc(msg.id), { status: "generating" });
+          return true;
+        }).catch(() => false);
+
+        if (!locked) { console.log(`SKIP ${msg.business_name}: already being processed`); continue; }
+
+        const response = await anthropic.messages.create({
+          model: CLAUDE_MODEL,
+          max_tokens: 512,
+          system: systemPrompt,
+          messages: [{ role: "user", content: prompt }],
+        });
+
+        let content = response.content[0].text || "";
+        let subject = null;
+        if (content.includes("Subject:")) {
+          const lines = content.split("\n");
+          for (let i = 0; i < lines.length; i++) {
+            if (lines[i].trim().startsWith("Subject:")) {
+              subject = lines[i].trim().replace("Subject:", "").trim();
+              content = lines.slice(i + 1).join("\n").trim();
+              break;
+            }
+          }
+        }
+
+        await db.collection("outreach_messages").doc(msg.id).update({
+          status: "draft",
+          subject,
+          content,
+        });
+
+        console.log(`Generated follow-up step ${msg.step_number} for ${msg.business_name}`);
+        generated++;
+      } catch (err) {
+        console.error(`Failed to generate follow-up for ${msg.lead_id}:`, err.message);
+        await db.collection("outreach_messages").doc(msg.id).update({ status: "planned" }).catch(() => {});
+        failed++;
+      }
+    }
+
+    console.log("Campaign follow-up generation complete:", JSON.stringify({ generated, failed, total: duePlanned.length }));
     return null;
   });
 
@@ -3798,35 +4137,128 @@ export const scheduledAnalyticsSummary = functions
 
 // ---- Client System Prompt ----
 
-const CLIENT_SYSTEM_PROMPT = `You are Rob, founder of Asterley Bros, an independent English Vermouth, Amaro, and Aperitivo producer based in SE26, London. You are writing an outreach email to an existing stockist — a current client who already stocks and sells your products.
+const CLIENT_BASE_IDENTITY = `You are Rob, founder of Asterley Bros, an independent English Vermouth, Amaro, and Aperitivo producer based in SE26, London. You are writing to an existing stockist — a current client who already stocks and sells your products. You have a real relationship with them.
 
-YOUR VOICE: Warm, personal, direct. Not a newsletter. This reads like a message from a founder to a trusted trade partner.
-- You know this venue. You have a real relationship with them.
-- Use "we" for Asterley Bros, "you" for the venue.
-- Keep the tone collegial, not salesy. This isn't cold outreach.
-- You CAN reference the ongoing relationship: "hope the Dispense is still flying," "great to hear the Negronis are going well."
+ALWAYS:
+- Use "we" for Asterley Bros, "you" for the venue
+- Sign off with "Cheers," only — never "Best," "Kind regards," or anything else
+- Use first name if provided (e.g. "Hi James"), otherwise "Hi team"
+- Never mention competitors, discounts, or urgency pressure
+- Capitalise product names exactly: Asterley Original, Schofield's, Dispense, Estate, Rosé, Britannica
+- Never say: "I hope this email finds you well", "touch base", "circle back", "leverage", "synergy", "exciting opportunity"
+- Output ONLY "Subject:" on the first line, then the full email body. Nothing else.`;
 
-PRODUCT NAMES, RULES, and VOICE are identical to your cold outreach — same tone, same capitalisation, same do-not-say list.
+function buildClientSystemPrompt(campaignType) {
+  switch (campaignType) {
 
-CAMPAIGN TYPES:
-- seasonal: Highlight a seasonal opportunity (e.g. summer aperitivo, Christmas gift sets) with a relevant product + serve angle.
-- reorder: Check in on stock levels, make it easy for them to reorder. Mention any low-stock risk or popular serves that might need topping up.
-- new_product: Introduce a new or updated product to an existing client first — "wanted you to see this before it goes anywhere else."
-- new_menu: Offer to help them develop a serve or update their menu listing around a particular product.
-- event: Propose a collaboration, tasting event, or feature they could run with Asterley products.
+    case "seasonal":
+      return `${CLIENT_BASE_IDENTITY}
 
-EMAIL STRUCTURE:
-1. GREETING (use first name if known, otherwise "Hi team")
-2. BRIEF CHECK-IN (1 sentence — warm acknowledgement of the relationship, no more)
-3. REASON FOR REACHING OUT (2-3 sentences — clear purpose tied to the campaign type and brief provided)
-4. SPECIFIC PRODUCT + SERVE SUGGESTION (1-2 sentences — concrete, relevant to this venue)
-5. CTA (one clear ask — a call, drop-in, or response. Keep it light. "Worth a quick call?" / "Fancy trying it before it goes wider?")
-6. SIGN-OFF: "Cheers," only
+CAMPAIGN PERSONALITY — SEASONAL PROMO:
+This is a timely nudge from a trusted supplier who knows the trade calendar. Rob is sharing something useful, not selling. The tone is warm and collegial — like a message from someone who wants this venue to do well this season.
 
-WORD COUNT: 90-130 words. Shorter than cold outreach — they know you.
-NO send window rules apply (you can email clients any day).
+VOICE: Friendly, informed, specific to the season. Not a newsletter blast — a personal note that happens to be well-timed.
 
-Output ONLY "Subject:" on the first line, then the full email body. Nothing else.`;
+STRUCTURE:
+1. Greeting
+2. One sentence acknowledging the season / menu moment (no fluff — just "spring menus are coming together" kind of energy)
+3. The product angle — why this product makes sense right now, tied to the seasonal hook
+4. A concrete serve suggestion they can use immediately
+5. One light ask — a call, drop-in, or quick reply to confirm interest
+
+SUBJECT LINE: Season or timing-forward. E.g. "Spring menus — a serve idea from us" / "Terrace season — thought this might work for you"
+WORD COUNT: 90–120 words.
+DO NOT: pitch, add urgency language, list multiple products, or make it feel like a campaign email.`;
+
+    case "reorder":
+      return `${CLIENT_BASE_IDENTITY}
+
+CAMPAIGN PERSONALITY — REORDER NUDGE:
+This is a practical stock check-in dressed up warmly. Rob is making sure a valued client isn't caught short before demand picks up. It should feel like a quick message from a supplier who's on top of things — not a chase, not a sales push.
+
+VOICE: Casual, practical, brief. Almost like a WhatsApp message that got formatted into an email. No fluff.
+
+STRUCTURE:
+1. Greeting
+2. One warm line — acknowledge the relationship briefly ("hope things are going well at [venue]")
+3. The point — stock check-in, reference the timing (season / upcoming demand)
+4. Make it easy — one clear next step (just reply, or Rob can sort delivery directly)
+5. No hard CTA needed — "let me know" is enough
+
+SUBJECT LINE: Practical and direct. E.g. "Quick stock check-in" / "Wanted to make sure you're covered for summer" / "Stock levels — worth a look before it gets busy"
+WORD COUNT: 70–90 words. Shorter than other types — this is a practical message, not a pitch.
+DO NOT: oversell, use urgency language, mention competitors, or make it longer than it needs to be.`;
+
+    case "new_product":
+      return `${CLIENT_BASE_IDENTITY}
+
+CAMPAIGN PERSONALITY — NEW PRODUCT LAUNCH:
+This client is getting early access before the product goes wider. The whole tone should feel exclusive and personal — like Rob picked up the phone to call a trusted stockist first. This is a favour, not a pitch.
+
+VOICE: Personal, almost conspiratorial. "Wanted you to see this before it goes anywhere else." The energy should be quiet confidence in the product, not a marketing announcement.
+
+STRUCTURE:
+1. Greeting
+2. Set up the exclusivity — "before we go wider with this" / "wanted you to have first look"
+3. Introduce the product briefly — what it is, what makes it interesting, why it fits their programme
+4. A concrete serve suggestion
+5. Soft ask — can they take a small allocation, or would they like to try it first?
+
+SUBJECT LINE: Exclusive, personal. E.g. "First look — [product name]" / "Something new — wanted you to see it first" / "New from us — early access for you"
+WORD COUNT: 100–130 words.
+DO NOT: make it sound like a press release, use "exciting" or "launch", mention the broader rollout, or be pushy about stock levels.`;
+
+    case "new_menu":
+      return `${CLIENT_BASE_IDENTITY}
+
+CAMPAIGN PERSONALITY — MENU SUPPORT:
+Rob is offering his expertise, not his products. The email positions him as a useful trade partner who wants to help this venue get more out of what they already stock. The goal is a conversation — a call or visit — not a sale.
+
+VOICE: Collaborative, low-pressure, genuinely helpful. This should feel like an offer from a friend in the industry, not a sales visit in disguise.
+
+STRUCTURE:
+1. Greeting
+2. Acknowledge the menu moment (seasonal refresh, new programme, upcoming change)
+3. The offer — help develop a new serve, update their listing, or suggest a seasonal special
+4. Reference a specific product and a concrete starting point for the serve
+5. Light ask — a quick call or visit to talk through what would work for their menu
+
+SUBJECT LINE: Collaborative, low-key. E.g. "Menu refresh — happy to help" / "Serve development — worth a chat?" / "Updating your drinks menu? We can help"
+WORD COUNT: 90–120 words.
+DO NOT: mention stock levels, reorders, pricing, or make it feel like the help is contingent on buying more product.`;
+
+    case "event":
+      return `${CLIENT_BASE_IDENTITY}
+
+CAMPAIGN PERSONALITY — EVENT / COLLAB:
+Rob has a real idea and he's bringing it to this venue because he thinks it's a fit. The energy should be excited but not breathless — there's a specific concept here, and the email should open with it clearly rather than working up to it.
+
+VOICE: Energetic, specific, genuine. This isn't a form email — it's a proposal from someone who's thought about why this venue in particular would be a good partner.
+
+STRUCTURE:
+1. Greeting
+2. Open with the idea directly — "we'd love to do something with you around [hook]" — don't bury the lead
+3. What it could look like — a tasting slot, a pop-up, a featured serve on their board for the season
+4. Why this venue / why now — one sentence that makes it feel considered, not mass-mailed
+5. One question to move it forward — "would you be up for a quick call to work out what's feasible?"
+
+SUBJECT LINE: Proposal-feel, specific. E.g. "A thought — could we do something this summer?" / "Collaboration idea — [hook]" / "Fancy doing something together around [season]?"
+WORD COUNT: 100–130 words.
+DO NOT: be vague about what the event actually is, use corporate event language ("partnership opportunity", "brand activation"), or give them a long list of options.`;
+
+    default:
+      return `${CLIENT_BASE_IDENTITY}
+
+STRUCTURE:
+1. Greeting
+2. Brief warm check-in (1 sentence)
+3. Reason for reaching out (2–3 sentences, tied to the campaign brief)
+4. Specific product and serve suggestion (1–2 sentences)
+5. One clear ask
+
+WORD COUNT: 90–120 words.`;
+  }
+}
 
 /**
  * Auto-generate a campaign brief based on type and current season.
@@ -3891,6 +4323,28 @@ function buildTimeframeSuggestion(campaignType) {
   return `${fmt(startDate)} – ${fmt(endDate)}`;
 }
 
+const MAX_CAMPAIGN_STEPS = 2; // initial email + 1 follow-up
+
+function nextBusinessDay(baseDate, daysToAdd) {
+  const result = new Date(baseDate);
+  result.setDate(result.getDate() + daysToAdd);
+  const day = result.getDay(); // 0=Sun, 6=Sat
+  if (day === 6) result.setDate(result.getDate() + 2); // Sat → Mon
+  if (day === 0) result.setDate(result.getDate() + 1); // Sun → Mon
+  return result.toISOString().split("T")[0];
+}
+
+function buildTimeframeEnd(campaignType) {
+  const now = new Date();
+  const startDate = new Date(now);
+  startDate.setDate(now.getDate() + 2);
+  const durations = { seasonal: 21, reorder: 7, new_product: 14, new_menu: 21, event: 42 };
+  const days = durations[campaignType] || 14;
+  const endDate = new Date(startDate);
+  endDate.setDate(startDate.getDate() + days);
+  return endDate.toISOString().split("T")[0];
+}
+
 /**
  * Generate client campaign drafts for selected clients.
  * Called from frontend: generateClientDrafts({ lead_ids, campaign_type })
@@ -3937,10 +4391,22 @@ export const generateClientDrafts = functions
     const snaps = await Promise.all(promises);
     const docs = snaps.filter((s) => s.exists).map((s) => ({ id: s.id, ...s.data() }));
 
+    // Enforce "one live email per (lead, step 1)" — skip leads that already
+    // have a draft or approved step-1 email (regardless of campaign) so a
+    // campaign run cannot create a duplicate alongside an existing outreach.
+    const msgsSnap = await db.collection("outreach_messages").get();
+    const liveKeys = buildLiveEmailKeySet(msgsSnap.docs.map((d) => d.data()));
+
     let generated = 0;
     let failed = 0;
+    let skipped = 0;
 
     for (const leadDoc of docs) {
+      if (liveKeys.has(`${leadDoc.id}:1`)) {
+        console.log(`SKIP client draft [${leadDoc.business_name}]: already has live email`);
+        skipped++;
+        continue;
+      }
       try {
         const enrichment = leadDoc.enrichment || {};
         const contact = enrichment.contact || {};
@@ -3953,25 +4419,33 @@ export const generateClientDrafts = functions
         const venueCat = enrichment.venue_category || leadDoc.category || "bar";
         const season = getCurrentSeason();
 
+        const menuFit = enrichment.menu_fit || leadDoc.menu_fit || null;
+        const leadProducts = leadDoc.lead_products?.length
+          ? leadDoc.lead_products.join(", ")
+          : "Asterley products";
+        const whyFits = enrichment.why_asterley_fits || null;
+
         const prompt = `CLIENT DATA:
-- Name: ${leadDoc.business_name}
-- Category: ${venueCat}
+- Business name: ${leadDoc.business_name}
+- Venue type: ${venueCat}
 - Location: ${leadDoc.address || "London"}
-- Greeting to use: Hi ${greeting}
-- Drinks programme: ${enrichment.drinks_programme || "not available"}
+- Greeting: Hi ${greeting}
+- Products they stock: ${leadProducts}
+- Drinks programme: ${enrichment.drinks_programme || "not specified"}
 - Context notes: ${enrichment.context_notes || "none"}
+${menuFit ? `- Menu fit notes: ${menuFit}` : ""}
+${whyFits ? `- Why Asterley fits this venue: ${whyFits}` : ""}
 
 CAMPAIGN TYPE: ${resolved_campaign_type}
 CAMPAIGN BRIEF: ${campaign_brief}
-
 SEASON: ${season}
 
-Write a client retention email for this stockist based on the campaign brief above. Remember: they are an existing client who stocks our products.`;
+Write the email following the campaign personality instructions. Use the client data above to personalise — reference their venue type, location, or what they stock where it feels natural. Do not invent details not listed above.`;
 
         const response = await anthropic.messages.create({
           model: CLAUDE_MODEL,
           max_tokens: 512,
-          system: CLIENT_SYSTEM_PROMPT,
+          system: buildClientSystemPrompt(resolved_campaign_type),
           messages: [{ role: "user", content: prompt }],
         });
 
@@ -4019,6 +4493,9 @@ Write a client retention email for this stockist based on the campaign brief abo
           is_client_campaign: true,
         });
 
+        // Mark this lead's step-1 slot as taken so a duplicate entry in the
+        // same lead_ids batch doesn't also generate.
+        liveKeys.add(`${leadDoc.id}:1`);
         generated++;
       } catch (err) {
         console.error("Client draft failed for", leadDoc.business_name, err.message);
@@ -4026,7 +4503,7 @@ Write a client retention email for this stockist based on the campaign brief abo
       }
     }
 
-    return { generated, failed, total: docs.length };
+    return { generated, failed, skipped, total: docs.length };
   });
 
 // ---- Campaign Management ----
@@ -4042,7 +4519,7 @@ export const createCampaign = functions
       throw new HttpsError("unauthenticated", "Must be signed in.");
     }
 
-    const { campaign_type, extra_context, lead_product: requestedProduct } = data;
+    const { campaign_type, extra_context, lead_product: requestedProduct, send_date: requestedSendDate } = data;
     if (!campaign_type) {
       throw new HttpsError("invalid-argument", "campaign_type required.");
     }
@@ -4106,7 +4583,9 @@ export const createCampaign = functions
       brief,
       extra_context: extra_context || null,
       timeframe,
+      timeframe_end: buildTimeframeEnd(campaign_type),
       notes: null,
+      send_date: requestedSendDate || nextBusinessDay(new Date(), 2),
       recommended_lead_ids,
       status: "draft",
       created_at: now,

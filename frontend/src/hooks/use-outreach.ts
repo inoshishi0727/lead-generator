@@ -78,12 +78,22 @@ export function useRegenerateAll() {
   });
 }
 
+export class DuplicateLiveOutreachError extends Error {
+  constructor(public businessName: string) {
+    super(`${businessName} already has a live email outreach`);
+    this.name = "DuplicateLiveOutreachError";
+  }
+}
+
 export function useUpdateMessage() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async ({
       id,
       restore_original_email,
+      business_name,
+      step_number,
+      channel,
       ...body
     }: {
       id: string;
@@ -93,7 +103,23 @@ export function useUpdateMessage() {
       restore_original_email?: boolean;
       rejection_reason?: string;
       lead_id?: string;
+      scheduled_send_date?: string | null;
+      // Optional — used only when status="approved" to enforce the
+      // "one live email per (lead, step)" singleton.
+      step_number?: number;
+      channel?: string;
+      business_name?: string;
     }) => {
+      if (body.status === "approved" && channel === "email" && body.lead_id) {
+        const siblings = await getOutreachMessages({ status: "approved", channel: "email", limit: 500 });
+        const conflict = siblings.find(
+          (m) => m.lead_id === body.lead_id && (m.step_number ?? 1) === (step_number ?? 1) && m.id !== id
+        );
+        if (conflict) {
+          throw new DuplicateLiveOutreachError(business_name || "This lead");
+        }
+      }
+
       if (hasBackend) {
         return api.patch<OutreachMessage>(`/api/outreach/messages/${id}`, body);
       }
@@ -160,25 +186,53 @@ export function useBatchApprove() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (messageIds: string[]) => {
-      // Get current approved count and cap at 20
-      const currentMessages = await getOutreachMessages({ status: "approved", channel: "email", limit: 25 });
-      const currentCount = currentMessages.filter((m) => m.channel === "email").length;
-      const slots = Math.max(0, 20 - currentCount);
-      const toApprove = messageIds.slice(0, slots);
+      // Fetch approved emails (for the 20-cap) and the candidate drafts so we
+      // can enforce "one live email per (lead, step)". A lead already covered
+      // by another approved email must not get a second approval.
+      const [approvedEmails, draftEmails] = await Promise.all([
+        getOutreachMessages({ status: "approved", channel: "email", limit: 500 }),
+        getOutreachMessages({ status: "draft", channel: "email", limit: 500 }),
+      ]);
+      const currentApprovedCount = approvedEmails.length;
 
-      if (hasBackend) {
-        return api.post<{ approved: number; capped: boolean }>("/api/outreach/approve-batch", {
-          message_ids: toApprove,
-        });
+      const approvedKeys = new Set(
+        approvedEmails.map((m) => `${m.lead_id}:${m.step_number ?? 1}`)
+      );
+      const draftsById = new Map(draftEmails.map((m) => [m.id, m] as const));
+
+      let skippedDuplicates = 0;
+      const keysClaimed = new Set<string>();
+      const eligible: string[] = [];
+      for (const id of messageIds) {
+        const msg = draftsById.get(id);
+        if (!msg) continue; // not a live email draft — let the update fail/skip silently
+        const key = `${msg.lead_id}:${msg.step_number ?? 1}`;
+        if (approvedKeys.has(key) || keysClaimed.has(key)) {
+          skippedDuplicates++;
+          continue;
+        }
+        keysClaimed.add(key);
+        eligible.push(id);
       }
 
-      // Client-side batch approve
+      const slots = Math.max(0, 20 - currentApprovedCount);
+      const toApprove = eligible.slice(0, slots);
+      const capped = toApprove.length < eligible.length;
+
+      if (hasBackend) {
+        const res = await api.post<{ approved: number; capped: boolean }>(
+          "/api/outreach/approve-batch",
+          { message_ids: toApprove }
+        );
+        return { ...res, skipped_duplicates: skippedDuplicates };
+      }
+
       let approved = 0;
       for (const id of toApprove) {
         await updateOutreachMessage(id, { status: "approved" });
         approved++;
       }
-      return { approved, capped: toApprove.length < messageIds.length };
+      return { approved, capped, skipped_duplicates: skippedDuplicates };
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["outreach"] });
@@ -475,9 +529,9 @@ export function useApproveCampaign() {
 export function useCreateCampaign() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (params: { campaign_type: string; extra_context?: string; lead_product?: string }) => {
+    mutationFn: async (params: { campaign_type: string; extra_context?: string; lead_product?: string; send_date?: string }) => {
       const fn = httpsCallable<
-        { campaign_type: string; extra_context?: string; lead_product?: string },
+        { campaign_type: string; extra_context?: string; lead_product?: string; send_date?: string },
         Campaign
       >(functions, "createCampaign");
       const result = await fn(params);
