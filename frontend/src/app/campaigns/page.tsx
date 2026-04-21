@@ -875,7 +875,7 @@ function CampaignDetailView({
       )}
 
       {/* Campaign timeline */}
-      {drafts.length > 0 && <CampaignTimeline drafts={drafts} campaign={campaign} />}
+      {campaign.send_date && <CampaignTimeline drafts={drafts} campaign={campaign} />}
 
       {/* Campaign drafts */}
       {drafts.length > 0 && (
@@ -1205,6 +1205,17 @@ function NewCampaignModal({
 
 // ---- Draft card ----
 
+const MAX_CAMPAIGN_STEPS_UI = 2;
+
+function projectedFollowUpDate(sendDate: string, stepNumber: number): string {
+  const base = new Date(sendDate);
+  base.setDate(base.getDate() + (stepNumber - 1) * 4);
+  const day = base.getDay();
+  if (day === 6) base.setDate(base.getDate() + 2);
+  if (day === 0) base.setDate(base.getDate() + 1);
+  return base.toISOString().split("T")[0];
+}
+
 function CampaignTimeline({ drafts, campaign }: { drafts: OutreachMessage[]; campaign: Campaign }) {
   const steps = useMemo(() => {
     const map = new Map<number, { step: number; messages: OutreachMessage[] }>();
@@ -1213,18 +1224,24 @@ function CampaignTimeline({ drafts, campaign }: { drafts: OutreachMessage[]; cam
       if (!map.has(s)) map.set(s, { step: s, messages: [] });
       map.get(s)!.messages.push(d);
     });
+    // Always show all projected steps even if no drafts yet
+    for (let s = 1; s <= MAX_CAMPAIGN_STEPS_UI; s++) {
+      if (!map.has(s)) map.set(s, { step: s, messages: [] });
+    }
     return Array.from(map.values()).sort((a, b) => a.step - b.step);
   }, [drafts]);
-
-  if (steps.length === 0) return null;
 
   function stepDate(step: { step: number; messages: OutreachMessage[] }) {
     if (step.step === 1 && campaign.send_date) return campaign.send_date;
     const dated = step.messages.find((m) => m.scheduled_send_date);
-    return dated?.scheduled_send_date ?? null;
+    if (dated?.scheduled_send_date) return dated.scheduled_send_date;
+    // Projected date based on send_date
+    if (campaign.send_date) return projectedFollowUpDate(campaign.send_date, step.step);
+    return null;
   }
 
-  function stepStatus(messages: OutreachMessage[]) {
+  function stepStatus(messages: OutreachMessage[], stepNum: number) {
+    if (messages.length === 0) return stepNum === 1 ? "scheduled" : "upcoming";
     const counts = { sent: 0, approved: 0, draft: 0, planned: 0, skipped: 0 };
     messages.forEach((m) => { if (m.status in counts) counts[m.status as keyof typeof counts]++; });
     if (counts.sent > 0 && counts.sent === messages.length) return "sent";
@@ -1236,17 +1253,21 @@ function CampaignTimeline({ drafts, campaign }: { drafts: OutreachMessage[]; cam
   }
 
   const statusStyles: Record<string, { circle: string; label: string }> = {
-    sent:     { circle: "bg-emerald-500 border-emerald-500 text-white", label: "text-emerald-400" },
-    partial:  { circle: "bg-emerald-500/40 border-emerald-500 text-white", label: "text-emerald-400" },
-    approved: { circle: "bg-blue-500 border-blue-500 text-white", label: "text-blue-400" },
-    draft:    { circle: "bg-amber-500/20 border-amber-500 text-amber-400", label: "text-amber-400" },
-    planned:  { circle: "bg-muted border-border text-muted-foreground", label: "text-muted-foreground" },
-    skipped:  { circle: "bg-red-500/20 border-red-500/50 text-red-400", label: "text-red-400" },
+    sent:      { circle: "bg-emerald-500 border-emerald-500 text-white", label: "text-emerald-400" },
+    partial:   { circle: "bg-emerald-500/40 border-emerald-500 text-white", label: "text-emerald-400" },
+    approved:  { circle: "bg-blue-500 border-blue-500 text-white", label: "text-blue-400" },
+    draft:     { circle: "bg-amber-500/20 border-amber-500 text-amber-400", label: "text-amber-400" },
+    planned:   { circle: "bg-muted border-border text-muted-foreground", label: "text-muted-foreground" },
+    scheduled: { circle: "bg-primary/20 border-primary text-primary", label: "text-primary" },
+    upcoming:  { circle: "bg-muted/40 border-border/40 text-muted-foreground/50", label: "text-muted-foreground/50" },
+    skipped:   { circle: "bg-red-500/20 border-red-500/50 text-red-400", label: "text-red-400" },
   };
 
   const statusLabel: Record<string, string> = {
     sent: "Sent", partial: "Partially sent", approved: "Approved",
-    draft: "Draft", planned: "Planned", skipped: "Skipped",
+    draft: "Pending review", planned: "Generating soon",
+    scheduled: "Scheduled", upcoming: "Projected",
+    skipped: "Skipped",
   };
 
   return (
@@ -1254,11 +1275,12 @@ function CampaignTimeline({ drafts, campaign }: { drafts: OutreachMessage[]; cam
       <p className="text-xs font-medium text-muted-foreground mb-4">Campaign timeline</p>
       <div className="flex items-start">
         {steps.map((step, i) => {
-          const status = stepStatus(step.messages);
-          const styles = statusStyles[status] || statusStyles.planned;
+          const status = stepStatus(step.messages, step.step);
+          const styles = statusStyles[status] || statusStyles.upcoming;
           const date = stepDate(step);
           const label = step.step === 1 ? "Initial email" : `Follow-up ${step.step - 1}`;
           const countSummary = (() => {
+            if (step.messages.length === 0) return "Not yet generated";
             const sent = step.messages.filter(m => m.status === "sent").length;
             const total = step.messages.length;
             return sent > 0 ? `${sent}/${total} sent` : `${total} ${step.messages[0]?.status ?? "planned"}`;
