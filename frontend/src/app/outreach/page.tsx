@@ -30,7 +30,7 @@ import { getOutreachMessages } from "@/lib/firestore-api";
 import { EditReflectionBanner } from "@/components/edit-reflection-banner";
 import { ThreadCard } from "@/components/thread-card";
 
-const STATUS_FILTERS = ["draft", "approved", "sent", "conversations", "rejected", "follow-ups", "clients", "all"] as const;
+const STATUS_FILTERS = ["draft", "approved", "scheduled", "sent", "conversations", "rejected", "follow-ups", "clients", "all"] as const;
 
 const CATEGORY_OPTIONS = [
   { value: "", label: "All Categories" },
@@ -66,8 +66,8 @@ export default function OutreachPage() {
   // Member auto-scopes to own messages
   const assignedTo = isMember ? user?.uid : undefined;
 
-  // "replied", "follow-ups", "clients" are client-side filters — fetch all and filter below
-  const firestoreFilter = statusFilter === "all" || statusFilter === "conversations" || statusFilter === "follow-ups" || statusFilter === "clients"
+  // "conversations", "follow-ups", "clients", "scheduled" are client-side filters — fetch all and filter below
+  const firestoreFilter = statusFilter === "all" || statusFilter === "conversations" || statusFilter === "follow-ups" || statusFilter === "clients" || statusFilter === "scheduled"
     ? { assignedTo } as any
     : { status: statusFilter, assignedTo };
 
@@ -79,7 +79,7 @@ export default function OutreachPage() {
 
   useEffect(() => {
     let mounted = true;
-    if (statusFilter === "follow-ups" || statusFilter === "clients") {
+    if (statusFilter === "follow-ups" || statusFilter === "clients" || statusFilter === "scheduled") {
       setClientSideLoading(true);
       getOutreachMessages({ limit: 500, assignedTo })
         .then((res) => { if (mounted) setClientSideMessages(res); })
@@ -91,8 +91,8 @@ export default function OutreachPage() {
     return () => { mounted = false; };
   }, [statusFilter]);
 
-  const messages = (statusFilter === "follow-ups" || statusFilter === "clients") ? (clientSideMessages ?? []) : (apiMessages ?? []);
-  const isLoading = (statusFilter === "follow-ups" || statusFilter === "clients") ? clientSideLoading : apiLoading;
+  const messages = (statusFilter === "follow-ups" || statusFilter === "clients" || statusFilter === "scheduled") ? (clientSideMessages ?? []) : (apiMessages ?? []);
+  const isLoading = (statusFilter === "follow-ups" || statusFilter === "clients" || statusFilter === "scheduled") ? clientSideLoading : apiLoading;
 
   const generateMutation = useGenerateDrafts();
   const regenerateAllMutation = useRegenerateAll();
@@ -118,9 +118,11 @@ export default function OutreachPage() {
         )
       : statusFilter === "clients"
         ? (messages ?? []).filter((m) => m.is_client_campaign)
-        : (statusFilter === "all")
-          ? (messages ?? [])
-          : (messages ?? []).filter((m) => m.status === statusFilter);
+        : statusFilter === "scheduled"
+          ? (messages ?? []).filter((m) => m.status === "approved" && !!m.scheduled_send_date)
+          : (statusFilter === "all")
+            ? (messages ?? [])
+            : (messages ?? []).filter((m) => m.status === statusFilter);
   const filteredByCategory = filteredByStatus.filter(
     (m) => !categoryFilter || m.venue_category === categoryFilter
   );

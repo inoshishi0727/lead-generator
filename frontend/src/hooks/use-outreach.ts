@@ -93,6 +93,7 @@ export function useUpdateMessage() {
       restore_original_email?: boolean;
       rejection_reason?: string;
       lead_id?: string;
+      scheduled_send_date?: string | null;
     }) => {
       if (hasBackend) {
         return api.patch<OutreachMessage>(`/api/outreach/messages/${id}`, body);
@@ -475,9 +476,9 @@ export function useApproveCampaign() {
 export function useCreateCampaign() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (params: { campaign_type: string; extra_context?: string; lead_product?: string }) => {
+    mutationFn: async (params: { campaign_type: string; extra_context?: string; lead_product?: string; send_date?: string }) => {
       const fn = httpsCallable<
-        { campaign_type: string; extra_context?: string; lead_product?: string },
+        { campaign_type: string; extra_context?: string; lead_product?: string; send_date?: string },
         Campaign
       >(functions, "createCampaign");
       const result = await fn(params);
