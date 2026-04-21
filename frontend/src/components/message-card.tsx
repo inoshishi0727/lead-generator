@@ -24,6 +24,7 @@ import {
 import { EditMessageDialog } from "@/components/edit-message-dialog";
 import { RegenerateCompareDialog } from "@/components/regenerate-compare-dialog";
 import { Card, CardContent } from "@/components/ui/card";
+import { OutreachTimeline } from "@/components/outreach-timeline";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Menu, MenuTrigger, MenuContent, MenuItem } from "@/components/ui/menu";
@@ -94,6 +95,7 @@ function rejectionLabel(reason: string): string {
 }
 
 export function MessageCard({ message, inConversation, emailCapReached, isDuplicate }: Props) {
+  const [showTimeline, setShowTimeline] = useState(false);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [threadOpen, setThreadOpen] = useState(inConversation && !!message.has_reply);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -357,7 +359,21 @@ export function MessageCard({ message, inConversation, emailCapReached, isDuplic
               {formatDate(message.created_at)}
             </span>
           )}
+          
+          {/* Timeline toggle button */}
+          <Button
+            variant={showTimeline ? "secondary" : "outline"}
+            size="sm"
+            className={`h-6 px-2 text-[10px] ${!message.created_at ? 'ml-auto' : 'ml-1'}`}
+            onClick={() => setShowTimeline(o => !o)}
+            title="View schedule timeline"
+          >
+            <CalendarClock className="h-3 w-3 mr-1" />
+            Timeline
+          </Button>
         </div>
+          {/* Render OutreachTimeline when toggled */}
+          {showTimeline && <OutreachTimeline message={message} />}
 
         {/* Email tracking stats — sent messages only */}
         {message.status === "sent" && (

@@ -1245,6 +1245,8 @@ function projectedFollowUpDate(sendDate: string, stepNumber: number): string {
 }
 
 function CampaignTimeline({ drafts, campaign }: { drafts: OutreachMessage[]; campaign: Campaign }) {
+  // Determine the base date for timeline calculations: use campaign.send_date if set, otherwise today
+  const baseDate = campaign.send_date ?? new Date().toISOString().split('T')[0];
   const steps = useMemo(() => {
     const map = new Map<number, { step: number; messages: OutreachMessage[] }>();
     drafts.forEach((d) => {
@@ -1260,12 +1262,12 @@ function CampaignTimeline({ drafts, campaign }: { drafts: OutreachMessage[]; cam
   }, [drafts]);
 
   function stepDate(step: { step: number; messages: OutreachMessage[] }) {
-    if (step.step === 1 && campaign.send_date) return campaign.send_date;
+    // Use baseDate for calculations when campaign.send_date is not defined
+    if (step.step === 1) return baseDate;
     const dated = step.messages.find((m) => m.scheduled_send_date);
     if (dated?.scheduled_send_date) return dated.scheduled_send_date;
-    // Projected date based on send_date
-    if (campaign.send_date) return projectedFollowUpDate(campaign.send_date, step.step);
-    return null;
+    // Projected date based on baseDate
+    return projectedFollowUpDate(baseDate, step.step);
   }
 
   function stepStatus(messages: OutreachMessage[], stepNum: number) {
@@ -1298,14 +1300,8 @@ function CampaignTimeline({ drafts, campaign }: { drafts: OutreachMessage[]; cam
     skipped: "Skipped",
   };
 
-  if (!campaign.send_date) {
-    return (
-      <Card className="p-4">
-        <p className="text-xs font-medium text-muted-foreground mb-2">Campaign timeline</p>
-        <p className="text-xs text-muted-foreground/60">Set a send date in Details above to see the projected schedule.</p>
-      </Card>
-    );
-  }
+  // Always render timeline; if send_date was not set, we now use today as baseDate
+  // The early‑return is no longer needed because stepDate handles the fallback.
 
   return (
     <Card className="p-4">
