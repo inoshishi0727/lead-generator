@@ -61,7 +61,7 @@ type SendMode = "recommended" | "all" | "custom";
 export default function CampaignsPage() {
   const [activeCampaign, setActiveCampaign] = useState<Campaign | null>(null);
   const [showNewCampaign, setShowNewCampaign] = useState(false);
-  const [filter, setFilter] = useState<"all" | "active" | "draft">("all");
+  const [filter, setFilter] = useState<"all" | "active" | "draft" | "completed">("all");
   const [search, setSearch] = useState("");
   const [showFilters, setShowFilters] = useState(false);
   const [typeFilter, setTypeFilter] = useState("");
@@ -88,8 +88,13 @@ export default function CampaignsPage() {
   const visible = campaigns.filter((c) => c.status !== "archived");
   const drafts = visible.filter((c) => c.status === "draft");
   const active = visible.filter((c) => c.status === "active");
+  const completed = visible.filter((c) => c.status === "completed");
 
-  const byStatus = filter === "all" ? visible : filter === "active" ? active : drafts;
+  const byStatus =
+    filter === "all" ? visible :
+    filter === "active" ? active :
+    filter === "completed" ? completed :
+    drafts;
 
   const filtered = byStatus.filter((c) => {
     if (search) {
@@ -134,6 +139,7 @@ export default function CampaignsPage() {
               { key: "all", label: "All", count: visible.length },
               { key: "active", label: "Active", count: active.length },
               { key: "draft", label: "Pending Review", count: drafts.length },
+              { key: "completed", label: "Completed", count: completed.length },
             ] as const).map(({ key, label, count }) => (
               <button
                 key={key}
@@ -279,9 +285,10 @@ function CampaignCard({ campaign, onClick }: { campaign: Campaign; onClick: () =
         <div className="flex items-center gap-1.5 flex-wrap">
           <Badge variant="secondary" className="text-[10px]">{typeLabel}</Badge>
           {campaign.status === "draft" && (
-            <Badge variant="outline" className="text-[9px] border-amber-500/30 text-amber-400">
-              Draft
-            </Badge>
+            <Badge variant="outline" className="text-[9px] border-amber-500/30 text-amber-400">Draft</Badge>
+          )}
+          {campaign.status === "completed" && (
+            <Badge variant="outline" className="text-[9px] border-emerald-500/30 text-emerald-400">Completed</Badge>
           )}
         </div>
         <span className="text-[10px] text-muted-foreground shrink-0">{campaign.season}</span>
@@ -315,13 +322,22 @@ function CampaignDetailView({
   const [customIds, setCustomIds] = useState<string[]>([]);
   const [editing, setEditing] = useState<EditableField>(null);
   const [showArchiveConfirm, setShowArchiveConfirm] = useState(false);
+  const [showCompleteConfirm, setShowCompleteConfirm] = useState(false);
   const [draftName, setDraftName] = useState(campaign.name ?? "");
   const [draftBrief, setDraftBrief] = useState(campaign.brief);
   const [draftType, setDraftType] = useState(campaign.campaign_type);
   const [draftProduct, setDraftProduct] = useState(campaign.lead_product);
   const [draftTimeframe, setDraftTimeframe] = useState(campaign.timeframe ?? "");
   const [draftNotes, setDraftNotes] = useState(campaign.notes ?? "");
-  const [sendDate, setSendDate] = useState(campaign.send_date ?? "");
+  const [sendDate, setSendDate] = useState(() => {
+    if (campaign.send_date) return campaign.send_date;
+    const d = new Date();
+    d.setDate(d.getDate() + 2);
+    const day = d.getDay();
+    if (day === 6) d.setDate(d.getDate() + 2);
+    if (day === 0) d.setDate(d.getDate() + 1);
+    return d.toISOString().split("T")[0];
+  });
 
   const generateMutation = useGenerateClientDrafts();
   const updateMutation = useUpdateCampaign();
@@ -398,7 +414,19 @@ function CampaignDetailView({
     if (field === "send_date") updates.send_date = trimmed || null;
     await updateMutation.mutateAsync({ id: campaign.id, ...updates });
     setEditing(null);
-    toast.success("Updated");
+
+    if (field === "product") {
+      toast.promise(
+        regenerateBriefMutation.mutateAsync(campaign.id),
+        {
+          loading: "Updating brief for new product focus…",
+          success: "Product focus and brief updated",
+          error: "Product saved but brief regeneration failed",
+        }
+      );
+    } else {
+      toast.success("Updated");
+    }
   }
 
   function handleApprove() {
@@ -497,13 +525,26 @@ function CampaignDetailView({
           </div>
           <p className="text-sm text-muted-foreground mt-0.5">{campaign.lead_product} — {campaign.hook}</p>
         </div>
-        <button
-          onClick={() => setShowArchiveConfirm(true)}
-          className="mt-1 flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground hover:text-red-400 transition-colors"
-        >
-          <Archive className="h-3.5 w-3.5" />
-          Archive
-        </button>
+        <div className="flex items-center gap-3 shrink-0 mt-1">
+          {campaign.status === "active" && (
+            <button
+              onClick={() => setShowCompleteConfirm(true)}
+              className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-emerald-400 transition-colors"
+            >
+              <CheckCircle2 className="h-3.5 w-3.5" />
+              Mark as Complete
+            </button>
+          )}
+          {campaign.status !== "completed" && (
+            <button
+              onClick={() => setShowArchiveConfirm(true)}
+              className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-red-400 transition-colors"
+            >
+              <Archive className="h-3.5 w-3.5" />
+              Archive
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Draft approval banner */}
@@ -609,7 +650,7 @@ function CampaignDetailView({
             <span className="text-sm text-muted-foreground">
               {campaign.send_date
                 ? new Date(campaign.send_date).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })
-                : "Not set"}
+                : <span className="italic opacity-60">{new Date(sendDate).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })} (unsaved — click to confirm)</span>}
             </span>
           )}
         </DetailRow>
@@ -801,6 +842,48 @@ function CampaignDetailView({
           </div>
         </div>
       )}
+
+      {showCompleteConfirm && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
+          onClick={(e) => { if (e.target === e.currentTarget) setShowCompleteConfirm(false); }}
+        >
+          <div className="w-full max-w-sm rounded-lg border border-border/50 bg-card p-6 shadow-2xl">
+            <div className="flex items-start gap-3 mb-4">
+              <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-400 mt-0.5" />
+              <div>
+                <p className="text-sm font-semibold">Mark this campaign as complete?</p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Any unsent drafts will remain as-is but the campaign will be closed. This is useful if you want to stop the campaign early without archiving it.
+                </p>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" size="sm" onClick={() => setShowCompleteConfirm(false)}>
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                disabled={updateMutation.isPending}
+                onClick={() => {
+                  updateMutation.mutate(
+                    { id: campaign.id, status: "completed", completed_at: new Date().toISOString() },
+                    { onSuccess: () => { setShowCompleteConfirm(false); } }
+                  );
+                }}
+              >
+                {updateMutation.isPending
+                  ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                  : <CheckCircle2 className="mr-1.5 h-3.5 w-3.5" />}
+                Mark as Complete
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Campaign timeline */}
+      <CampaignTimeline drafts={drafts} campaign={campaign} />
 
       {/* Campaign drafts */}
       {drafts.length > 0 && (
@@ -1033,6 +1116,14 @@ function NewCampaignModal({
 }) {
   const [campaignType, setCampaignType] = useState("seasonal");
   const [leadProduct, setLeadProduct] = useState("");
+  const [sendDate, setSendDate] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 2);
+    const day = d.getDay();
+    if (day === 6) d.setDate(d.getDate() + 2);
+    if (day === 0) d.setDate(d.getDate() + 1);
+    return d.toISOString().split("T")[0];
+  });
   const [showSuggest, setShowSuggest] = useState(false);
   const [extraContext, setExtraContext] = useState("");
   const createMutation = useCreateCampaign();
@@ -1045,6 +1136,7 @@ function NewCampaignModal({
             campaign_type: campaignType,
             extra_context: extraContext.trim() || undefined,
             lead_product: leadProduct || undefined,
+            send_date: sendDate || undefined,
           },
           { onSuccess: resolve, onError: reject }
         );
@@ -1093,6 +1185,17 @@ function NewCampaignModal({
           {ALL_PRODUCTS.map((p) => <option key={p} value={p}>{p}</option>)}
         </select>
 
+        <label className="mb-1 block text-xs font-medium text-muted-foreground">
+          Send date
+          <span className="ml-1 font-normal text-muted-foreground/60">(first email — follow-ups auto-scheduled at +4 days)</span>
+        </label>
+        <input
+          type="date"
+          value={sendDate}
+          onChange={(e) => setSendDate(e.target.value)}
+          className="mb-4 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+        />
+
         <div className="mb-5">
           <button
             className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
@@ -1130,6 +1233,124 @@ function NewCampaignModal({
 
 // ---- Draft card ----
 
+const MAX_CAMPAIGN_STEPS_UI = 2;
+
+function projectedFollowUpDate(sendDate: string, stepNumber: number): string {
+  const base = new Date(sendDate);
+  base.setDate(base.getDate() + (stepNumber - 1) * 4);
+  const day = base.getDay();
+  if (day === 6) base.setDate(base.getDate() + 2);
+  if (day === 0) base.setDate(base.getDate() + 1);
+  return base.toISOString().split("T")[0];
+}
+
+function CampaignTimeline({ drafts, campaign }: { drafts: OutreachMessage[]; campaign: Campaign }) {
+  const steps = useMemo(() => {
+    const map = new Map<number, { step: number; messages: OutreachMessage[] }>();
+    drafts.forEach((d) => {
+      const s = d.step_number ?? 1;
+      if (!map.has(s)) map.set(s, { step: s, messages: [] });
+      map.get(s)!.messages.push(d);
+    });
+    // Always show all projected steps even if no drafts yet
+    for (let s = 1; s <= MAX_CAMPAIGN_STEPS_UI; s++) {
+      if (!map.has(s)) map.set(s, { step: s, messages: [] });
+    }
+    return Array.from(map.values()).sort((a, b) => a.step - b.step);
+  }, [drafts]);
+
+  function stepDate(step: { step: number; messages: OutreachMessage[] }) {
+    if (step.step === 1 && campaign.send_date) return campaign.send_date;
+    const dated = step.messages.find((m) => m.scheduled_send_date);
+    if (dated?.scheduled_send_date) return dated.scheduled_send_date;
+    // Projected date based on send_date
+    if (campaign.send_date) return projectedFollowUpDate(campaign.send_date, step.step);
+    return null;
+  }
+
+  function stepStatus(messages: OutreachMessage[], stepNum: number) {
+    if (messages.length === 0) return stepNum === 1 ? "scheduled" : "upcoming";
+    const counts = { sent: 0, approved: 0, draft: 0, planned: 0, skipped: 0 };
+    messages.forEach((m) => { if (m.status in counts) counts[m.status as keyof typeof counts]++; });
+    if (counts.sent > 0 && counts.sent === messages.length) return "sent";
+    if (counts.sent > 0) return "partial";
+    if (counts.approved > 0) return "approved";
+    if (counts.draft > 0) return "draft";
+    if (counts.planned > 0) return "planned";
+    return "skipped";
+  }
+
+  const statusStyles: Record<string, { circle: string; label: string }> = {
+    sent:      { circle: "bg-emerald-500 border-emerald-500 text-white", label: "text-emerald-400" },
+    partial:   { circle: "bg-emerald-500/40 border-emerald-500 text-white", label: "text-emerald-400" },
+    approved:  { circle: "bg-blue-500 border-blue-500 text-white", label: "text-blue-400" },
+    draft:     { circle: "bg-amber-500/20 border-amber-500 text-amber-400", label: "text-amber-400" },
+    planned:   { circle: "bg-muted border-border text-muted-foreground", label: "text-muted-foreground" },
+    scheduled: { circle: "bg-primary/20 border-primary text-primary", label: "text-primary" },
+    upcoming:  { circle: "bg-muted/40 border-border/40 text-muted-foreground/50", label: "text-muted-foreground/50" },
+    skipped:   { circle: "bg-red-500/20 border-red-500/50 text-red-400", label: "text-red-400" },
+  };
+
+  const statusLabel: Record<string, string> = {
+    sent: "Sent", partial: "Partially sent", approved: "Approved",
+    draft: "Pending review", planned: "Generating soon",
+    scheduled: "Scheduled", upcoming: "Projected",
+    skipped: "Skipped",
+  };
+
+  if (!campaign.send_date) {
+    return (
+      <Card className="p-4">
+        <p className="text-xs font-medium text-muted-foreground mb-2">Campaign timeline</p>
+        <p className="text-xs text-muted-foreground/60">Set a send date in Details above to see the projected schedule.</p>
+      </Card>
+    );
+  }
+
+  return (
+    <Card className="p-4">
+      <p className="text-xs font-medium text-muted-foreground mb-4">Campaign timeline</p>
+      <div className="flex items-start">
+        {steps.map((step, i) => {
+          const status = stepStatus(step.messages, step.step);
+          const styles = statusStyles[status] || statusStyles.upcoming;
+          const date = stepDate(step);
+          const label = step.step === 1 ? "Initial email" : `Follow-up ${step.step - 1}`;
+          const countSummary = (() => {
+            if (step.messages.length === 0) return "Not yet generated";
+            const sent = step.messages.filter(m => m.status === "sent").length;
+            const total = step.messages.length;
+            return sent > 0 ? `${sent}/${total} sent` : `${total} ${step.messages[0]?.status ?? "planned"}`;
+          })();
+
+          return (
+            <div key={step.step} className="flex items-start flex-1 min-w-0">
+              {/* Node */}
+              <div className="flex flex-col items-center flex-shrink-0">
+                <div className={`w-8 h-8 rounded-full border-2 flex items-center justify-center text-xs font-bold ${styles.circle}`}>
+                  {step.step}
+                </div>
+                <p className={`text-[10px] font-medium mt-1.5 ${styles.label}`}>{label}</p>
+                {date && (
+                  <p className="text-[10px] text-muted-foreground mt-0.5">
+                    {new Date(date).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}
+                  </p>
+                )}
+                <p className="text-[10px] text-muted-foreground/70 mt-0.5">{countSummary}</p>
+                <p className={`text-[9px] mt-0.5 ${styles.label}`}>{statusLabel[status]}</p>
+              </div>
+              {/* Connector line */}
+              {i < steps.length - 1 && (
+                <div className="flex-1 h-px bg-border/60 mt-4 mx-1" />
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </Card>
+  );
+}
+
 function DraftCard({
   message,
   onApprove,
@@ -1140,7 +1361,11 @@ function DraftCard({
   onReject: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [editSubject, setEditSubject] = useState(message.subject ?? "");
+  const [editContent, setEditContent] = useState(message.content);
   const regenerateMutation = useRegenerateMessage();
+  const updateMutation = useUpdateMessage();
   const sendMutation = useSendMessage();
 
   const statusColor =
@@ -1161,6 +1386,27 @@ function DraftCard({
     );
   }
 
+  function handleSaveEdit() {
+    toast.promise(
+      updateMutation.mutateAsync({
+        id: message.id,
+        subject: editSubject || undefined,
+        content: editContent,
+      }),
+      {
+        loading: "Saving edits…",
+        success: () => { setEditing(false); return "Draft updated"; },
+        error: "Failed to save",
+      }
+    );
+  }
+
+  function handleCancelEdit() {
+    setEditSubject(message.subject ?? "");
+    setEditContent(message.content);
+    setEditing(false);
+  }
+
   return (
     <Card className="p-4">
       <div className="flex items-start justify-between gap-3">
@@ -1171,8 +1417,13 @@ function DraftCard({
             <Badge variant="outline" className={`text-[9px] shrink-0 ${statusColor}`}>
               {message.status}
             </Badge>
+            {(message.step_number ?? 1) > 1 && (
+              <Badge variant="outline" className="text-[9px] shrink-0 border-blue-500/30 text-blue-400">
+                Follow-up {message.step_number - 1}
+              </Badge>
+            )}
           </div>
-          {message.subject && (
+          {message.subject && !editing && (
             <p className="text-xs text-muted-foreground truncate">{message.subject}</p>
           )}
           {message.scheduled_send_date && message.status !== "sent" && (
@@ -1183,15 +1434,26 @@ function DraftCard({
           )}
         </div>
         <div className="flex items-center gap-1 shrink-0">
-          <button
-            onClick={handleRegenerate}
-            disabled={regenerateMutation.isPending}
-            title="Regenerate"
-            className="rounded p-1.5 text-muted-foreground hover:text-foreground hover:bg-accent transition-colors disabled:opacity-50"
-          >
-            <RefreshCw className={`h-3.5 w-3.5 ${regenerateMutation.isPending ? "animate-spin" : ""}`} />
-          </button>
-          {message.status === "draft" && (
+          {!editing && (
+            <button
+              onClick={handleRegenerate}
+              disabled={regenerateMutation.isPending}
+              title="Regenerate"
+              className="rounded p-1.5 text-muted-foreground hover:text-foreground hover:bg-accent transition-colors disabled:opacity-50"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${regenerateMutation.isPending ? "animate-spin" : ""}`} />
+            </button>
+          )}
+          {!editing && message.status !== "sent" && (
+            <button
+              onClick={() => { setEditing(true); setExpanded(false); }}
+              title="Edit"
+              className="rounded p-1.5 text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+            >
+              <Pencil className="h-3.5 w-3.5" />
+            </button>
+          )}
+          {!editing && message.status === "draft" && (
             <>
               <button
                 onClick={onApprove}
@@ -1209,7 +1471,7 @@ function DraftCard({
               </button>
             </>
           )}
-          {message.status === "approved" && (
+          {!editing && message.status === "approved" && (
             <button
               onClick={() =>
                 toast.promise(sendMutation.mutateAsync(message.id), {
@@ -1229,15 +1491,45 @@ function DraftCard({
               )}
             </button>
           )}
-          <button
-            onClick={() => setExpanded((v) => !v)}
-            className="rounded p-1.5 text-muted-foreground hover:text-foreground transition-colors text-xs"
-          >
-            {expanded ? "Hide" : "View"}
-          </button>
+          {!editing && (
+            <button
+              onClick={() => setExpanded((v) => !v)}
+              className="rounded p-1.5 text-muted-foreground hover:text-foreground transition-colors text-xs"
+            >
+              {expanded ? "Hide" : "View"}
+            </button>
+          )}
         </div>
       </div>
-      {expanded && (
+
+      {editing && (
+        <div className="mt-3 border-t border-border/40 pt-3 space-y-2">
+          {message.subject != null && (
+            <input
+              type="text"
+              value={editSubject}
+              onChange={(e) => setEditSubject(e.target.value)}
+              placeholder="Subject line"
+              className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm"
+            />
+          )}
+          <textarea
+            value={editContent}
+            onChange={(e) => setEditContent(e.target.value)}
+            rows={10}
+            className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm leading-relaxed resize-y"
+          />
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" size="sm" onClick={handleCancelEdit}>Cancel</Button>
+            <Button size="sm" disabled={updateMutation.isPending} onClick={handleSaveEdit}>
+              {updateMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : <Check className="h-3.5 w-3.5 mr-1" />}
+              Save
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {expanded && !editing && (
         <p className="mt-3 text-sm text-foreground/80 leading-relaxed whitespace-pre-line border-t border-border/40 pt-3">
           {message.content}
         </p>

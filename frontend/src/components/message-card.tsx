@@ -19,6 +19,7 @@ import {
   Trash2,
   Eye,
   EyeOff,
+  CalendarClock,
 } from "lucide-react";
 import { EditMessageDialog } from "@/components/edit-message-dialog";
 import { RegenerateCompareDialog } from "@/components/regenerate-compare-dialog";
@@ -37,7 +38,9 @@ import {
   useDeleteReply,
   useGenerateFollowupForLead,
   useMessages,
+  DuplicateLiveOutreachError,
 } from "@/hooks/use-outreach";
+import { toast } from "sonner";
 import { useGeneratingLeadId } from "@/hooks/use-live-updates";
 import { useAuth } from "@/lib/auth-context";
 import { useLeadDetail } from "@/hooks/use-lead-detail";
@@ -46,6 +49,7 @@ interface Props {
   message: OutreachMessage;
   inConversation?: boolean;
   emailCapReached?: boolean;
+  isDuplicate?: boolean;
 }
 
 const statusColors: Record<string, string> = {
@@ -89,7 +93,7 @@ function rejectionLabel(reason: string): string {
   return REJECTION_LABELS[reason] ?? "rejected";
 }
 
-export function MessageCard({ message, inConversation, emailCapReached }: Props) {
+export function MessageCard({ message, inConversation, emailCapReached, isDuplicate }: Props) {
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [threadOpen, setThreadOpen] = useState(inConversation && !!message.has_reply);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -97,6 +101,21 @@ export function MessageCard({ message, inConversation, emailCapReached }: Props)
   const [activeAction, setActiveAction] = useState<string | null>(null);
   const [replyContent, setReplyContent] = useState("");
   const [originalExpanded, setOriginalExpanded] = useState(false);
+  const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [scheduleDay, setScheduleDay] = useState(() => message.scheduled_send_date?.slice(0, 10) ?? "");
+  const [scheduleHour, setScheduleHour] = useState(() => {
+    if (!message.scheduled_send_date) return "9";
+    const h = new Date(message.scheduled_send_date).getHours();
+    return String(h % 12 || 12);
+  });
+  const [scheduleMinute, setScheduleMinute] = useState(() => {
+    if (!message.scheduled_send_date) return "00";
+    return String(new Date(message.scheduled_send_date).getMinutes()).padStart(2, "0");
+  });
+  const [scheduleAmPm, setScheduleAmPm] = useState(() => {
+    if (!message.scheduled_send_date) return "AM";
+    return new Date(message.scheduled_send_date).getHours() >= 12 ? "PM" : "AM";
+  });
 
   const { isAdmin, isMember } = useAuth();
   const canAct = isAdmin || isMember;
@@ -134,9 +153,24 @@ export function MessageCard({ message, inConversation, emailCapReached }: Props)
   function handleApprove() {
     if (emailCapReached && message.channel === "email") return;
     setActiveAction("approve");
-    updateMutation.mutate({ id: message.id, status: "approved" }, {
-      onSettled: () => setActiveAction(null),
-    });
+    updateMutation.mutate(
+      {
+        id: message.id,
+        status: "approved",
+        lead_id: message.lead_id,
+        step_number: message.step_number,
+        channel: message.channel,
+        business_name: message.business_name,
+      },
+      {
+        onError: (err) => {
+          if (err instanceof DuplicateLiveOutreachError) {
+            toast.warning(`${err.businessName} already has a live email outreach — unapprove it first.`);
+          }
+        },
+        onSettled: () => setActiveAction(null),
+      }
+    );
   }
 
   function handleReject() {
@@ -269,6 +303,15 @@ export function MessageCard({ message, inConversation, emailCapReached }: Props)
             <ChannelIcon className="h-3 w-3" />
             {message.channel === "email" ? "Email" : "DM"}
           </Badge>
+          {isDuplicate && (
+            <Badge
+              variant="outline"
+              className="bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300 border-red-300 dark:border-red-700"
+              title="Another live email outreach exists for this lead — unapprove or reject one to clear the duplicate."
+            >
+              Duplicate
+            </Badge>
+          )}
           {message.venue_category && (
             <Badge variant="secondary" className="capitalize">
               {message.venue_category.replace(/_/g, " ")}
@@ -782,58 +825,145 @@ export function MessageCard({ message, inConversation, emailCapReached }: Props)
             )}
           </div>
         )}
-        {/* Edit + Send + Unapprove buttons for approved messages */}
+        {/* Edit + Send + Schedule + Unapprove buttons for approved messages */}
         {message.status === "approved" && canAct && (
-          <div className="flex items-center gap-2 pt-1">
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => setEditDialogOpen(true)}
-              disabled={sendMutation.isPending || updateMutation.isPending}
-            >
-              <Pencil className="mr-1 h-3.5 w-3.5" />
-              Edit
-            </Button>
-            {message.channel === "instagram_dm" ? (
+          <div className="space-y-2 pt-1">
+            <div className="flex items-center gap-2 flex-wrap">
               <Button
                 size="sm"
-                variant="default"
-                className="bg-amber-600 hover:bg-amber-700"
-                disabled
-                title="Instagram DMs must be sent manually. Copy the message and send via Instagram."
-              >
-                <Send className="mr-1 h-3.5 w-3.5" />
-                Send Manually
-              </Button>
-            ) : (
-              <Button
-                size="sm"
-                variant="default"
-                className="bg-blue-600 hover:bg-blue-700"
-                onClick={() => sendMutation.mutate(message.id)}
+                variant="outline"
+                onClick={() => setEditDialogOpen(true)}
                 disabled={sendMutation.isPending || updateMutation.isPending}
               >
-                {sendMutation.isPending ? (
+                <Pencil className="mr-1 h-3.5 w-3.5" />
+                Edit
+              </Button>
+              <Button
+                size="sm"
+                variant={scheduleOpen ? "default" : "outline"}
+                onClick={() => setScheduleOpen((v) => !v)}
+                disabled={updateMutation.isPending}
+              >
+                <CalendarClock className="mr-1 h-3.5 w-3.5" />
+                {message.scheduled_send_date
+                  ? `Scheduled ${new Date(message.scheduled_send_date).toLocaleDateString("en-GB", { day: "numeric", month: "short" })} ${new Date(message.scheduled_send_date).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}`
+                  : "Schedule"}
+              </Button>
+              {message.channel === "instagram_dm" ? (
+                <Button
+                  size="sm"
+                  variant="default"
+                  className="bg-amber-600 hover:bg-amber-700"
+                  disabled
+                  title="Instagram DMs must be sent manually. Copy the message and send via Instagram."
+                >
+                  <Send className="mr-1 h-3.5 w-3.5" />
+                  Send Manually
+                </Button>
+              ) : (
+                <Button
+                  size="sm"
+                  variant="default"
+                  className="bg-blue-600 hover:bg-blue-700"
+                  onClick={() => sendMutation.mutate(message.id)}
+                  disabled={sendMutation.isPending || updateMutation.isPending}
+                >
+                  {sendMutation.isPending ? (
+                    <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Send className="mr-1 h-3.5 w-3.5" />
+                  )}
+                  {sendMutation.isPending ? "Sending..." : "Send"}
+                </Button>
+              )}
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={handleUnapprove}
+                disabled={updateMutation.isPending || sendMutation.isPending}
+              >
+                {activeAction === "unapprove" ? (
                   <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
                 ) : (
-                  <Send className="mr-1 h-3.5 w-3.5" />
+                  <X className="mr-1 h-3.5 w-3.5" />
                 )}
-                {sendMutation.isPending ? "Sending..." : "Send"}
+                {activeAction === "unapprove" ? "Unapproving..." : "Unapprove"}
               </Button>
+            </div>
+            {scheduleOpen && (
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  type="date"
+                  value={scheduleDay}
+                  onChange={(e) => setScheduleDay(e.target.value)}
+                  min={new Date().toISOString().split("T")[0]}
+                  className="rounded-md border border-input bg-background px-2 py-1 text-sm"
+                />
+                <select
+                  value={scheduleHour}
+                  onChange={(e) => setScheduleHour(e.target.value)}
+                  className="rounded-md border border-input bg-background px-2 py-1 text-sm"
+                >
+                  {Array.from({ length: 12 }, (_, i) => i + 1).map((h) => (
+                    <option key={h} value={String(h)}>{String(h).padStart(2, "0")}</option>
+                  ))}
+                </select>
+                <span className="text-sm text-muted-foreground">:</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={59}
+                  value={scheduleMinute}
+                  onChange={(e) => {
+                    const v = Math.max(0, Math.min(59, parseInt(e.target.value) || 0));
+                    setScheduleMinute(String(v).padStart(2, "0"));
+                  }}
+                  className="w-14 rounded-md border border-input bg-background px-2 py-1 text-sm text-center"
+                />
+                <select
+                  value={scheduleAmPm}
+                  onChange={(e) => setScheduleAmPm(e.target.value)}
+                  className="rounded-md border border-input bg-background px-2 py-1 text-sm"
+                >
+                  <option value="AM">AM</option>
+                  <option value="PM">PM</option>
+                </select>
+                <Button
+                  size="sm"
+                  disabled={updateMutation.isPending || !scheduleDay}
+                  onClick={() => {
+                    let h = parseInt(scheduleHour);
+                    if (scheduleAmPm === "PM" && h !== 12) h += 12;
+                    if (scheduleAmPm === "AM" && h === 12) h = 0;
+                    // Build a local Date from the picked values, then store as UTC ISO
+                    const local = new Date(`${scheduleDay}T${String(h).padStart(2, "0")}:${scheduleMinute}:00`);
+                    const iso = local.toISOString(); // always UTC
+                    updateMutation.mutate(
+                      { id: message.id, scheduled_send_date: iso },
+                      { onSuccess: () => setScheduleOpen(false) }
+                    );
+                  }}
+                >
+                  {updateMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+                  Save
+                </Button>
+                {message.scheduled_send_date && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={updateMutation.isPending}
+                    onClick={() => {
+                      updateMutation.mutate(
+                        { id: message.id, scheduled_send_date: null },
+                        { onSuccess: () => { setScheduleDay(""); setScheduleOpen(false); } }
+                      );
+                    }}
+                  >
+                    Clear
+                  </Button>
+                )}
+              </div>
             )}
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={handleUnapprove}
-              disabled={updateMutation.isPending || sendMutation.isPending}
-            >
-              {activeAction === "unapprove" ? (
-                <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <X className="mr-1 h-3.5 w-3.5" />
-              )}
-              {activeAction === "unapprove" ? "Unapproving..." : "Unapprove"}
-            </Button>
           </div>
         )}
         {/* Back to draft button for rejected messages */}
