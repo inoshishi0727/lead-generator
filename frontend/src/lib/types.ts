@@ -111,10 +111,12 @@ export interface Campaign {
   recommended_lead_ids: string[];
   status: "draft" | "active" | "completed" | "archived";
   send_date: string | null;
+  timeframe_end: string | null;
   created_at: string;
   created_by: string;
   approved_by: string | null;
   approved_at: string | null;
+  completed_at: string | null;
 }
 
 export interface OutreachMessage {

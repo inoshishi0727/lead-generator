@@ -61,7 +61,7 @@ type SendMode = "recommended" | "all" | "custom";
 export default function CampaignsPage() {
   const [activeCampaign, setActiveCampaign] = useState<Campaign | null>(null);
   const [showNewCampaign, setShowNewCampaign] = useState(false);
-  const [filter, setFilter] = useState<"all" | "active" | "draft">("all");
+  const [filter, setFilter] = useState<"all" | "active" | "draft" | "completed">("all");
   const [search, setSearch] = useState("");
   const [showFilters, setShowFilters] = useState(false);
   const [typeFilter, setTypeFilter] = useState("");
@@ -88,8 +88,13 @@ export default function CampaignsPage() {
   const visible = campaigns.filter((c) => c.status !== "archived");
   const drafts = visible.filter((c) => c.status === "draft");
   const active = visible.filter((c) => c.status === "active");
+  const completed = visible.filter((c) => c.status === "completed");
 
-  const byStatus = filter === "all" ? visible : filter === "active" ? active : drafts;
+  const byStatus =
+    filter === "all" ? visible :
+    filter === "active" ? active :
+    filter === "completed" ? completed :
+    drafts;
 
   const filtered = byStatus.filter((c) => {
     if (search) {
@@ -134,6 +139,7 @@ export default function CampaignsPage() {
               { key: "all", label: "All", count: visible.length },
               { key: "active", label: "Active", count: active.length },
               { key: "draft", label: "Pending Review", count: drafts.length },
+              { key: "completed", label: "Completed", count: completed.length },
             ] as const).map(({ key, label, count }) => (
               <button
                 key={key}
@@ -279,9 +285,10 @@ function CampaignCard({ campaign, onClick }: { campaign: Campaign; onClick: () =
         <div className="flex items-center gap-1.5 flex-wrap">
           <Badge variant="secondary" className="text-[10px]">{typeLabel}</Badge>
           {campaign.status === "draft" && (
-            <Badge variant="outline" className="text-[9px] border-amber-500/30 text-amber-400">
-              Draft
-            </Badge>
+            <Badge variant="outline" className="text-[9px] border-amber-500/30 text-amber-400">Draft</Badge>
+          )}
+          {campaign.status === "completed" && (
+            <Badge variant="outline" className="text-[9px] border-emerald-500/30 text-emerald-400">Completed</Badge>
           )}
         </div>
         <span className="text-[10px] text-muted-foreground shrink-0">{campaign.season}</span>
@@ -315,6 +322,7 @@ function CampaignDetailView({
   const [customIds, setCustomIds] = useState<string[]>([]);
   const [editing, setEditing] = useState<EditableField>(null);
   const [showArchiveConfirm, setShowArchiveConfirm] = useState(false);
+  const [showCompleteConfirm, setShowCompleteConfirm] = useState(false);
   const [draftName, setDraftName] = useState(campaign.name ?? "");
   const [draftBrief, setDraftBrief] = useState(campaign.brief);
   const [draftType, setDraftType] = useState(campaign.campaign_type);
@@ -497,13 +505,26 @@ function CampaignDetailView({
           </div>
           <p className="text-sm text-muted-foreground mt-0.5">{campaign.lead_product} — {campaign.hook}</p>
         </div>
-        <button
-          onClick={() => setShowArchiveConfirm(true)}
-          className="mt-1 flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground hover:text-red-400 transition-colors"
-        >
-          <Archive className="h-3.5 w-3.5" />
-          Archive
-        </button>
+        <div className="flex items-center gap-3 shrink-0 mt-1">
+          {campaign.status === "active" && (
+            <button
+              onClick={() => setShowCompleteConfirm(true)}
+              className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-emerald-400 transition-colors"
+            >
+              <CheckCircle2 className="h-3.5 w-3.5" />
+              Mark as Complete
+            </button>
+          )}
+          {campaign.status !== "completed" && (
+            <button
+              onClick={() => setShowArchiveConfirm(true)}
+              className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-red-400 transition-colors"
+            >
+              <Archive className="h-3.5 w-3.5" />
+              Archive
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Draft approval banner */}
@@ -796,6 +817,45 @@ function CampaignDetailView({
               >
                 {updateMutation.isPending ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Archive className="mr-1.5 h-3.5 w-3.5" />}
                 Archive
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showCompleteConfirm && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
+          onClick={(e) => { if (e.target === e.currentTarget) setShowCompleteConfirm(false); }}
+        >
+          <div className="w-full max-w-sm rounded-lg border border-border/50 bg-card p-6 shadow-2xl">
+            <div className="flex items-start gap-3 mb-4">
+              <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-400 mt-0.5" />
+              <div>
+                <p className="text-sm font-semibold">Mark this campaign as complete?</p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Any unsent drafts will remain as-is but the campaign will be closed. This is useful if you want to stop the campaign early without archiving it.
+                </p>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" size="sm" onClick={() => setShowCompleteConfirm(false)}>
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                disabled={updateMutation.isPending}
+                onClick={() => {
+                  updateMutation.mutate(
+                    { id: campaign.id, status: "completed", completed_at: new Date().toISOString() },
+                    { onSuccess: () => { setShowCompleteConfirm(false); } }
+                  );
+                }}
+              >
+                {updateMutation.isPending
+                  ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                  : <CheckCircle2 className="mr-1.5 h-3.5 w-3.5" />}
+                Mark as Complete
               </Button>
             </div>
           </div>
