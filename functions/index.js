@@ -57,6 +57,63 @@ Rules:
   return null;
 }
 
+// ---- AI conversation quality scoring ----
+
+async function scoreConversation(emailContent, replyBody) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey || !replyBody || replyBody.trim().length < 5) return null;
+
+  const ai = new GoogleGenAI({ apiKey });
+  const prompt = `You are evaluating a B2B spirits/drinks sales email and the reply it received.
+Rate the quality of the reply as a sales signal.
+
+OUTREACH EMAIL:
+"""
+${(emailContent || "").slice(0, 1000)}
+"""
+
+REPLY RECEIVED:
+"""
+${replyBody.slice(0, 1500)}
+"""
+
+Return ONLY valid JSON with these exact fields:
+{
+  "content_rating": "great" | "good" | "not_interested",
+  "score": <integer 1-10>,
+  "reason": "<15-20 word summary explaining the rating>"
+}
+
+Rating rules:
+- "great" (score 8-10): Strong buy signal — wants a meeting/tasting, asks for pricing/availability, expresses clear enthusiasm, forwards to buyer
+- "good" (score 5-7): Mild positive — curious, open to learning more, asks a relevant product question, no clear objection
+- "not_interested" (score 1-4): Rejection — declines, already has supplier, asks to unsubscribe, out of budget, generic brush-off, out of office with no interest`;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash-preview-04-17",
+      contents: prompt,
+      config: { maxOutputTokens: 200, temperature: 0.1 },
+    });
+    let text = (response.text || "").replace(/```json\s*/g, "").replace(/```/g, "").trim();
+    const start = text.indexOf("{");
+    const end = text.lastIndexOf("}");
+    if (start >= 0 && end > start) {
+      const parsed = JSON.parse(text.slice(start, end + 1));
+      if (["great", "good", "not_interested"].includes(parsed.content_rating)) {
+        return {
+          content_rating: parsed.content_rating,
+          score: typeof parsed.score === "number" ? parsed.score : null,
+          reason: parsed.reason || null,
+        };
+      }
+    }
+  } catch (err) {
+    console.warn("scoreConversation failed:", err.message);
+  }
+  return null;
+}
+
 // ---- Venue category to lead products + tone mapping ----
 
 const VENUE_PRODUCT_MAP = {
@@ -2373,12 +2430,28 @@ export const processInboundEmail = functions
         }
       }
 
-      // Update message if matched
+      // Update message if matched — also auto-score conversation quality
       if (matchedMessage) {
-        await db.collection("outreach_messages").doc(matchedMessage.id).update({
+        const msgUpdate = {
           has_reply: true,
           reply_count: FieldValue.increment(1),
-        });
+        };
+
+        if (!isAutoReply && parsedBody && parsedBody.trim().length >= 5) {
+          try {
+            const scoreResult = await scoreConversation(matchedMessage.content, parsedBody);
+            if (scoreResult) {
+              msgUpdate.content_rating = scoreResult.content_rating;
+              msgUpdate.content_score = scoreResult.score;
+              msgUpdate.content_rating_reason = scoreResult.reason;
+              msgUpdate.content_rated_at = new Date().toISOString();
+            }
+          } catch (err) {
+            console.warn("scoreConversation failed (non-blocking):", err.message);
+          }
+        }
+
+        await db.collection("outreach_messages").doc(matchedMessage.id).update(msgUpdate);
       }
 
       // Log idempotency record
