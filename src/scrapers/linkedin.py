@@ -288,12 +288,15 @@ class LinkedInCompanyScraper(BaseScraper):
             "viewport": {"width": 1280, "height": 720},
         }
         if proxy:
+            # Cloakbrowser persistent context accepts proxy as a dict with
+            # server/username/password keys. For HTTPS-through-HTTP-proxy,
+            # some engines need the auth injected via route handler instead.
             kwargs["proxy"] = proxy
             kwargs["geoip"] = True
 
         self._context = await launch_persistent_context_async(**kwargs)
         self._browser_engine = "cloakbrowser_persistent"
-        self._browser = None  # persistent context has no separate browser handle
+        self._browser = None
         log.info(
             "linkedin_persistent_browser_ready",
             profile_dir=str(self.profile_dir),
@@ -351,6 +354,11 @@ class LinkedInCompanyScraper(BaseScraper):
         Launches Xvfb (virtual framebuffer) and a VNC server so you can
         connect from your laptop, see the browser, and complete LinkedIn login.
         After login, the persistent profile is saved just like --save-session.
+
+        NOTE: Proxy auth can cause issues with Chromium-based browsers on VPS.
+        If you get ERR_HTTP_RESPONSE_CODE_FAILURE, run with --no-proxy instead.
+        The VPS has a stable IP, so the session will remain valid across runs
+        as long as you also use --no-proxy for scraping.
 
         Requirements on VPS: apt install xvfb x11vnc (or equivalent).
         """
