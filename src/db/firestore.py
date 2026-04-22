@@ -13,7 +13,7 @@ import structlog
 from google.cloud.firestore_v1.base_query import FieldFilter
 
 from src.db.client import get_firestore_client
-from src.db.models import ActivityLog, Lead, ScrapeRun
+from src.db.models import ActivityLog, Lead, LinkedInCompanyData, LinkedInEmployee, ScrapeRun
 
 log = structlog.get_logger()
 
@@ -476,3 +476,236 @@ def save_edit_feedback(feedback: dict) -> bool:
     except Exception as exc:
         log.warning("save_edit_feedback_failed", error=str(exc))
         return False
+
+
+def _linkedin_employee_doc_id(lead_id: str, profile_slug: str) -> str:
+    return f"{lead_id}_{profile_slug}"
+
+
+def save_linkedin_employee(employee: LinkedInEmployee) -> bool:
+    """Upsert a LinkedIn employee keyed by (lead_id, profile_slug).
+
+    Same person re-scraped for the same lead updates last_seen_at in place.
+    Same person at a different lead becomes a new document (job history preserved).
+    """
+    db = get_firestore_client()
+    if db is None:
+        return False
+
+    try:
+        doc_id = _linkedin_employee_doc_id(str(employee.lead_id), employee.profile_slug)
+        doc_ref = db.collection("linkedin_employees").document(doc_id)
+        existing = doc_ref.get()
+        payload = employee.model_dump(mode="json")
+
+        if existing.exists:
+            prev = existing.to_dict() or {}
+            payload["id"] = prev.get("id", payload["id"])
+            payload["scraped_at"] = prev.get("scraped_at", payload["scraped_at"])
+            payload["promoted_to_outreach"] = prev.get("promoted_to_outreach", False)
+            payload["promoted_at"] = prev.get("promoted_at")
+            payload["notes"] = prev.get("notes") or payload.get("notes")
+
+        doc_ref.set(payload)
+        log.debug("linkedin_employee_saved", doc_id=doc_id, name=employee.name)
+        return True
+    except Exception as exc:
+        log.warning("save_linkedin_employee_failed", name=employee.name, error=str(exc))
+        return False
+
+
+def get_linkedin_employees_for_lead(lead_id: str) -> list[dict]:
+    """Return all LinkedIn employees scraped for a given lead."""
+    db = get_firestore_client()
+    if db is None:
+        return []
+
+    try:
+        query = db.collection("linkedin_employees").where(
+            filter=FieldFilter("lead_id", "==", lead_id)
+        )
+        return [doc.to_dict() for doc in query.stream()]
+    except Exception as exc:
+        log.warning("get_linkedin_employees_failed", lead_id=lead_id, error=str(exc))
+        return []
+
+
+def update_lead_linkedin_status(lead_id: str, status: str, **extra: object) -> bool:
+    """Set linkedin_scrape_status plus any additional LinkedIn fields on a lead."""
+    updates: dict = {"linkedin_scrape_status": status}
+    updates.update(extra)
+    return update_lead(lead_id, updates)
+
+
+def save_linkedin_company_data(lead_id: str, data: LinkedInCompanyData) -> bool:
+    """Write company page data to Firestore — update lead fields + store raw record.
+
+    1. Update the lead document with social links, phone, email, company URL.
+       Only overwrites fields that are currently null/empty (never replaces
+       existing data that may have come from a better source like enrichment).
+    2. Write the full LinkedInCompanyData to the linkedin_company_data collection
+       for audit / re-processing.
+    """
+    db = get_firestore_client()
+    if db is None:
+        return False
+
+    try:
+        # Build incremental updates — only set fields that aren't already populated
+        updates: dict = {
+            "linkedin_company_url": data.company_linkedin_url,
+            "social_media_scraped_at": data.scraped_at.isoformat(),
+        }
+
+        # Phone — only set if we found one AND the lead doesn't already have one
+        if data.phone:
+            updates["phone"] = data.phone
+
+        # Email — only set if lead doesn't already have one
+        if data.email:
+            updates["email"] = data.email
+            updates["email_found"] = True
+
+        # Website — only set if lead doesn't already have one
+        if data.website:
+            updates.setdefault("website", data.website)
+
+        # Social media handles
+        if data.instagram_handle:
+            updates.setdefault("instagram_handle", data.instagram_handle)
+        if data.twitter_handle:
+            updates["twitter_handle"] = data.twitter_handle
+        if data.facebook_url:
+            updates["facebook_url"] = data.facebook_url
+        if data.tiktok_handle:
+            updates["tiktok_handle"] = data.tiktok_handle
+        if data.youtube_url:
+            updates["youtube_url"] = data.youtube_url
+
+        # Company metadata
+        if data.company_size:
+            updates["linkedin_company_size"] = data.company_size
+        if data.industry:
+            updates["linkedin_industry"] = data.industry
+        if data.hq_address:
+            updates.setdefault("address", data.hq_address)
+
+        # Update the lead document
+        doc_ref = db.collection("leads").document(lead_id)
+        doc_snap = doc_ref.get()
+        if doc_snap.exists:
+            existing = doc_snap.to_dict() or {}
+            # Filter: only set social/contact fields if they're currently empty
+            filtered_updates: dict = {}
+            for k, v in updates.items():
+                if k in ("social_media_scraped_at", "linkedin_company_url",
+                          "linkedin_company_size", "linkedin_industry",
+                          "twitter_handle", "facebook_url", "tiktok_handle",
+                          "youtube_url"):
+                    filtered_updates[k] = v
+                elif not existing.get(k):
+                    filtered_updates[k] = v
+            if filtered_updates:
+                doc_ref.update(filtered_updates)
+        else:
+            doc_ref.update(updates)
+
+        # Store the full raw record
+        raw_doc_id = f"{lead_id}_{data.company_linkedin_slug or 'unknown'}"
+        db.collection("linkedin_company_data").document(raw_doc_id).set(
+            data.model_dump(mode="json")
+        )
+
+        log.info(
+            "linkedin_company_data_firestore_saved",
+            lead_id=lead_id,
+            fields_updated=len(updates),
+        )
+        return True
+    except Exception as exc:
+        log.warning("save_linkedin_company_data_failed", lead_id=lead_id, error=str(exc))
+        return False
+
+
+def count_linkedin_scrapes_today() -> int:
+    """Count LinkedIn scrape completions in the last 24h (for per-day cap)."""
+    db = get_firestore_client()
+    if db is None:
+        return 0
+
+    try:
+        from datetime import timedelta
+        from datetime import datetime as _dt
+
+        cutoff = (_dt.now() - timedelta(hours=24)).isoformat()
+        query = (
+            db.collection("activity_log")
+            .where(filter=FieldFilter("event_type", "==", "linkedin_company_scraped"))
+            .where(filter=FieldFilter("created_at", ">=", cutoff))
+        )
+        return sum(1 for _ in query.stream())
+    except Exception as exc:
+        log.warning("count_linkedin_scrapes_today_failed", error=str(exc))
+        return 0
+
+
+def get_leads_needing_linkedin_scrape(limit: int, rescrape_after_days: int = 90) -> list[dict]:
+    """Return leads that should be LinkedIn-scraped: never scraped, or scraped > N days ago.
+
+    Ordered by score desc (highest-value first). Used by --auto-select-count.
+    """
+    db = get_firestore_client()
+    if db is None:
+        return []
+
+    try:
+        from datetime import datetime as _dt, timedelta
+
+        cutoff = (_dt.now() - timedelta(days=rescrape_after_days)).isoformat()
+        query = (
+            db.collection("leads")
+            .order_by("score", direction="DESCENDING")
+            .limit(limit * 3)
+        )
+        eligible: list[dict] = []
+        for doc in query.stream():
+            data = doc.to_dict()
+            scraped = data.get("linkedin_scraped_at")
+            if scraped and scraped >= cutoff:
+                continue
+            eligible.append(data)
+            if len(eligible) >= limit:
+                break
+        return eligible
+    except Exception as exc:
+        log.warning("get_leads_needing_linkedin_scrape_failed", error=str(exc))
+        return []
+
+
+def get_all_leads_needing_linkedin_scrape(rescrape_after_days: int = 90) -> list[dict]:
+    """Return every lead that hasn't been LinkedIn-scraped (or is past its cutoff).
+
+    Unlike get_leads_needing_linkedin_scrape, there is no limit — used by the
+    bulk --all backfill CLI mode. Ordered by score desc so if the backfill
+    is interrupted, the highest-value leads are already done.
+    """
+    db = get_firestore_client()
+    if db is None:
+        return []
+
+    try:
+        from datetime import datetime as _dt, timedelta
+
+        cutoff = (_dt.now() - timedelta(days=rescrape_after_days)).isoformat()
+        query = db.collection("leads").order_by("score", direction="DESCENDING")
+        eligible: list[dict] = []
+        for doc in query.stream():
+            data = doc.to_dict()
+            scraped = data.get("linkedin_scraped_at")
+            if scraped and scraped >= cutoff:
+                continue
+            eligible.append(data)
+        return eligible
+    except Exception as exc:
+        log.warning("get_all_leads_needing_linkedin_scrape_failed", error=str(exc))
+        return []

@@ -43,13 +43,44 @@ class BaseScraper(abc.ABC):
         self._browser_engine = "camoufox"
         self._context = None
 
-    async def _launch_browser(self, headless: bool = True) -> Any:
-        """Launch a stealth browser with proxy. Camoufox first, CloakBrowser fallback."""
-        from src.scrapers.browser import close_browser, get_proxy_config, launch_browser
+    async def _launch_browser(
+        self,
+        headless: bool = True,
+        storage_state: str | dict | None = None,
+        use_proxy: bool = True,
+        sticky_session_id: str | None = None,
+    ) -> Any:
+        """Launch a stealth browser with proxy. Camoufox first, CloakBrowser fallback.
 
-        self._browser, self._browser_engine = await launch_browser(headless=headless)
+        Set ``use_proxy=False`` to skip the env-configured proxy for this
+        launch (e.g. when the proxy is unreachable and the scraper must fall
+        back to the host IP).
 
-        proxy = get_proxy_config()
+        Pass ``sticky_session_id`` to request the same exit IP across runs —
+        the ID is appended to PROXY_USERNAME via the template in
+        PROXY_STICKY_TEMPLATE (default: ``{base}-session-{sid}``). Used by
+        the LinkedIn scraper so the Playwright session cookies aren't
+        invalidated by rotating IPs.
+        """
+        from src.scrapers.browser import (
+            close_browser,
+            get_proxy_config,
+            get_sticky_proxy_config,
+            launch_browser,
+        )
+
+        if not use_proxy:
+            proxy = None
+        elif sticky_session_id:
+            proxy = get_sticky_proxy_config(sticky_session_id)
+        else:
+            proxy = get_proxy_config()
+
+        # Firefox (Camoufox) requires proxy at launch time — context-level is ignored.
+        self._browser, self._browser_engine = await launch_browser(
+            headless=headless, proxy=proxy
+        )
+
         context_kwargs = {
             "viewport": {"width": 1280, "height": 720},
             "locale": "en-GB",
@@ -57,8 +88,8 @@ class BaseScraper(abc.ABC):
             "geolocation": {"latitude": 51.5074, "longitude": -0.1278},
             "permissions": ["geolocation"],
         }
-        if proxy:
-            context_kwargs["proxy"] = proxy
+        if storage_state:
+            context_kwargs["storage_state"] = storage_state
         self._context = await self._browser.new_context(**context_kwargs)
 
         # Initialize session personality for humanized behavior

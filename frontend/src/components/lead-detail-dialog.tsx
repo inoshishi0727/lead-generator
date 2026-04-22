@@ -13,10 +13,18 @@ import {
   Eye,
   Pencil,
   Check,
+  Instagram,
+  Twitter,
+  Facebook,
+  Youtube,
+  Users,
+  ExternalLink,
+  Briefcase,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useEnrichLeads } from "@/hooks/use-leads";
+import { useLinkedInEmployees } from "@/hooks/use-linkedin-employees";
 import { updateLeadFields } from "@/lib/firestore-api";
 import type { Lead } from "@/lib/types";
 
@@ -40,6 +48,96 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
         {label}
       </span>
       <span className="text-foreground">{children}</span>
+    </div>
+  );
+}
+
+const CONFIDENCE_COLORS: Record<string, string> = {
+  high: "text-emerald-400",
+  medium: "text-amber-400",
+  low: "text-red-400",
+};
+
+function LinkedInEmployeesSection({ leadId }: { leadId: string }) {
+  const { data: employees, isLoading } = useLinkedInEmployees(leadId);
+
+  if (isLoading) {
+    return (
+      <div className="p-5 space-y-2">
+        <h3 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+          <Users className="h-3 w-3" /> Employees
+        </h3>
+        <p className="text-xs text-muted-foreground">Loading...</p>
+      </div>
+    );
+  }
+
+  if (!employees || employees.length === 0) return null;
+
+  const decisionMakers = employees.filter((e) => e.is_decision_maker);
+  const others = employees.filter((e) => !e.is_decision_maker);
+
+  return (
+    <div className="p-5 space-y-3">
+      <h3 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+        <Users className="h-3 w-3" /> Employees
+        <span className="text-muted-foreground/60 font-normal">({employees.length})</span>
+      </h3>
+      <div className="space-y-1.5">
+        {decisionMakers.length > 0 && (
+          <div className="space-y-1.5">
+            {decisionMakers.map((emp) => (
+              <EmployeeRow key={emp.id} emp={emp} />
+            ))}
+          </div>
+        )}
+        {others.length > 0 && (
+          <details className={decisionMakers.length > 0 ? "mt-2" : ""}>
+            <summary className="text-[11px] text-muted-foreground cursor-pointer hover:text-foreground transition-colors">
+              {decisionMakers.length > 0
+                ? `${others.length} other${others.length > 1 ? "s" : ""}`
+                : `Show ${others.length} employee${others.length > 1 ? "s" : ""}`}
+            </summary>
+            <div className="mt-1.5 space-y-1.5">
+              {others.map((emp) => (
+                <EmployeeRow key={emp.id} emp={emp} />
+              ))}
+            </div>
+          </details>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function EmployeeRow({ emp }: { emp: import("@/lib/types").LinkedInEmployee }) {
+  return (
+    <div className="flex items-center gap-2.5 rounded-md border border-border/30 px-3 py-2">
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-1.5">
+          <a
+            href={emp.profile_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-sm font-medium hover:underline truncate flex items-center gap-1"
+          >
+            {emp.name}
+            <ExternalLink className="h-2.5 w-2.5 text-muted-foreground shrink-0" />
+          </a>
+          {emp.is_decision_maker && (
+            <Badge variant="outline" className="text-[9px] px-1.5 py-0 bg-emerald-500/10 text-emerald-400 border-emerald-500/20 shrink-0">
+              <Briefcase className="h-2.5 w-2.5 mr-0.5" />
+              DM
+            </Badge>
+          )}
+        </div>
+        {emp.title && (
+          <p className="text-[11px] text-muted-foreground truncate">{emp.title}</p>
+        )}
+      </div>
+      <span className={`text-[10px] font-medium uppercase ${CONFIDENCE_COLORS[emp.confidence] ?? ""}`}>
+        {emp.confidence}
+      </span>
     </div>
   );
 }
@@ -302,6 +400,91 @@ export function LeadDetailDialog({ lead, onClose }: Props) {
             </Row>
           )}
         </div>
+
+        <div className="border-t" />
+
+        {/* Social Media + LinkedIn Company */}
+        {(lead.instagram_handle || lead.twitter_handle || lead.facebook_url || lead.tiktok_handle || lead.youtube_url || lead.linkedin_company_size || lead.linkedin_industry) && (
+          <>
+            <div className="p-5 space-y-2">
+              <h3 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                <Globe className="h-3 w-3" /> Social & Company
+              </h3>
+              <div className="flex flex-wrap gap-2">
+                {lead.instagram_handle && (
+                  <a
+                    href={`https://instagram.com/${lead.instagram_handle.replace(/^@/, "")}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1.5 rounded-md border border-border/50 px-2.5 py-1 text-xs hover:bg-muted/50 transition-colors"
+                  >
+                    <Instagram className="h-3 w-3 text-pink-400" />
+                    {lead.instagram_handle}
+                  </a>
+                )}
+                {lead.twitter_handle && (
+                  <a
+                    href={`https://x.com/${lead.twitter_handle.replace(/^@/, "")}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1.5 rounded-md border border-border/50 px-2.5 py-1 text-xs hover:bg-muted/50 transition-colors"
+                  >
+                    <Twitter className="h-3 w-3 text-sky-400" />
+                    {lead.twitter_handle}
+                  </a>
+                )}
+                {lead.facebook_url && (
+                  <a
+                    href={lead.facebook_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1.5 rounded-md border border-border/50 px-2.5 py-1 text-xs hover:bg-muted/50 transition-colors"
+                  >
+                    <Facebook className="h-3 w-3 text-blue-400" />
+                    Facebook
+                  </a>
+                )}
+                {lead.tiktok_handle && (
+                  <a
+                    href={`https://tiktok.com/@${lead.tiktok_handle.replace(/^@/, "")}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1.5 rounded-md border border-border/50 px-2.5 py-1 text-xs hover:bg-muted/50 transition-colors"
+                  >
+                    <svg className="h-3 w-3 text-white" viewBox="0 0 24 24" fill="currentColor"><path d="M19.59 6.69a4.83 4.83 0 01-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 01-2.88 2.5 2.89 2.89 0 01-2.89-2.89 2.89 2.89 0 012.89-2.89c.28 0 .54.04.79.1v-3.5a6.37 6.37 0 00-.79-.05A6.34 6.34 0 003.15 15.2a6.34 6.34 0 006.34 6.34 6.34 6.34 0 006.34-6.34V8.73a8.19 8.19 0 004.76 1.52V6.8a4.84 4.84 0 01-1-.11z"/></svg>
+                    {lead.tiktok_handle}
+                  </a>
+                )}
+                {lead.youtube_url && (
+                  <a
+                    href={lead.youtube_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1.5 rounded-md border border-border/50 px-2.5 py-1 text-xs hover:bg-muted/50 transition-colors"
+                  >
+                    <Youtube className="h-3 w-3 text-red-500" />
+                    YouTube
+                  </a>
+                )}
+              </div>
+              {lead.linkedin_company_size && (
+                <Row label="Company size">{lead.linkedin_company_size}</Row>
+              )}
+              {lead.linkedin_industry && (
+                <Row label="Industry">{lead.linkedin_industry}</Row>
+              )}
+              {lead.social_media_scraped_at && (
+                <p className="text-[10px] text-muted-foreground pt-1">
+                  Scraped {new Date(lead.social_media_scraped_at).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}
+                </p>
+              )}
+            </div>
+            <div className="border-t" />
+          </>
+        )}
+
+        {/* LinkedIn Employees */}
+        <LinkedInEmployeesSection leadId={lead.id} />
 
         <div className="border-t" />
 

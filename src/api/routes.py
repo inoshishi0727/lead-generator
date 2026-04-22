@@ -19,6 +19,9 @@ from src.api.schemas import (
     EnrichRequest,
     EnrichStatusResponse,
     LeadResponse,
+    LinkedInEmployeeResponse,
+    LinkedInScrapeRequest,
+    LinkedInScrapeStatusResponse,
     RatioUpdateRequest,
     ScoreStatusResponse,
     ScrapeRequest,
@@ -37,6 +40,9 @@ router = APIRouter(prefix="/api")
 _scrape_runs: dict[str, dict] = {}
 _scrape_leads: dict[str, list[LeadResponse]] = {}  # run_id -> leads
 _enrich_runs: dict[str, dict] = {}  # run_id -> enrichment status
+_linkedin_runs: dict[str, dict] = {}  # run_id -> LinkedIn scrape status
+_linkedin_lock = threading.Lock()  # only one LinkedIn scrape at a time per VPS
+_linkedin_running: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -380,6 +386,142 @@ async def scrape_status(run_id: str) -> ScrapeStatusResponse:
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
     return ScrapeStatusResponse(run_id=run_id, **run)
+
+
+def _run_linkedin_scrape(
+    run_id: str, lead_ids: list[str] | None, auto_select_count: int
+) -> None:
+    """Background worker: run LinkedInCompanyScraper, update _linkedin_runs in place."""
+    global _linkedin_running
+
+    from src.scrapers.linkedin import (
+        LinkedInBlocked,
+        LinkedInCompanyScraper,
+        LinkedInSessionExpired,
+    )
+
+    try:
+        _linkedin_runs[run_id]["status"] = "running"
+        scraper = LinkedInCompanyScraper(
+            lead_ids=lead_ids or None,
+            auto_select_count=auto_select_count,
+        )
+        asyncio.run(scraper.run())
+        _linkedin_runs[run_id].update(
+            status="completed",
+            completed_at=datetime.now(),
+            leads_processed=len(scraper.collected_leads),
+            employees_found=scraper.employee_count_total,
+        )
+        log.info(
+            "linkedin_run_done",
+            run_id=run_id,
+            leads=len(scraper.collected_leads),
+            employees=scraper.employee_count_total,
+        )
+    except LinkedInSessionExpired as exc:
+        _linkedin_runs[run_id].update(
+            status="failed",
+            error=f"Session expired: {exc}",
+            completed_at=datetime.now(),
+        )
+        log.error("linkedin_session_expired", run_id=run_id)
+    except LinkedInBlocked as exc:
+        _linkedin_runs[run_id].update(
+            status="failed",
+            error=f"LinkedIn blocked: {exc}",
+            completed_at=datetime.now(),
+        )
+        log.error("linkedin_blocked", run_id=run_id, error=str(exc))
+    except Exception as exc:
+        _linkedin_runs[run_id].update(
+            status="failed",
+            error=str(exc),
+            completed_at=datetime.now(),
+        )
+        log.exception("linkedin_thread_failed", run_id=run_id)
+    finally:
+        with _linkedin_lock:
+            _linkedin_running = False
+
+
+@router.post("/linkedin-scrape", response_model=LinkedInScrapeStatusResponse)
+async def start_linkedin_scrape(
+    req: LinkedInScrapeRequest,
+) -> LinkedInScrapeStatusResponse:
+    global _linkedin_running
+
+    with _linkedin_lock:
+        if _linkedin_running:
+            raise HTTPException(
+                status_code=409,
+                detail="A LinkedIn scrape is already in progress",
+            )
+        _linkedin_running = True
+
+    run_id = str(uuid4())
+    now = datetime.now()
+    _linkedin_runs[run_id] = {
+        "status": "pending",
+        "leads_processed": 0,
+        "employees_found": 0,
+        "decision_makers": 0,
+        "error": None,
+        "started_at": now,
+        "completed_at": None,
+        "current_lead": None,
+    }
+
+    thread = threading.Thread(
+        target=_run_linkedin_scrape,
+        args=(run_id, req.lead_ids, req.auto_select_count),
+        daemon=True,
+    )
+    thread.start()
+
+    return LinkedInScrapeStatusResponse(run_id=run_id, status="pending", started_at=now)
+
+
+@router.get(
+    "/linkedin-scrape-status/{run_id}",
+    response_model=LinkedInScrapeStatusResponse,
+)
+async def linkedin_scrape_status(run_id: str) -> LinkedInScrapeStatusResponse:
+    run = _linkedin_runs.get(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return LinkedInScrapeStatusResponse(run_id=run_id, **run)
+
+
+@router.get(
+    "/leads/{lead_id}/linkedin-employees",
+    response_model=list[LinkedInEmployeeResponse],
+)
+async def list_linkedin_employees(lead_id: str) -> list[LinkedInEmployeeResponse]:
+    from src.db.firestore import get_linkedin_employees_for_lead
+
+    docs = get_linkedin_employees_for_lead(lead_id)
+    return [
+        LinkedInEmployeeResponse(
+            id=str(doc.get("id", "")),
+            lead_id=str(doc.get("lead_id", "")),
+            name=doc.get("name", ""),
+            profile_url=doc.get("profile_url", ""),
+            profile_slug=doc.get("profile_slug", ""),
+            profile_image_url=doc.get("profile_image_url"),
+            title=doc.get("title"),
+            role_seniority=doc.get("role_seniority"),
+            is_decision_maker=bool(doc.get("is_decision_maker", False)),
+            location=doc.get("location"),
+            connection_degree=doc.get("connection_degree"),
+            confidence=doc.get("confidence", "high"),
+            scraped_at=doc.get("scraped_at"),
+            last_seen_at=doc.get("last_seen_at"),
+            promoted_to_outreach=bool(doc.get("promoted_to_outreach", False)),
+            notes=doc.get("notes"),
+        )
+        for doc in docs
+    ]
 
 
 @router.get("/leads", response_model=list[LeadResponse])

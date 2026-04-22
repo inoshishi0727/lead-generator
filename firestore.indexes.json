@@ -20,6 +20,21 @@
         { "fieldPath": "channel", "order": "ASCENDING" },
         { "fieldPath": "created_at", "order": "DESCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "linkedin_employees",
+      "fields": [
+        { "fieldPath": "lead_id", "order": "ASCENDING" },
+        { "fieldPath": "is_decision_maker", "order": "DESCENDING" },
+        { "fieldPath": "scraped_at", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "activity_log",
+      "fields": [
+        { "fieldPath": "event_type", "order": "ASCENDING" },
+        { "fieldPath": "created_at", "order": "ASCENDING" }
+      ]
     }
   ]
 }
