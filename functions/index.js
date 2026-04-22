@@ -4877,14 +4877,14 @@ export const backfillContentRatings = functions
   .https.onCall(async (_data, context) => {
     if (!context.auth) throw new HttpsError("unauthenticated", "Login required");
 
-    // Fetch all sent messages that have replies but no rating yet
+    // Fetch all sent messages — filter client-side to handle has_reply/reply_count inconsistency
     const snap = await db.collection("outreach_messages")
-      .where("has_reply", "==", true)
+      .where("status", "==", "sent")
       .get();
 
     const unrated = snap.docs
       .map((d) => ({ id: d.id, ...d.data() }))
-      .filter((m) => !m.content_rating);
+      .filter((m) => (m.has_reply === true || (m.reply_count && m.reply_count > 0)) && !m.content_rating);
 
     if (!unrated.length) return { scored: 0, skipped: 0, message: "All replies already scored" };
 
@@ -4892,25 +4892,35 @@ export const backfillContentRatings = functions
     let skipped = 0;
 
     for (const msg of unrated) {
-      // Fetch the most recent matched inbound reply for this message
-      const replySnap = await db.collection("inbound_replies")
-        .where("message_id", "==", msg.id)
-        .orderBy("created_at", "desc")
-        .limit(1)
-        .get();
-
-      // Fall back to lead-level match if message_id wasn't stored on old replies
+      // Fetch reply body — try message_id first, fall back to lead_id (no orderBy to avoid index issues)
       let replyBody = null;
-      if (!replySnap.empty) {
-        replyBody = replySnap.docs[0].data().body;
-      } else if (msg.lead_id) {
-        const fallbackSnap = await db.collection("inbound_replies")
+
+      const byMsgSnap = await db.collection("inbound_replies")
+        .where("message_id", "==", msg.id)
+        .limit(5)
+        .get();
+      if (!byMsgSnap.empty) {
+        // Pick the latest by sorting in memory
+        const sorted = byMsgSnap.docs
+          .map((d) => d.data())
+          .filter((r) => !r.is_auto_reply && r.body)
+          .sort((a, b) => (b.created_at > a.created_at ? 1 : -1));
+        replyBody = sorted[0]?.body ?? null;
+      }
+
+      if (!replyBody && msg.lead_id) {
+        const byLeadSnap = await db.collection("inbound_replies")
           .where("lead_id", "==", msg.lead_id)
           .where("matched", "==", true)
-          .orderBy("created_at", "desc")
-          .limit(1)
+          .limit(10)
           .get();
-        if (!fallbackSnap.empty) replyBody = fallbackSnap.docs[0].data().body;
+        if (!byLeadSnap.empty) {
+          const sorted = byLeadSnap.docs
+            .map((d) => d.data())
+            .filter((r) => !r.is_auto_reply && r.body)
+            .sort((a, b) => (b.created_at > a.created_at ? 1 : -1));
+          replyBody = sorted[0]?.body ?? null;
+        }
       }
 
       if (!replyBody || replyBody.trim().length < 5) {

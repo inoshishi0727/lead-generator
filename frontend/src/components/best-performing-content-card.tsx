@@ -281,31 +281,17 @@ export function BestPerformingContentCard() {
     if (ratingFilter === "unrated") return allEmails.filter((e) => !e.content_rating);
     return allEmails.filter((e) => e.content_rating === ratingFilter);
   }, [allEmails, ratingFilter]);
-  const totalReplies = emails.reduce((sum, e) => sum + e.reply_count, 0);
-  const totalOpens = emails.reduce((sum, e) => sum + e.open_count, 0);
-  const uniqueLeads = new Set(emails.map((e) => e.lead_id)).size;
+
+  // Stats always computed from allEmails so they don't shift when a filter is active
+  const totalReplies = allEmails.reduce((sum, e) => sum + e.reply_count, 0);
+  const totalOpens = allEmails.reduce((sum, e) => sum + e.open_count, 0);
+  const uniqueLeads = new Set(allEmails.map((e) => e.lead_id)).size;
   const replySeries = trendData?.series ?? [];
   const totalSent = replySeries.reduce((s, p) => s + p.sent, 0);
   const totalReplied = replySeries.reduce((s, p) => s + p.replied, 0);
   const overallReplyRate = totalSent > 0
     ? Math.round((totalReplied / totalSent) * 1000) / 10
     : 0;
-
-  if (isLoading) {
-    return (
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-sm font-medium flex items-center gap-2">
-            <MessageSquareText className="h-4 w-4" /> Best Performing Content
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <Skeleton className="h-10 w-32" />
-          <Skeleton className="h-20 w-full" />
-        </CardContent>
-      </Card>
-    );
-  }
 
   return (
     <>
@@ -316,20 +302,18 @@ export function BestPerformingContentCard() {
               <MessageSquareText className="h-4 w-4" /> Best Performing Content
             </CardTitle>
             <div className="flex items-center gap-2">
-              {allEmails.some((e) => !e.content_rating) && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="text-xs h-7 text-muted-foreground"
-                  disabled={backfilling}
-                  onClick={() => backfill(undefined, {
-                    onSuccess: (r) => toast.success(r.message ?? `Scored ${r.scored} emails`),
-                    onError: () => toast.error("Backfill failed"),
-                  })}
-                >
-                  {backfilling ? "Scoring…" : "Auto-score existing"}
-                </Button>
-              )}
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-xs h-7 text-muted-foreground"
+                disabled={backfilling}
+                onClick={() => backfill(undefined, {
+                  onSuccess: (r) => toast.success(r.message ?? `Scored ${r.scored} emails`),
+                  onError: (e: any) => toast.error(e?.message ?? "Backfill failed — check function is deployed"),
+                })}
+              >
+                {backfilling ? "Scoring…" : "Auto-score existing"}
+              </Button>
               {allEmails.length > 0 && (
                 <Button
                   variant="outline"
@@ -344,12 +328,16 @@ export function BestPerformingContentCard() {
           </div>
         </CardHeader>
         <CardContent className="flex-1">
-          {emails.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              No replied emails yet.
-            </p>
+          {isLoading ? (
+            <div className="space-y-3">
+              <Skeleton className="h-10 w-32" />
+              <Skeleton className="h-20 w-full" />
+            </div>
+          ) : allEmails.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No replied emails yet.</p>
           ) : (
             <div className="space-y-4">
+              {/* Stats always from allEmails */}
               <div className="flex items-end gap-6 flex-wrap">
                 <div>
                   <p className="text-3xl font-bold">{uniqueLeads}</p>
@@ -373,7 +361,7 @@ export function BestPerformingContentCard() {
 
               {replySeries.length > 0 && <MiniReplyTrendChart series={replySeries} />}
 
-              {/* Rating filter */}
+              {/* Rating filter — always visible */}
               <div className="flex items-center gap-1 flex-wrap">
                 {(["all", "great", "good", "not_interested", "unrated"] as RatingFilter[]).map((f) => (
                   <button
@@ -386,36 +374,44 @@ export function BestPerformingContentCard() {
                     }`}
                   >
                     {FILTER_LABELS[f]}
-                    {f !== "all" && (
-                      <span className="ml-1 opacity-50">
-                        {f === "unrated"
-                          ? allEmails.filter((e) => !e.content_rating).length
-                          : allEmails.filter((e) => e.content_rating === f).length}
-                      </span>
-                    )}
+                    <span className="ml-1 opacity-50">
+                      {f === "all"
+                        ? allEmails.length
+                        : f === "unrated"
+                        ? allEmails.filter((e) => !e.content_rating).length
+                        : allEmails.filter((e) => e.content_rating === f).length}
+                    </span>
                   </button>
                 ))}
               </div>
 
-              <div className="divide-y divide-border/30">
-                <div className="grid grid-cols-[1fr_auto_auto] gap-3 pb-1 text-[10px] font-medium uppercase tracking-widest text-muted-foreground/50">
-                  <span>Business</span>
-                  <span className="w-16 text-right">Open%</span>
-                  <span className="w-16 text-right">Reply%</span>
+              {/* List — empty state only affects this section */}
+              {emails.length === 0 ? (
+                <p className="text-xs text-muted-foreground py-2">
+                  No emails rated as "{FILTER_LABELS[ratingFilter]}" yet.
+                  {ratingFilter !== "unrated" && ratingFilter !== "all" && " Deploy and run Auto-score to populate."}
+                </p>
+              ) : (
+                <div className="divide-y divide-border/30">
+                  <div className="grid grid-cols-[1fr_auto_auto] gap-3 pb-1 text-[10px] font-medium uppercase tracking-widest text-muted-foreground/50">
+                    <span>Business</span>
+                    <span className="w-16 text-right">Open%</span>
+                    <span className="w-16 text-right">Reply%</span>
+                  </div>
+                  {emails.slice(0, 5).map((e, i) => (
+                    <ContentRow
+                      key={`${e.lead_id}-${i}`}
+                      email={e}
+                      onClick={() => setPreview(e)}
+                    />
+                  ))}
+                  {emails.length > 5 && (
+                    <p className="text-[10px] text-muted-foreground/50 pt-1.5">
+                      +{emails.length - 5} more
+                    </p>
+                  )}
                 </div>
-                {emails.slice(0, 5).map((e, i) => (
-                  <ContentRow
-                    key={`${e.lead_id}-${i}`}
-                    email={e}
-                    onClick={() => setPreview(e)}
-                  />
-                ))}
-                {emails.length > 5 && (
-                  <p className="text-[10px] text-muted-foreground/50 pt-1.5">
-                    +{emails.length - 5} more
-                  </p>
-                )}
-              </div>
+              )}
             </div>
           )}
         </CardContent>
