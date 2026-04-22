@@ -4871,3 +4871,81 @@ export const setActivePromptVersion = functions
     return { status: "success", version_id };
   });
 
+// ---- Backfill content ratings for existing replied emails ----
+export const backfillContentRatings = functions
+  .runWith({ timeoutSeconds: 540, memory: "512MB" })
+  .https.onCall(async (_data, context) => {
+    if (!context.auth) throw new HttpsError("unauthenticated", "Login required");
+
+    // Fetch all sent messages — filter client-side to handle has_reply/reply_count inconsistency
+    const snap = await db.collection("outreach_messages")
+      .where("status", "==", "sent")
+      .get();
+
+    const unrated = snap.docs
+      .map((d) => ({ id: d.id, ...d.data() }))
+      .filter((m) => (m.has_reply === true || (m.reply_count && m.reply_count > 0)) && !m.content_rating);
+
+    if (!unrated.length) return { scored: 0, skipped: 0, message: "All replies already scored" };
+
+    let scored = 0;
+    let skipped = 0;
+
+    for (const msg of unrated) {
+      // Fetch reply body — try message_id first, fall back to lead_id (no orderBy to avoid index issues)
+      let replyBody = null;
+
+      const byMsgSnap = await db.collection("inbound_replies")
+        .where("message_id", "==", msg.id)
+        .limit(5)
+        .get();
+      if (!byMsgSnap.empty) {
+        // Pick the latest by sorting in memory
+        const sorted = byMsgSnap.docs
+          .map((d) => d.data())
+          .filter((r) => !r.is_auto_reply && r.body)
+          .sort((a, b) => (b.created_at > a.created_at ? 1 : -1));
+        replyBody = sorted[0]?.body ?? null;
+      }
+
+      if (!replyBody && msg.lead_id) {
+        const byLeadSnap = await db.collection("inbound_replies")
+          .where("lead_id", "==", msg.lead_id)
+          .where("matched", "==", true)
+          .limit(10)
+          .get();
+        if (!byLeadSnap.empty) {
+          const sorted = byLeadSnap.docs
+            .map((d) => d.data())
+            .filter((r) => !r.is_auto_reply && r.body)
+            .sort((a, b) => (b.created_at > a.created_at ? 1 : -1));
+          replyBody = sorted[0]?.body ?? null;
+        }
+      }
+
+      if (!replyBody || replyBody.trim().length < 5) {
+        skipped++;
+        continue;
+      }
+
+      try {
+        const result = await scoreConversation(msg.content, replyBody);
+        if (result) {
+          await db.collection("outreach_messages").doc(msg.id).update({
+            content_rating: result.content_rating,
+            content_score: result.score,
+            content_rating_reason: result.reason,
+            content_rated_at: new Date().toISOString(),
+          });
+          scored++;
+        } else {
+          skipped++;
+        }
+      } catch (err) {
+        console.warn(`Score failed for ${msg.id}:`, err.message);
+        skipped++;
+      }
+    }
+
+    return { scored, skipped, total: unrated.length };
+  });
