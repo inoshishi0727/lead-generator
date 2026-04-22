@@ -174,6 +174,8 @@ export interface OutreachMessage {
   is_channel_escalation?: boolean;
   // Client campaign flag
   is_client_campaign?: boolean;
+  // Draft generation provider
+  provider?: "claude" | "gemini" | null;
 }
 
 // --- Edit Feedback / Reflection ---
