@@ -17,7 +17,7 @@ import {
   onSnapshot,
 } from "firebase/firestore";
 import { db } from "./firebase";
-import type { Lead, LeadDetail, OutreachMessage, InboundReply, EditFeedback, ReflectionCategory, Campaign } from "./types";
+import type { Lead, LeadDetail, LinkedInEmployee, OutreachMessage, InboundReply, EditFeedback, ReflectionCategory, Campaign } from "./types";
 
 // --- Leads ---
 
@@ -78,6 +78,17 @@ export async function getLeads(filters?: {
       menu_url: enrichment.menu_url || null,
       ai_approval: enrichment.ai_approval || null,
       ai_approval_reason: enrichment.ai_approval_reason || null,
+      instagram_handle: data.instagram_handle || null,
+      instagram_followers: data.instagram_followers || null,
+      instagram_bio: data.instagram_bio || null,
+      twitter_handle: data.twitter_handle || null,
+      facebook_url: data.facebook_url || null,
+      tiktok_handle: data.tiktok_handle || null,
+      youtube_url: data.youtube_url || null,
+      social_media_scraped_at: data.social_media_scraped_at || null,
+      linkedin_company_size: data.linkedin_company_size || null,
+      linkedin_industry: data.linkedin_industry || null,
+      // Location fields
       google_maps_place_id: data.google_maps_place_id || null,
       location_postcode: data.location_postcode || null,
       location_city: data.location_city || null,
@@ -150,6 +161,16 @@ export async function getLeadById(id: string): Promise<Lead | null> {
     menu_url: enrichment.menu_url || null,
     ai_approval: enrichment.ai_approval || null,
     ai_approval_reason: enrichment.ai_approval_reason || null,
+    instagram_handle: data.instagram_handle || null,
+    instagram_followers: data.instagram_followers || null,
+    instagram_bio: data.instagram_bio || null,
+    twitter_handle: data.twitter_handle || null,
+    facebook_url: data.facebook_url || null,
+    tiktok_handle: data.tiktok_handle || null,
+    youtube_url: data.youtube_url || null,
+    social_media_scraped_at: data.social_media_scraped_at || null,
+    linkedin_company_size: data.linkedin_company_size || null,
+    linkedin_industry: data.linkedin_industry || null,
     google_maps_place_id: data.google_maps_place_id || null,
     location_postcode: data.location_postcode || null,
     location_city: data.location_city || null,
@@ -626,4 +647,46 @@ export async function restoreOriginalEmail(messageId: string): Promise<void> {
       await updateDoc(leadRef, { email: leadSnap.data()._original_email });
     }
   }
+}
+
+// --- LinkedIn Employees ---
+
+export async function getLinkedInEmployees(leadId: string): Promise<LinkedInEmployee[]> {
+  const ref = collection(db, "linkedin_employees");
+  const q = query(ref, where("lead_id", "==", leadId));
+  const snap = await getDocs(q);
+
+  const results: LinkedInEmployee[] = snap.docs.map((d) => {
+    const data = d.data();
+    return {
+      id: data.id || d.id,
+      lead_id: data.lead_id || "",
+      company_linkedin_url: data.company_linkedin_url || null,
+      source: data.source || "company_people",
+      name: data.name || "",
+      name_lower: data.name_lower || "",
+      profile_url: data.profile_url || "",
+      profile_slug: data.profile_slug || "",
+      profile_image_url: data.profile_image_url || null,
+      title: data.title || null,
+      title_lower: data.title_lower || null,
+      role_seniority: data.role_seniority || null,
+      is_decision_maker: data.is_decision_maker || false,
+      location: data.location || null,
+      connection_degree: data.connection_degree || null,
+      confidence: data.confidence || "high",
+      scraped_at: data.scraped_at || "",
+      last_seen_at: data.last_seen_at || "",
+      promoted_to_outreach: data.promoted_to_outreach || false,
+      promoted_at: data.promoted_at || null,
+      notes: data.notes || null,
+    };
+  });
+
+  results.sort((a, b) => {
+    if (a.is_decision_maker !== b.is_decision_maker) return a.is_decision_maker ? -1 : 1;
+    return a.name_lower.localeCompare(b.name_lower);
+  });
+
+  return results;
 }

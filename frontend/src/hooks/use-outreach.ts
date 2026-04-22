@@ -104,8 +104,6 @@ export function useUpdateMessage() {
       rejection_reason?: string;
       lead_id?: string;
       scheduled_send_date?: string | null;
-      // Optional — used only when status="approved" to enforce the
-      // "one live email per (lead, step)" singleton.
       step_number?: number;
       channel?: string;
       business_name?: string;
@@ -142,15 +140,17 @@ export function useRegenerateMessage() {
       id,
       style,
       preview,
+      provider,
     }: {
       id: string;
       style?: "default" | "flowing";
       preview?: boolean;
+      provider?: "claude" | "gemini";
     }) => {
       if (hasBackend) {
         return api.post<OutreachMessage>(
           `/api/outreach/messages/${id}/regenerate`,
-          { style, preview }
+          { style, preview, provider }
         );
       }
       const msgs = await getOutreachMessages({ lead_id: undefined, limit: 500 });
@@ -158,10 +158,10 @@ export function useRegenerateMessage() {
       if (!msg) throw new Error("Message not found");
 
       const fn = httpsCallable<
-        { message_id: string; lead_id: string; style?: string; preview?: boolean },
-        { message_id: string; subject: string; content: string }
+        { message_id: string; lead_id: string; style?: string; preview?: boolean; provider?: string },
+        { message_id: string; subject: string; content: string; provider: string }
       >(functions, "regenerateDraft");
-      const result = await fn({ message_id: id, lead_id: msg.lead_id, style, preview });
+      const result = await fn({ message_id: id, lead_id: msg.lead_id, style, preview, provider });
       return { ...result.data, preview: preview ?? false };
     },
     onSuccess: (data) => {

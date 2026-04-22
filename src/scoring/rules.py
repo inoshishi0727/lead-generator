@@ -90,6 +90,26 @@ def active_instagram(lead: Lead) -> tuple[int, str]:
     return (0, "No Instagram")
 
 
+def social_presence(lead: Lead) -> tuple[int, str]:
+    channels = []
+    if lead.instagram_handle:
+        channels.append("IG")
+    if lead.twitter_handle:
+        channels.append("Twitter/X")
+    if lead.facebook_url:
+        channels.append("Facebook")
+    if lead.tiktok_handle:
+        channels.append("TikTok")
+    if lead.youtube_url:
+        channels.append("YouTube")
+    count = len(channels)
+    if count >= 3:
+        return (1, f"Strong social presence: {count} channels ({', '.join(channels)})")
+    if count >= 1:
+        return (0, f"Limited social presence: {count} channel(s) ({', '.join(channels)})")
+    return (0, "No social media links found")
+
+
 def menu_fit_score(lead: Lead) -> tuple[int, str]:
     """Score based on how well the venue's menu aligns with Asterley products."""
     if not lead.enrichment or not lead.enrichment.menu_fit:
@@ -133,6 +153,7 @@ ALL_RULES: dict[str, callable] = {
     "independent_venue": independent_venue,
     "in_target_area": in_target_area,
     "active_instagram": active_instagram,
+    "social_presence": social_presence,
     "menu_fit_score": menu_fit_score,
     "venue_category_match": venue_category_match,
 }

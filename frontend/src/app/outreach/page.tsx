@@ -340,42 +340,46 @@ export default function OutreachPage() {
       </div>
 
       {/* Filters */}
-      <div className="flex items-center gap-3">
-        <div className="inline-flex rounded-lg bg-muted p-1 gap-1">
-          {STATUS_FILTERS.map((s) => (
-            <button
-              key={s}
-              onClick={() => { setStatusFilter(s); setSearchQuery(""); }}
-              className={`rounded-md px-3 py-1.5 text-sm font-medium capitalize transition-colors ${
-                statusFilter === s
-                  ? "bg-primary text-primary-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground hover:bg-muted-foreground/10"
-              }`}
-            >
-              {s}
-            </button>
-          ))}
+      <div className="flex flex-col gap-3">
+        <div className="flex items-center overflow-x-auto pb-1">
+          <div className="inline-flex rounded-lg bg-muted p-1 gap-1 whitespace-nowrap">
+            {STATUS_FILTERS.map((s) => (
+              <button
+                key={s}
+                onClick={() => { setStatusFilter(s); setSearchQuery(""); }}
+                className={`rounded-md px-3 py-1.5 text-sm font-medium capitalize transition-colors ${
+                  statusFilter === s
+                    ? "bg-primary text-primary-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground hover:bg-muted-foreground/10"
+                }`}
+              >
+                {s}
+              </button>
+            ))}
+          </div>
         </div>
-        <select
-          value={categoryFilter}
-          onChange={(e) => setCategoryFilter(e.target.value)}
-          className="rounded-md border border-input bg-background px-3 py-1.5 text-xs"
-        >
-          {CATEGORY_OPTIONS.map((opt) => (
-            <option key={opt.value} value={opt.value}>
-              {opt.label}
-            </option>
-          ))}
-        </select>
-        <div className="relative ml-auto">
-          <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-          <input
-            type="text"
-            placeholder="Search messages..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="h-8 w-64 rounded-md border border-input bg-background pl-8 pr-3 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          />
+        <div className="flex items-center gap-3 w-full">
+          <select
+            value={categoryFilter}
+            onChange={(e) => setCategoryFilter(e.target.value)}
+            className="rounded-md border border-input bg-background px-3 h-10 text-sm w-[20%]"
+          >
+            {CATEGORY_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+          <div className="relative w-[80%]">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <input
+              type="text"
+              placeholder="Search messages..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="h-10 w-full rounded-md border border-input bg-background pl-9 pr-4 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            />
+          </div>
         </div>
       </div>
 

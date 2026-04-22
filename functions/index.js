@@ -13,6 +13,47 @@ initializeApp();
 const db = getFirestore();
 
 const CLAUDE_MODEL = "claude-sonnet-4-20250514";
+const GEMINI_DRAFT_MODEL = "gemini-2.5-flash";
+
+async function callDraftLLM(provider, systemPrompt, userPrompt) {
+  if (provider === "gemini") {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) throw new Error("GEMINI_API_KEY not configured.");
+    const ai = new GoogleGenAI({ apiKey });
+    const response = await ai.models.generateContent({
+      model: GEMINI_DRAFT_MODEL,
+      contents: userPrompt,
+      config: { maxOutputTokens: 1024, temperature: 0.7, systemInstruction: systemPrompt },
+    });
+    return response.text || "";
+  }
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error("ANTHROPIC_API_KEY not configured.");
+  const anthropic = new Anthropic({ apiKey });
+  const response = await anthropic.messages.create({
+    model: CLAUDE_MODEL,
+    max_tokens: 1024,
+    system: systemPrompt,
+    messages: [{ role: "user", content: userPrompt }],
+  });
+  return response.content[0].text || "";
+}
+
+function parseSubjectContent(text) {
+  let content = text;
+  let subject = null;
+  if (content.includes("Subject:")) {
+    const lines = content.split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i].trim().startsWith("Subject:")) {
+        subject = lines[i].trim().replace("Subject:", "").trim();
+        content = lines.slice(i + 1).join("\n").trim();
+        break;
+      }
+    }
+  }
+  return { subject, content };
+}
 
 // ---- Gemini sentiment analysis for inbound replies ----
 
@@ -602,22 +643,20 @@ function buildLiveEmailKeySet(messages) {
  * Called from frontend: generateDrafts({ lead_ids?: string[] })
  */
 export const generateDrafts = functions
-  .runWith({ timeoutSeconds: 540, memory: "512MB", secrets: ["ANTHROPIC_API_KEY"] })
+  .runWith({ timeoutSeconds: 540, memory: "512MB", secrets: ["ANTHROPIC_API_KEY", "GEMINI_API_KEY"] })
   .https.onCall(async (data, context) => {
     if (!context.auth) {
       throw new HttpsError("unauthenticated", "Must be signed in.");
     }
 
-    // Check caller role for member-scoping
     const callerSnap = await db.collection("users").doc(context.auth.uid).get();
     const callerRole = callerSnap.exists ? callerSnap.data().role : "viewer";
 
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) {
-      throw new HttpsError("failed-precondition", "ANTHROPIC_API_KEY not configured.");
+    const provider = data?.provider || "claude";
+    if (!["claude", "gemini"].includes(provider)) {
+      throw new HttpsError("invalid-argument", "provider must be 'claude' or 'gemini'.");
     }
 
-    const anthropic = new Anthropic({ apiKey });
     const leadIds = data?.lead_ids || null;
 
     // Build live-email key set once so we can enforce the "one live email per
@@ -677,26 +716,8 @@ export const generateDrafts = functions
           + (promptRules ? `\n\nPROMPT RULES (apply to every email):\n${promptRules}` : "")
           + (feedbackBlock || "");
 
-        const response = await anthropic.messages.create({
-          model: CLAUDE_MODEL,
-          max_tokens: 1024,
-          system: systemPrompt,
-          messages: [{ role: "user", content: prompt }],
-        });
-
-        let content = response.content[0].text || "";
-        let subject = null;
-
-        if (content.includes("Subject:")) {
-          const lines = content.split("\n");
-          for (let i = 0; i < lines.length; i++) {
-            if (lines[i].trim().startsWith("Subject:")) {
-              subject = lines[i].trim().replace("Subject:", "").trim();
-              content = lines.slice(i + 1).join("\n").trim();
-              break;
-            }
-          }
-        }
+        const rawText = await callDraftLLM(provider, systemPrompt, prompt);
+        const { subject, content } = parseSubjectContent(rawText);
 
         const contact = enrichment.contact || {};
         const msgId = crypto.randomUUID();
@@ -725,6 +746,7 @@ export const generateDrafts = functions
           original_content: content,
           original_subject: subject,
           was_edited: false,
+          provider,
         });
 
         await db.collection("leads").doc(leadDoc.id).update({
@@ -746,23 +768,21 @@ export const generateDrafts = functions
  * Called from frontend: regenerateDraft({ message_id, lead_id })
  */
 export const regenerateDraft = functions
-  .runWith({ timeoutSeconds: 60, memory: "256MB", secrets: ["ANTHROPIC_API_KEY"] })
+  .runWith({ timeoutSeconds: 60, memory: "256MB", secrets: ["ANTHROPIC_API_KEY", "GEMINI_API_KEY"] })
   .https.onCall(async (data, context) => {
     if (!context.auth) {
       throw new HttpsError("unauthenticated", "Must be signed in.");
     }
 
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) {
-      throw new HttpsError("failed-precondition", "ANTHROPIC_API_KEY not configured.");
+    const { message_id, lead_id, provider } = data;
+    const prov = provider || "claude";
+    if (!["claude", "gemini"].includes(prov)) {
+      throw new HttpsError("invalid-argument", "provider must be 'claude' or 'gemini'.");
     }
 
-    const { message_id, lead_id } = data;
     if (!message_id || !lead_id) {
       throw new HttpsError("invalid-argument", "message_id and lead_id required.");
     }
-
-    const anthropic = new Anthropic({ apiKey });
 
     const leadSnap = await db.collection("leads").doc(lead_id).get();
     if (!leadSnap.exists) {
@@ -781,26 +801,8 @@ export const regenerateDraft = functions
       + (promptRules ? `\n\nPROMPT RULES (apply to every email):\n${promptRules}` : "")
       + (feedbackBlock || "");
 
-    const response = await anthropic.messages.create({
-      model: CLAUDE_MODEL,
-      max_tokens: 1024,
-      system: systemPrompt,
-      messages: [{ role: "user", content: prompt }],
-    });
-
-    let content = response.content[0].text || "";
-    let subject = null;
-
-    if (content.includes("Subject:")) {
-      const lines = content.split("\n");
-      for (let i = 0; i < lines.length; i++) {
-        if (lines[i].trim().startsWith("Subject:")) {
-          subject = lines[i].trim().replace("Subject:", "").trim();
-          content = lines.slice(i + 1).join("\n").trim();
-          break;
-        }
-      }
-    }
+    const rawText = await callDraftLLM(prov, systemPrompt, prompt);
+    const { subject, content } = parseSubjectContent(rawText);
 
     await db.collection("outreach_messages").doc(message_id).update({
       subject,
@@ -811,33 +813,31 @@ export const regenerateDraft = functions
       original_subject: subject,
       was_edited: false,
       edited_at: null,
+      provider: prov,
     });
 
-    return { message_id, subject, content };
+    return { message_id, subject, content, provider: prov };
   });
 
 /**
  * Regenerate ALL drafts (delete existing, create new).
  */
 export const regenerateAllDrafts = functions
-  .runWith({ timeoutSeconds: 540, memory: "512MB", secrets: ["ANTHROPIC_API_KEY"] })
+  .runWith({ timeoutSeconds: 540, memory: "512MB", secrets: ["ANTHROPIC_API_KEY", "GEMINI_API_KEY"] })
   .https.onCall(async (data, context) => {
     if (!context.auth) {
       throw new HttpsError("unauthenticated", "Must be signed in.");
     }
 
-    // Check admin role
     const userSnap = await db.collection("users").doc(context.auth.uid).get();
     if (!userSnap.exists || userSnap.data().role !== "admin") {
       throw new HttpsError("permission-denied", "Admin only.");
     }
 
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) {
-      throw new HttpsError("failed-precondition", "ANTHROPIC_API_KEY not configured.");
+    const provider = data?.provider || "claude";
+    if (!["claude", "gemini"].includes(provider)) {
+      throw new HttpsError("invalid-argument", "provider must be 'claude' or 'gemini'.");
     }
-
-    const anthropic = new Anthropic({ apiKey });
 
     // Mark existing drafts as rejected
     const existingMsgs = await db.collection("outreach_messages").where("status", "==", "draft").get();
@@ -869,26 +869,8 @@ export const regenerateAllDrafts = functions
           + (promptRules ? `\n\nPROMPT RULES (apply to every email):\n${promptRules}` : "")
           + (feedbackBlock || "");
 
-        const response = await anthropic.messages.create({
-          model: CLAUDE_MODEL,
-          max_tokens: 1024,
-          system: systemPrompt,
-          messages: [{ role: "user", content: prompt }],
-        });
-
-        let content = response.content[0].text || "";
-        let subject = null;
-
-        if (content.includes("Subject:")) {
-          const lines = content.split("\n");
-          for (let i = 0; i < lines.length; i++) {
-            if (lines[i].trim().startsWith("Subject:")) {
-              subject = lines[i].trim().replace("Subject:", "").trim();
-              content = lines.slice(i + 1).join("\n").trim();
-              break;
-            }
-          }
-        }
+        const rawText = await callDraftLLM(provider, systemPrompt, prompt);
+        const { subject, content } = parseSubjectContent(rawText);
 
         const contact = enrichment.contact || {};
         const msgId = crypto.randomUUID();
@@ -918,6 +900,7 @@ export const regenerateAllDrafts = functions
           original_content: content,
           original_subject: subject,
           was_edited: false,
+          provider,
         });
 
         await db.collection("leads").doc(leadDoc.id).update({
