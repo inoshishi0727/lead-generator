@@ -8,7 +8,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useBestPerformingContent, useReplyRateTrend } from "@/hooks/use-analytics";
+import { useBackfillContentRatings } from "@/hooks/use-outreach";
 import { LeadPreviewModal } from "@/components/lead-preview-modal";
+import { toast } from "sonner";
 import type { BestPerformingEmail } from "@/lib/firestore-analytics";
 
 const REPLY_COLOR = "#3b82f6";
@@ -268,6 +270,7 @@ const FILTER_LABELS: Record<RatingFilter, string> = {
 export function BestPerformingContentCard() {
   const { data, isLoading } = useBestPerformingContent();
   const { data: trendData } = useReplyRateTrend();
+  const { mutate: backfill, isPending: backfilling } = useBackfillContentRatings();
   const [modalOpen, setModalOpen] = useState(false);
   const [preview, setPreview] = useState<BestPerformingEmail | null>(null);
   const [ratingFilter, setRatingFilter] = useState<RatingFilter>("all");
@@ -312,16 +315,32 @@ export function BestPerformingContentCard() {
             <CardTitle className="text-sm font-medium flex items-center gap-2">
               <MessageSquareText className="h-4 w-4" /> Best Performing Content
             </CardTitle>
-            {emails.length > 0 && (
-              <Button
-                variant="outline"
-                size="sm"
-                className="text-xs h-7"
-                onClick={() => setModalOpen(true)}
-              >
-                See all {emails.length}
-              </Button>
-            )}
+            <div className="flex items-center gap-2">
+              {allEmails.some((e) => !e.content_rating) && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-xs h-7 text-muted-foreground"
+                  disabled={backfilling}
+                  onClick={() => backfill(undefined, {
+                    onSuccess: (r) => toast.success(r.message ?? `Scored ${r.scored} emails`),
+                    onError: () => toast.error("Backfill failed"),
+                  })}
+                >
+                  {backfilling ? "Scoring…" : "Auto-score existing"}
+                </Button>
+              )}
+              {allEmails.length > 0 && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="text-xs h-7"
+                  onClick={() => setModalOpen(true)}
+                >
+                  See all {allEmails.length}
+                </Button>
+              )}
+            </div>
           </div>
         </CardHeader>
         <CardContent className="flex-1">

@@ -4871,3 +4871,71 @@ export const setActivePromptVersion = functions
     return { status: "success", version_id };
   });
 
+// ---- Backfill content ratings for existing replied emails ----
+export const backfillContentRatings = functions
+  .runWith({ timeoutSeconds: 540, memory: "512MB" })
+  .https.onCall(async (_data, context) => {
+    if (!context.auth) throw new HttpsError("unauthenticated", "Login required");
+
+    // Fetch all sent messages that have replies but no rating yet
+    const snap = await db.collection("outreach_messages")
+      .where("has_reply", "==", true)
+      .get();
+
+    const unrated = snap.docs
+      .map((d) => ({ id: d.id, ...d.data() }))
+      .filter((m) => !m.content_rating);
+
+    if (!unrated.length) return { scored: 0, skipped: 0, message: "All replies already scored" };
+
+    let scored = 0;
+    let skipped = 0;
+
+    for (const msg of unrated) {
+      // Fetch the most recent matched inbound reply for this message
+      const replySnap = await db.collection("inbound_replies")
+        .where("message_id", "==", msg.id)
+        .orderBy("created_at", "desc")
+        .limit(1)
+        .get();
+
+      // Fall back to lead-level match if message_id wasn't stored on old replies
+      let replyBody = null;
+      if (!replySnap.empty) {
+        replyBody = replySnap.docs[0].data().body;
+      } else if (msg.lead_id) {
+        const fallbackSnap = await db.collection("inbound_replies")
+          .where("lead_id", "==", msg.lead_id)
+          .where("matched", "==", true)
+          .orderBy("created_at", "desc")
+          .limit(1)
+          .get();
+        if (!fallbackSnap.empty) replyBody = fallbackSnap.docs[0].data().body;
+      }
+
+      if (!replyBody || replyBody.trim().length < 5) {
+        skipped++;
+        continue;
+      }
+
+      try {
+        const result = await scoreConversation(msg.content, replyBody);
+        if (result) {
+          await db.collection("outreach_messages").doc(msg.id).update({
+            content_rating: result.content_rating,
+            content_score: result.score,
+            content_rating_reason: result.reason,
+            content_rated_at: new Date().toISOString(),
+          });
+          scored++;
+        } else {
+          skipped++;
+        }
+      } catch (err) {
+        console.warn(`Score failed for ${msg.id}:`, err.message);
+        skipped++;
+      }
+    }
+
+    return { scored, skipped, total: unrated.length };
+  });
