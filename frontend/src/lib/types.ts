@@ -64,6 +64,8 @@ export interface Lead {
   tiktok_handle: string | null;
   youtube_url: string | null;
   social_media_scraped_at: string | null;
+  linkedin_company_size: string | null;
+  linkedin_industry: string | null;
   location_postcode: string | null;
   location_city: string | null;
   location_area: string | null;
@@ -330,6 +332,30 @@ export interface LeadRecommendation {
   timing_note: string;
   opening_hook: string;
   confidence: number;
+}
+
+export interface LinkedInEmployee {
+  id: string;
+  lead_id: string;
+  company_linkedin_url: string | null;
+  source: "company_people" | "people_search";
+  name: string;
+  name_lower: string;
+  profile_url: string;
+  profile_slug: string;
+  profile_image_url: string | null;
+  title: string | null;
+  title_lower: string | null;
+  role_seniority: string | null;
+  is_decision_maker: boolean;
+  location: string | null;
+  connection_degree: string | null;
+  confidence: "high" | "medium" | "low";
+  scraped_at: string;
+  last_seen_at: string;
+  promoted_to_outreach: boolean;
+  promoted_at: string | null;
+  notes: string | null;
 }
 
 export interface MemberMetrics {
