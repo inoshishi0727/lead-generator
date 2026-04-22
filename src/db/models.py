@@ -150,6 +150,12 @@ class Lead(BaseModel):
     instagram_handle: Optional[str] = None
     instagram_followers: Optional[int] = None
     instagram_bio: Optional[str] = None
+    # Social media (from LinkedIn company page agentic scrape)
+    twitter_handle: Optional[str] = None
+    facebook_url: Optional[str] = None
+    tiktok_handle: Optional[str] = None
+    youtube_url: Optional[str] = None
+    social_media_scraped_at: Optional[datetime] = None
     # Location fields
     google_maps_place_id: Optional[str] = None
     location_postcode: Optional[str] = None
@@ -181,6 +187,24 @@ class Lead(BaseModel):
     provider_qa_notes: Optional[str] = None
     scraped_at: datetime = Field(default_factory=datetime.now)
     updated_at: datetime = Field(default_factory=datetime.now)
+
+
+class LinkedInCompanyData(BaseModel):
+    lead_id: UUID
+    company_linkedin_url: Optional[str] = None
+    company_linkedin_slug: Optional[str] = None
+    company_size: Optional[str] = None
+    industry: Optional[str] = None
+    hq_address: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    website: Optional[str] = None
+    instagram_handle: Optional[str] = None
+    twitter_handle: Optional[str] = None
+    facebook_url: Optional[str] = None
+    tiktok_handle: Optional[str] = None
+    youtube_url: Optional[str] = None
+    scraped_at: datetime = Field(default_factory=datetime.now)
 
 
 class LinkedInEmployee(BaseModel):

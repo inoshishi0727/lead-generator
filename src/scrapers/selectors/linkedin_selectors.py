@@ -52,6 +52,36 @@ COMPANY_OVERVIEW_SELECTORS: dict[str, str | None] = {
     "see_all_employees_link": "a[href$='/people/'][href*='/company/']",
 }
 
+# --- Page 2b: Company About tab (/company/{slug}/about/) ---
+# The About tab exposes contact details, social links, and company metadata.
+# LinkedIn renders these as definition-list pairs or link icons in a sidebar.
+# Class names rotate — prefer structural anchors and link href patterns.
+COMPANY_ABOUT_SELECTORS: dict[str, str | None] = {
+    # Nav tab link to switch from Overview to About
+    "about_tab_link": "a[href$='/about/'][href*='/company/'], a[href*='/about/']",
+    # Company size / industry / HQ blocks (definition-list-like pairs)
+    "company_size_dt": "dt:has-text('Company size'), dt:has-text('Size')",
+    "company_size_dd": "dd",
+    "industry_dt": "dt:has-text('Industry')",
+    "industry_dd": "dd",
+    "hq_dt": "dt:has-text('Headquarters'), dt:has-text('HQ')",
+    "hq_dd": "dd",
+    # Phone / email / website — LinkedIn renders these as links or plain text
+    # in the "Primary" section of the About page. Prefer href patterns.
+    "phone_link": "a[href^='tel:']",
+    "email_link": "a[href^='mailto:']",
+    "website_link": "a[href][aria-label*='Website'], a[href][data-test-id*='website'], a[href]:has-text('Website')",
+    # Social media icons — LinkedIn renders them as icon links in a row.
+    # Each has a recognizable href domain pattern.
+    "social_link_instagram": "a[href*='instagram.com']",
+    "social_link_twitter": "a[href*='twitter.com'], a[href*='x.com']",
+    "social_link_facebook": "a[href*='facebook.com']",
+    "social_link_tiktok": "a[href*='tiktok.com']",
+    "social_link_youtube": "a[href*='youtube.com']",
+    # Generic: all external link icons in the contact section (fallback)
+    "external_link_icons": "a[class*='link'][target='_blank'], a[rel*='noopener'][target='_blank']",
+}
+
 # --- Page 3: Company people tab (/company/{slug}/people/) — CRITICAL ---
 # Cards share the same `a[href*='/in/']` wrapping image + title, so query_selector
 # (first match) is correct. Per-card location is usually empty in the current UI

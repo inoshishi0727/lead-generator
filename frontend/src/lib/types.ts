@@ -54,6 +54,16 @@ export interface Lead {
   ai_approval: string | null;
   ai_approval_reason: string | null;
   google_maps_place_id: string | null;
+  // Instagram
+  instagram_handle: string | null;
+  instagram_followers: number | null;
+  instagram_bio: string | null;
+  // Social media (from LinkedIn company page)
+  twitter_handle: string | null;
+  facebook_url: string | null;
+  tiktok_handle: string | null;
+  youtube_url: string | null;
+  social_media_scraped_at: string | null;
   location_postcode: string | null;
   location_city: string | null;
   location_area: string | null;
@@ -85,9 +95,6 @@ export interface Lead {
 export interface LeadDetail extends Lead {
   menu_fit_signals: string[];
   opening_hours: Record<string, unknown> | null;
-  instagram_handle: string | null;
-  instagram_followers: number | null;
-  instagram_bio: string | null;
   provider_qa_status: string | null;
   provider_qa_notes: string | null;
   score_breakdown: Record<string, { points: number; reason: string }> | null;

@@ -157,6 +157,9 @@ scraping:
     rescrape_after_days: 90
     resolver_min_confidence: "medium"
     resolver_results_to_consider: 5
+    scrape_company_page: true
+    company_page_agent_max_steps: 10
+    company_page_agent_max_tokens: 4000
     decision_maker_keywords:
       - owner
       - founder
@@ -201,6 +204,7 @@ scoring:
     independent_venue: 10
     in_target_area: 8
     active_instagram: 5
+    social_presence: 3
     menu_fit_score: 15
     venue_category_match: 12
   min_score_threshold: 40
