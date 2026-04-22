@@ -595,8 +595,10 @@ class LinkedInCompanyScraper(BaseScraper):
         """Search for the company's LinkedIn page, then use a Gemini agentic
         loop on the About tab to extract social links, phone, email, website.
 
-        Returns a LinkedInCompanyData if a company page is found and scraped,
-        or None if no matching company page exists on LinkedIn.
+        If no LinkedIn company page exists, falls back to Google search for
+        social media profiles.
+
+        Returns a LinkedInCompanyData if data is found, or None.
         """
         business_name = lead.get("business_name") or ""
         if not business_name:
@@ -609,7 +611,8 @@ class LinkedInCompanyScraper(BaseScraper):
                 "linkedin_company_not_found",
                 business=business_name,
             )
-            return None
+            # Fallback: search Google for social media profiles
+            return await self._scrape_social_via_google(page, lead)
 
         company_url = f"https://www.linkedin.com/company/{company_slug}/"
         log.info(
@@ -634,6 +637,133 @@ class LinkedInCompanyScraper(BaseScraper):
             await self._save_company_data(lead_id, company_data)
 
         return company_data
+
+    async def _scrape_social_via_google(
+        self, page: Any, lead: dict
+    ) -> LinkedInCompanyData | None:
+        """Fallback: search Google for the business's social media profiles.
+
+        When no LinkedIn company page exists, Google the business name +
+        social platform keywords, then use Gemini to extract social URLs,
+        phone, and email from the search results page.
+        """
+        business_name = lead.get("business_name") or ""
+        if not business_name:
+            return None
+        lead_id = str(lead.get("id") or "unknown")
+        website = lead.get("website") or ""
+
+        query = f"{business_name} instagram OR twitter OR facebook contact"
+        google_url = f"https://www.google.com/search?q={quote_plus(query)}&gl=uk&hl=en"
+        await self._navigate_with_retry(page, google_url)
+        await human_pause("reading_medium")
+
+        # Collect all search result text blobs
+        page_text = ""
+        try:
+            page_text = await page.evaluate("() => document.body.innerText || ''")
+        except Exception:
+            pass
+
+        if not page_text or len(page_text) < 50:
+            log.info("linkedin_google_fallback_empty", business=business_name)
+            return None
+
+        # Also collect visible links for social profile detection
+        social_links: dict[str, str] = {}
+        try:
+            anchors = await page.query_selector_all("a[href]")
+            for a in anchors:
+                href = (await a.get_attribute("href") or "").strip()
+                if "instagram.com/" in href and "/p/" not in href:
+                    social_links["instagram"] = href
+                elif "twitter.com/" in href or "x.com/" in href:
+                    social_links["twitter"] = href
+                elif "facebook.com/" in href and "sharer" not in href:
+                    social_links["facebook"] = href
+                elif "tiktok.com/@" in href:
+                    social_links["tiktok"] = href
+                elif "youtube.com/" in href and "watch" not in href:
+                    social_links["youtube"] = href
+        except Exception:
+            pass
+
+        log.info(
+            "linkedin_google_fallback_links",
+            business=business_name,
+            social_platforms=list(social_links.keys()),
+        )
+
+        # Use Gemini to extract structured data from the search results text
+        extraction_prompt = f"""Extract social media profiles and contact info for this business from Google search results.
+
+Business name: {business_name}
+Website: {website or 'unknown'}
+
+Google search results text:
+{page_text[:4000]}
+
+Already found links:
+{json.dumps(social_links, indent=2) if social_links else 'none'}
+
+Return ONLY JSON:
+{{"instagram_handle": "handle without @ or null", "twitter_handle": "handle without @ or null", "facebook_url": "full URL or null", "tiktok_handle": "handle without @ or null", "youtube_url": "full URL or null", "phone": "phone number or null", "email": "email address or null", "website": "website URL or null"}}
+
+Rules:
+- Only return data you can see in the search results text or found links
+- For handles, strip the leading @ and any URL prefix (just the slug)
+- Return null for anything not found
+- Do NOT fabricate or guess data
+"""
+
+        result = await self._call_gemini(extraction_prompt, max_tokens=1000)
+        if not result:
+            log.info("linkedin_google_fallback_no_result", business=business_name)
+            return None
+
+        try:
+            data = LinkedInCompanyData(
+                lead_id=UUID(lead_id),
+                company_linkedin_url=None,
+                company_linkedin_slug=None,
+                company_size=None,
+                industry=None,
+                hq_address=None,
+                phone=result.get("phone") or None,
+                email=result.get("email") or None,
+                website=result.get("website") or None,
+                instagram_handle=self._extract_handle(result.get("instagram_handle") or "", "instagram.com"),
+                twitter_handle=self._extract_handle(result.get("twitter_handle") or "", "twitter.com", "x.com"),
+                facebook_url=result.get("facebook_url") or None,
+                tiktok_handle=self._extract_handle(result.get("tiktok_handle") or "", "tiktok.com"),
+                youtube_url=result.get("youtube_url") or None,
+            )
+        except Exception as exc:
+            log.warning("linkedin_google_fallback_build_failed", error=str(exc))
+            return None
+
+        has_data = any([
+            data.instagram_handle, data.twitter_handle, data.facebook_url,
+            data.tiktok_handle, data.youtube_url, data.phone, data.email,
+        ])
+        if not has_data:
+            log.info("linkedin_google_fallback_no_data", business=business_name)
+            return None
+
+        log.info(
+            "linkedin_google_fallback_success",
+            business=business_name,
+            has_instagram=bool(data.instagram_handle),
+            has_twitter=bool(data.twitter_handle),
+            has_facebook=bool(data.facebook_url),
+            has_phone=bool(data.phone),
+            has_email=bool(data.email),
+        )
+
+        if not self.dry_run:
+            await self._save_company_data(lead_id, data)
+
+        return data
 
     async def _resolve_company_slug(
         self, page: Any, lead: dict
