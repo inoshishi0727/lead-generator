@@ -556,6 +556,22 @@ export function useScheduleCampaignDrafts() {
   });
 }
 
+export function useBackfillContentRatings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async () => {
+      const fn = httpsCallable<void, { scored: number; skipped: number; total: number; message?: string }>(
+        functions, "backfillContentRatings"
+      );
+      const result = await fn();
+      return result.data;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["analytics"] });
+    },
+  });
+}
+
 export function useDeleteReply() {
   const qc = useQueryClient();
   return useMutation({
