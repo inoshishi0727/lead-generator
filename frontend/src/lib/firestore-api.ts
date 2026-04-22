@@ -344,6 +344,23 @@ export async function updateOutreachMessage(
   await updateDoc(ref, messageUpdates as Record<string, unknown>);
 }
 
+// --- Content quality rating ---
+
+export type ContentRating = "great" | "good" | "not_interested";
+
+export async function rateContent(
+  messageId: string,
+  rating: ContentRating | null,
+  note?: string
+): Promise<void> {
+  const ref = doc(db, "outreach_messages", messageId);
+  await updateDoc(ref, {
+    content_rating: rating,
+    content_rating_note: note ?? null,
+    content_rated_at: rating ? new Date().toISOString() : null,
+  });
+}
+
 // --- Edit Feedback / Reflections ---
 
 export async function getWeeklyEdits(sinceDays = 7): Promise<EditFeedback[]> {
