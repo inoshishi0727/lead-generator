@@ -112,10 +112,12 @@ class LinkedInConfig(BaseModel):
     company_resolution_strategy: str = "auto_with_fallback"
     abort_on_captcha: bool = True
     rescrape_after_days: int = 90
-    # Gemini-agentic company resolver (reuses scraping.enrichment.gemini_model
-    # for the model; these two fields are the LinkedIn-specific resolver knobs).
-    resolver_min_confidence: str = "medium"   # "high" | "medium" | "low"
+    resolver_min_confidence: str = "medium"
     resolver_results_to_consider: int = 5
+    # Company page deep-scrape (agentic Gemini browser agent)
+    scrape_company_page: bool = True
+    company_page_agent_max_steps: int = 10
+    company_page_agent_max_tokens: int = 4000
 
 
 class EmailExtractionConfig(BaseModel):
@@ -157,6 +159,7 @@ class ScoringWeights(BaseModel):
     independent_venue: int = 10
     in_target_area: int = 8
     active_instagram: int = 5
+    social_presence: int = 3
     menu_fit_score: int = 15
     venue_category_match: int = 12
 

@@ -1,10 +1,14 @@
-"""LinkedIn employee scraper (All-tab search).
+"""LinkedIn employee + company-page scraper (All-tab search + agentic company page).
 
 Given an existing lead, navigates to LinkedIn's All-tab search for the
 business name, collects every profile card on the results page, and asks
 Gemini to identify which profiles are actually current or past employees.
-No company-page lookup — many small venues don't have one, and People in
-the All-tab surface employees directly via their job titles.
+
+If scrape_company_page is enabled (default), also searches for the company's
+LinkedIn page, navigates to the About tab, and uses a Gemini agentic browser
+loop to extract: social media URLs (Instagram, Twitter/X, Facebook, TikTok,
+YouTube), phone numbers, email addresses, website, company size, and industry.
+Employees from the People tab are also collected when available.
 
 Auth uses a persistent browser profile at data/linkedin_browser_profile/
 (cloakbrowser `launch_persistent_context_async`). The first save-session
@@ -47,7 +51,7 @@ from src.db.firestore import (
     update_lead,
     update_lead_linkedin_status,
 )
-from src.db.models import Lead, LinkedInConfidence, LinkedInEmployee
+from src.db.models import Lead, LinkedInCompanyData, LinkedInConfidence, LinkedInEmployee
 from src.scrapers.base import BaseScraper, ScraperError
 from src.scrapers.humanize.scroll import smooth_scroll
 from src.scrapers.humanize.timing import human_pause
@@ -59,6 +63,9 @@ log = structlog.get_logger()
 SESSION_CHECK_URL = "https://www.linkedin.com/feed/"
 ALL_TAB_SEARCH_URL_TEMPLATE = (
     "https://www.linkedin.com/search/results/all/?keywords={keywords}&origin=SWITCH_SEARCH_VERTICAL"
+)
+COMPANY_SEARCH_URL_TEMPLATE = (
+    "https://www.linkedin.com/search/results/companies/?keywords={keywords}&origin=SWITCH_SEARCH_VERTICAL"
 )
 
 # Gemini filter — small task, small budget. Not config knobs.
@@ -115,6 +122,61 @@ Rules:
   * low: role is ambiguous but plausibly at the lead
 - Return an empty "matches" array if nothing matches. Prefer being strict over generous — false positives poison the outreach pool.
 """
+
+
+COMPANY_RESOLVE_PROMPT = """You are identifying the correct LinkedIn company page for an Asterley Bros venue-lead.
+
+Lead:
+- name: {business_name}
+- website: {website}
+- address: {address}
+- venue_category: {venue_category}
+
+LinkedIn company search results (numbered 1..N). Each blob is the raw text of one search result card:
+
+{{candidates}}
+
+Return ONLY JSON:
+  {{"match_index": <1-based int or null if no match>, "confidence": "high"|"medium"|"low", "reason": "<=100 chars>"}}
+
+Rules:
+- Match ONLY if the company is clearly the same business as the lead.
+- EXCLUDE similarly-named but different businesses.
+- If no result clearly matches, return match_index: null.
+"""
+
+AGENT_SYSTEM_PROMPT = """You are a browser agent extracting contact and social media data from a LinkedIn company page.
+
+Your goal: find ALL social media profile URLs, phone numbers, email addresses, and the website URL for this company.
+
+Current page URL: {page_url}
+Current page text (truncated):
+{page_text}
+
+Clickable elements on this page:
+{clickable_elements}
+
+Available actions — return ONLY JSON:
+1. Click an element: {{"action": "click", "element_index": <int>}}
+2. Scroll the page: {{"action": "scroll", "direction": "down"|"up"}}
+3. Navigate to a URL: {{"action": "navigate", "url": "<absolute URL>"}}
+4. Extract all found data (final step): {{"action": "extract", "data": {{"company_linkedin_url": "...", "company_linkedin_slug": "...", "company_size": "...", "industry": "...", "hq_address": "...", "phone": "...", "email": "...", "website": "...", "instagram_handle": "...", "twitter_handle": "...", "facebook_url": "...", "tiktok_handle": "...", "youtube_url": "..."}}}}
+5. Done (nothing more to find): {{"action": "done", "summary": "..."}}
+
+Strategy:
+- Start by looking at the current page. If you can see contact info or social links, extract immediately.
+- If there is an "About" tab or link, click it — the About page has phone, email, website, and social links.
+- If you see a "People" tab, note it but don't navigate there now — employees are collected separately.
+- For social media: look for icon links or text links to instagram.com, twitter.com/x.com, facebook.com, tiktok.com, youtube.com.
+- For phone: look for tel: links or phone-number patterns.
+- For email: look for mailto: links or email patterns.
+- Never navigate away from linkedin.com.
+- Return "extract" when you have collected all visible data, or "done" if nothing useful is on this page.
+- Do NOT fabricate data — only return what you can see on the page.
+"""
+
+AGENT_MAX_TEXT_CHARS = 3000
+AGENT_MAX_CLICKABLE = 30
 
 
 class LinkedInSessionExpired(ScraperError):
@@ -254,6 +316,9 @@ class LinkedInCompanyScraper(BaseScraper):
         After the user completes login, cookies/localStorage/fingerprint are
         already written to the profile directory. Subsequent scrape runs
         reopen the same profile and are still logged in.
+
+        On a headless VPS, use --vnc-session which launches Xvfb + VNC so
+        you can connect from your laptop and log in via a browser window.
         """
         if self.no_proxy:
             log.info(
@@ -268,8 +333,6 @@ class LinkedInCompanyScraper(BaseScraper):
         ctx = self._context
         assert ctx is not None
 
-        # Use any open page if present; otherwise create one. Persistent
-        # contexts sometimes auto-open an initial about:blank tab.
         page = ctx.pages[0] if ctx.pages else await ctx.new_page()
         await page.goto("https://www.linkedin.com/login", wait_until="domcontentloaded")
         log.info(
@@ -281,6 +344,86 @@ class LinkedInCompanyScraper(BaseScraper):
         )
         log.info("linkedin_session_saved", profile_dir=str(self.profile_dir))
         await self._close_persistent_browser()
+
+    async def save_session_vnc(self) -> None:
+        """Open a VNC-accessible browser on a headless VPS for manual login.
+
+        Launches Xvfb (virtual framebuffer) and a VNC server so you can
+        connect from your laptop, see the browser, and complete LinkedIn login.
+        After login, the persistent profile is saved just like --save-session.
+
+        Requirements on VPS: apt install xvfb x11vnc (or equivalent).
+        """
+        import subprocess
+
+        try:
+            subprocess.run(["which", "Xvfb"], check=True, capture_output=True)
+        except Exception:
+            log.error(
+                "linkedin_vnc_missing_xvfb",
+                msg="Xvfb not found. Install: sudo apt install xvfb x11vnc",
+            )
+            return
+
+        display_num = ":99"
+        vnc_port = 5999
+
+        # Start Xvfb
+        xvfb_proc = subprocess.Popen(
+            ["Xvfb", display_num, "-screen", "0", "1280x720x24", "-ac"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        await asyncio.sleep(1)
+
+        # Set DISPLAY for the browser
+        os.environ["DISPLAY"] = display_num
+
+        # Launch browser (non-headless, will render into Xvfb)
+        await self._launch_persistent_browser(headless=False)
+        ctx = self._context
+        assert ctx is not None
+
+        page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+        await page.goto("https://www.linkedin.com/login", wait_until="domcontentloaded")
+
+        # Start VNC server so user can see the display
+        vnc_proc = subprocess.Popen(
+            ["x11vnc", "-display", display_num, "-nopw", "-forever",
+             "-rfbport", str(vnc_port), "-shared"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        await asyncio.sleep(1)
+
+        log.info(
+            "linkedin_vnc_session_ready",
+            msg=(
+                f"VNC server running on port {vnc_port}. "
+                f"Connect from your laptop: vnc://<VPS_IP>:{vnc_port} "
+                f"(or use a VNC client like Screen Sharing on Mac). "
+                f"Log into LinkedIn, then press ENTER here."
+            ),
+            vnc_port=vnc_port,
+        )
+        await asyncio.get_event_loop().run_in_executor(
+            None, input, f"Press ENTER once you are logged in (VNC :{vnc_port})... "
+        )
+
+        log.info("linkedin_vnc_session_saved", profile_dir=str(self.profile_dir))
+        await self._close_persistent_browser()
+
+        # Cleanup
+        vnc_proc.terminate()
+        xvfb_proc.terminate()
+        try:
+            vnc_proc.wait(timeout=5)
+        except Exception:
+            vnc_proc.kill()
+        try:
+            xvfb_proc.wait(timeout=5)
+        except Exception:
+            xvfb_proc.kill()
 
     def _ensure_session_exists(self) -> None:
         # A populated profile dir means a previous save-session completed.
@@ -330,8 +473,6 @@ class LinkedInCompanyScraper(BaseScraper):
         await self._navigate_with_retry(page, url)
         await human_pause("reading_medium")
 
-        # Wait for any profile link to show up — the All tab might render
-        # companies/posts first, but profile links are what we care about.
         try:
             await page.wait_for_selector("a[href*='/in/']", timeout=10000)
         except Exception:
@@ -387,7 +528,7 @@ class LinkedInCompanyScraper(BaseScraper):
         container's innerText — that blob contains name, headline, location,
         current/past lines as LinkedIn rendered them.
         """
-        collected: dict[str, dict[str, str]] = {}  # slug -> data
+        collected: dict[str, dict[str, str]] = {}
 
         for round_idx in range(MAX_ALL_TAB_SCROLL_ROUNDS):
             if len(collected) >= MAX_CANDIDATES_PER_LEAD:
@@ -408,8 +549,6 @@ class LinkedInCompanyScraper(BaseScraper):
 
                 profile_url = f"https://www.linkedin.com/in/{slug}/"
 
-                # Walk up to the enclosing <li> (search-result wrapper). If
-                # there's no <li> ancestor, fall back to the anchor itself.
                 text_blob = ""
                 image_url = None
                 try:
@@ -426,21 +565,382 @@ class LinkedInCompanyScraper(BaseScraper):
 
                 text_blob = (text_blob or "").strip()
                 if not text_blob:
-                    # The anchor alone isn't enough context for Gemini.
                     continue
 
                 collected[slug] = {
                     "profile_slug": slug,
                     "profile_url": profile_url,
-                    "text_blob": text_blob[:800],  # cap to keep prompt small
+                    "text_blob": text_blob[:800],
                     "profile_image_url": image_url or "",
                 }
 
-            # Scroll to reveal more results
             await smooth_scroll(page, "down")
             await asyncio.sleep(self.linkedin_config.scroll_pause_seconds)
 
         return list(collected.values())
+
+    # ---------------------------------------------- Company page (agentic)
+
+    async def _scrape_company_page(
+        self, page: Any, lead: dict
+    ) -> LinkedInCompanyData | None:
+        """Search for the company's LinkedIn page, then use a Gemini agentic
+        loop on the About tab to extract social links, phone, email, website.
+
+        Returns a LinkedInCompanyData if a company page is found and scraped,
+        or None if no matching company page exists on LinkedIn.
+        """
+        business_name = lead.get("business_name") or ""
+        if not business_name:
+            return None
+        lead_id = str(lead.get("id") or "unknown")
+
+        company_slug = await self._resolve_company_slug(page, lead)
+        if not company_slug:
+            log.info(
+                "linkedin_company_not_found",
+                business=business_name,
+            )
+            return None
+
+        company_url = f"https://www.linkedin.com/company/{company_slug}/"
+        log.info(
+            "linkedin_company_resolved",
+            business=business_name,
+            slug=company_slug,
+        )
+
+        # Navigate to the About tab directly
+        about_url = f"{company_url}about/"
+        await self._navigate_with_retry(page, about_url)
+        await human_pause("reading_medium")
+
+        # Check if About tab loaded; fall back to overview if redirected
+        if "/about/" not in page.url:
+            log.info("linkedin_company_about_redirect", url=page.url)
+
+        # Run agentic Gemini loop
+        company_data = await self._agent_loop(page, lead_id, company_slug, company_url)
+
+        if company_data and not self.dry_run:
+            await self._save_company_data(lead_id, company_data)
+
+        return company_data
+
+    async def _resolve_company_slug(
+        self, page: Any, lead: dict
+    ) -> str | None:
+        """Search LinkedIn Companies tab and use Gemini to pick the right one.
+
+        Returns the company slug (for /company/{slug}/) or None.
+        """
+        business_name = lead.get("business_name") or ""
+        if not business_name:
+            return None
+
+        url = COMPANY_SEARCH_URL_TEMPLATE.format(keywords=quote_plus(business_name))
+        await self._navigate_with_retry(page, url)
+        await human_pause("reading_medium")
+
+        # Collect search result cards
+        candidates: list[dict[str, str]] = []
+        cards = await page.query_selector_all(sel.COMPANY_SEARCH_SELECTORS["result_cards"])
+        for i, card in enumerate(cards[:sel.COMPANY_SEARCH_SELECTORS.get("resolver_results_to_consider", 5) or 5]):
+            try:
+                link_el = await card.query_selector(sel.COMPANY_SEARCH_SELECTORS["card_link_within"])
+                name_el = await card.query_selector(sel.COMPANY_SEARCH_SELECTORS["card_name_within"])
+                industry_el = await card.query_selector(sel.COMPANY_SEARCH_SELECTORS["card_industry_within"])
+                location_el = await card.query_selector(sel.COMPANY_SEARCH_SELECTORS["card_location_within"])
+
+                href = (await link_el.get_attribute("href") or "").strip() if link_el else ""
+                slug_match = re.search(r"/company/([^/?#]+)", href)
+                slug = slug_match.group(1) if slug_match else ""
+
+                name = (await name_el.inner_text() or "").strip() if name_el else ""
+                industry = (await industry_el.inner_text() or "").strip() if industry_el else ""
+                location = (await location_el.inner_text() or "").strip() if location_el else ""
+
+                if name:
+                    candidates.append({
+                        "index": i + 1,
+                        "name": name,
+                        "slug": slug,
+                        "industry": industry,
+                        "location": location,
+                        "href": href,
+                    })
+            except Exception:
+                continue
+
+        if not candidates:
+            return None
+
+        # Use Gemini to pick the right company
+        numbered = "\n\n".join(
+            f"--- Candidate {c['index']} ---\nname: {c['name']}\nindustry: {c['industry']}\nlocation: {c['location']}"
+            for c in candidates
+        )
+        prompt = COMPANY_RESOLVE_PROMPT.format(
+            business_name=business_name,
+            website=lead.get("website") or "unknown",
+            address=lead.get("address") or lead.get("location_area") or "unknown",
+            venue_category=lead.get("venue_category") or "unknown",
+            candidates=numbered,
+        )
+
+        result = await self._call_gemini(prompt, max_tokens=500)
+        if not result:
+            return None
+
+        match_idx = result.get("match_index")
+        if not isinstance(match_idx, int) or match_idx < 1 or match_idx > len(candidates):
+            return None
+
+        confidence = str(result.get("confidence") or "low").lower()
+        if not self._accept_confidence(confidence, self.linkedin_config.resolver_min_confidence):
+            log.info(
+                "linkedin_company_resolve_below_threshold",
+                business=business_name,
+                confidence=confidence,
+                threshold=self.linkedin_config.resolver_min_confidence,
+            )
+            return None
+
+        return candidates[match_idx - 1]["slug"] or None
+
+    async def _agent_loop(
+        self,
+        page: Any,
+        lead_id: str,
+        company_slug: str,
+        company_url: str,
+    ) -> LinkedInCompanyData | None:
+        """Run the Gemini agentic browser loop on the current page.
+
+        Captures page state, sends it to Gemini, receives an action,
+        executes the action, and repeats until Gemini returns extract/done
+        or max steps are reached.
+        """
+        max_steps = self.linkedin_config.company_page_agent_max_steps
+        extracted_data: dict | None = None
+
+        for step in range(max_steps):
+            page_state = await self._capture_page_state(page)
+            prompt = AGENT_SYSTEM_PROMPT.format(
+                page_url=page.url,
+                page_text=page_state["text"][:AGENT_MAX_TEXT_CHARS],
+                clickable_elements=page_state["clickable"],
+            )
+
+            action_result = await self._call_gemini(prompt, max_tokens=self.linkedin_config.company_page_agent_max_tokens)
+            if not action_result:
+                log.warning("linkedin_agent_no_response", step=step, lead_id=lead_id)
+                break
+
+            action = str(action_result.get("action") or "").lower()
+            log.info(
+                "linkedin_agent_step",
+                step=step,
+                action=action,
+                lead_id=lead_id,
+            )
+
+            if action == "extract":
+                extracted_data = action_result.get("data") or {}
+                break
+            elif action == "done":
+                break
+            elif action == "click":
+                elem_idx = action_result.get("element_index")
+                if isinstance(elem_idx, int):
+                    await self._agent_click_element(page, elem_idx)
+                    await human_pause("reading_medium")
+            elif action == "scroll":
+                direction = str(action_result.get("direction") or "down")
+                await smooth_scroll(page, direction)
+                await human_pause("reading_short")
+            elif action == "navigate":
+                nav_url = str(action_result.get("url") or "")
+                if nav_url and "linkedin.com" in nav_url:
+                    await self._navigate_with_retry(page, nav_url)
+                    await human_pause("reading_medium")
+                else:
+                    log.warning("linkedin_agent_nav_rejected", url=nav_url)
+            else:
+                log.warning("linkedin_agent_unknown_action", action=action)
+                break
+
+        if not extracted_data:
+            log.info("linkedin_agent_no_data_extracted", lead_id=lead_id)
+            return None
+
+        try:
+            return LinkedInCompanyData(
+                lead_id=UUID(lead_id),
+                company_linkedin_url=company_url,
+                company_linkedin_slug=company_slug,
+                company_size=extracted_data.get("company_size") or None,
+                industry=extracted_data.get("industry") or None,
+                hq_address=extracted_data.get("hq_address") or None,
+                phone=extracted_data.get("phone") or None,
+                email=extracted_data.get("email") or None,
+                website=extracted_data.get("website") or None,
+                instagram_handle=self._extract_handle(extracted_data.get("instagram_handle") or "", "instagram.com"),
+                twitter_handle=self._extract_handle(extracted_data.get("twitter_handle") or "", "twitter.com", "x.com"),
+                facebook_url=extracted_data.get("facebook_url") or None,
+                tiktok_handle=self._extract_handle(extracted_data.get("tiktok_handle") or "", "tiktok.com"),
+                youtube_url=extracted_data.get("youtube_url") or None,
+            )
+        except Exception as exc:
+            log.warning("linkedin_company_data_build_failed", error=str(exc))
+            return None
+
+    async def _capture_page_state(self, page: Any) -> dict[str, str]:
+        """Capture current page text and a list of clickable elements."""
+        text = ""
+        try:
+            text = await page.evaluate("() => document.body.innerText || ''")
+        except Exception:
+            pass
+
+        clickable_items: list[str] = []
+        try:
+            elements = await page.query_selector_all("a[href], button, [role='button'], [role='tab'], [role='link']")
+            for i, el in enumerate(elements[:AGENT_MAX_CLICKABLE]):
+                tag = await el.evaluate("el => el.tagName.toLowerCase()")
+                text_content = (await el.inner_text() or "").strip()[:80]
+                href = (await el.get_attribute("href") or "")[:120]
+                clickable_items.append(f"[{i}] <{tag}> text='{text_content}' href='{href}'")
+        except Exception:
+            pass
+
+        return {
+            "text": text[:AGENT_MAX_TEXT_CHARS],
+            "clickable": "\n".join(clickable_items),
+        }
+
+    async def _agent_click_element(self, page: Any, index: int) -> None:
+        """Click the Nth clickable element on the page (0-based index)."""
+        try:
+            elements = await page.query_selector_all("a[href], button, [role='button'], [role='tab'], [role='link']")
+            if 0 <= index < len(elements):
+                await elements[index].click()
+        except Exception as exc:
+            log.warning("linkedin_agent_click_failed", index=index, error=str(exc))
+
+    @staticmethod
+    def _extract_handle(value: str, *domains: str) -> str | None:
+        """Extract a social handle from a URL or raw string.
+
+        Accepts either a bare handle (@foobar), a slug (foobar),
+        or a full URL (https://instagram.com/foobar). Returns the
+        slug without leading @, or None.
+        """
+        if not value:
+            return None
+        value = value.strip().rstrip("/")
+        for domain in domains:
+            pattern = rf"(?:https?://)?(?:www\.)?{re.escape(domain)}/([^/?#]+)"
+            m = re.search(pattern, value)
+            if m:
+                handle = m.group(1).lstrip("@")
+                return handle or None
+        # Bare handle: strip leading @
+        handle = value.lstrip("@").split("/")[0]
+        return handle if handle else None
+
+    async def _call_gemini(self, prompt: str, max_tokens: int = 4000) -> dict | None:
+        """Call Gemini with a prompt and parse the JSON response.
+
+        Uses the same fallback chain as _gemini_filter_employees.
+        """
+        from google import genai
+        from google.genai import errors as genai_errors
+        from src.enrichment.analyzer import call_gemini_with_retry
+
+        primary_model = self.config.scraping.enrichment.gemini_model
+        model_chain = [primary_model]
+        for fb in FALLBACK_MODELS:
+            if fb not in model_chain:
+                model_chain.append(fb)
+
+        client = genai.Client()
+        raw_text = ""
+        last_error: Exception | None = None
+
+        for model in model_chain:
+            try:
+                gen_config: dict = {
+                    "max_output_tokens": max_tokens,
+                    "temperature": FILTER_TEMPERATURE,
+                    "response_mime_type": "application/json",
+                }
+                if "pro" not in model:
+                    gen_config["thinking_config"] = {"thinking_budget": 0}
+                response = call_gemini_with_retry(
+                    client,
+                    model=model,
+                    contents=prompt,
+                    config=gen_config,
+                )
+                raw_text = response.text or ""
+                if raw_text:
+                    break
+                last_error = RuntimeError("empty response")
+            except genai_errors.ServerError as exc:
+                last_error = exc
+                continue
+            except genai_errors.ClientError as exc:
+                last_error = exc
+                continue
+            except Exception as exc:
+                last_error = exc
+                continue
+
+        if not raw_text:
+            return None
+
+        try:
+            return json.loads(raw_text)
+        except json.JSONDecodeError:
+            # Try brace-matching fallback
+            start = raw_text.find("{")
+            if start == -1:
+                return None
+            depth = 0
+            end = start
+            for i in range(start, len(raw_text)):
+                if raw_text[i] == "{":
+                    depth += 1
+                elif raw_text[i] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        end = i + 1
+                        break
+            try:
+                return json.loads(raw_text[start:end])
+            except json.JSONDecodeError:
+                log.warning("linkedin_gemini_parse_failed", raw=raw_text[:200])
+                return None
+
+    async def _save_company_data(
+        self, lead_id: str, data: LinkedInCompanyData
+    ) -> None:
+        """Write extracted company data to Firestore: update lead fields."""
+        from src.db.firestore import save_linkedin_company_data
+        save_linkedin_company_data(lead_id, data)
+        log.info(
+            "linkedin_company_data_saved",
+            lead_id=lead_id,
+            company_slug=data.company_linkedin_slug,
+            has_phone=bool(data.phone),
+            has_email=bool(data.email),
+            has_instagram=bool(data.instagram_handle),
+            has_twitter=bool(data.twitter_handle),
+            has_facebook=bool(data.facebook_url),
+            has_tiktok=bool(data.tiktok_handle),
+            has_youtube=bool(data.youtube_url),
+        )
 
     async def _gemini_filter_employees(
         self, lead: dict, candidates: list[dict[str, str]]
@@ -722,10 +1222,11 @@ class LinkedInCompanyScraper(BaseScraper):
         )
 
         ctx = await self._launch_persistent_browser(headless=False)
-        # Reuse any initial tab the persistent context opens; otherwise create one.
         page = ctx.pages[0] if ctx.pages else await ctx.new_page()
 
         await self._verify_session_valid(page)
+
+        scrape_company = self.linkedin_config.scrape_company_page
 
         for idx, lead_id in enumerate(lead_ids, start=1):
             lead = get_lead_by_id(lead_id)
@@ -738,7 +1239,39 @@ class LinkedInCompanyScraper(BaseScraper):
             per_lead_employees = 0
 
             try:
-                employees = await self._scrape_via_all_tab(page, lead)
+                if scrape_company:
+                    # Run All-tab employees and company-page scrape concurrently
+                    # on separate tabs within the same browser context.
+                    company_page = await ctx.new_page()
+
+                    employees_task = self._scrape_via_all_tab(page, lead)
+                    company_task = self._scrape_company_page(company_page, lead)
+
+                    results = await asyncio.gather(
+                        employees_task,
+                        company_task,
+                        return_exceptions=True,
+                    )
+
+                    employees = results[0] if not isinstance(results[0], Exception) else []
+                    company_data = results[1] if not isinstance(results[1], Exception) else None
+
+                    if isinstance(results[0], LinkedInBlocked):
+                        raise results[0]
+                    if isinstance(results[0], ScraperError):
+                        log.error("linkedin_scrape_error", lead_id=lead_id, error=str(results[0]))
+
+                    if isinstance(results[1], Exception) and not isinstance(results[1], ScraperError):
+                        log.warning("linkedin_company_page_error", lead_id=lead_id, error=str(results[1]))
+
+                    try:
+                        await company_page.close()
+                    except Exception:
+                        pass
+                else:
+                    employees = await self._scrape_via_all_tab(page, lead)
+                    company_data = None
+
             except LinkedInBlocked as exc:
                 log.error("linkedin_blocked_during_scrape", lead_id=lead_id, error=str(exc))
                 if not self.dry_run:
@@ -763,6 +1296,7 @@ class LinkedInCompanyScraper(BaseScraper):
                     lead_id=lead_id,
                     employees=per_lead_employees,
                     decision_makers=sum(1 for e in employees if e.is_decision_maker),
+                    company_data=company_data.model_dump(mode="json") if company_data else None,
                     sample=[
                         {"name": e.name, "title": e.title, "confidence": e.confidence.value}
                         for e in employees[:3]
@@ -790,6 +1324,8 @@ class LinkedInCompanyScraper(BaseScraper):
                         "employees_found": per_lead_employees,
                         "employees_saved": saved,
                         "decision_makers": sum(1 for e in employees if e.is_decision_maker),
+                        "company_page_scraped": company_data is not None,
+                        "social_channels": sum(1 for k in ("instagram_handle", "twitter_handle", "facebook_url", "tiktok_handle", "youtube_url") if getattr(company_data, k, None)) if company_data else 0,
                     },
                 )
                 self.employee_count_total += per_lead_employees
@@ -807,6 +1343,7 @@ class LinkedInCompanyScraper(BaseScraper):
             "linkedin_scrape_done",
             leads_processed=len(self.collected_leads),
             employees_total=self.employee_count_total,
+            company_page_enabled=scrape_company,
         )
         return self.collected_leads
 
@@ -820,6 +1357,15 @@ def _parse_args() -> argparse.Namespace:
         "--save-session",
         action="store_true",
         help="Open a browser for manual login and persist storage_state.",
+    )
+    parser.add_argument(
+        "--vnc-session",
+        action="store_true",
+        help=(
+            "Open a VNC-accessible browser on a headless VPS for manual login. "
+            "Requires Xvfb + x11vnc installed on the VPS. "
+            "Connect via VNC client (e.g. Mac Screen Sharing) to port 5999."
+        ),
     )
     parser.add_argument(
         "--lead-ids",
@@ -899,6 +1445,10 @@ async def _amain() -> None:
 
     if args.save_session:
         await scraper.save_session()
+        return
+
+    if args.vnc_session:
+        await scraper.save_session_vnc()
         return
 
     await scraper.run()

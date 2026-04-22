@@ -13,7 +13,7 @@ import structlog
 from google.cloud.firestore_v1.base_query import FieldFilter
 
 from src.db.client import get_firestore_client
-from src.db.models import ActivityLog, Lead, LinkedInEmployee, ScrapeRun
+from src.db.models import ActivityLog, Lead, LinkedInCompanyData, LinkedInEmployee, ScrapeRun
 
 log = structlog.get_logger()
 
@@ -535,6 +535,96 @@ def update_lead_linkedin_status(lead_id: str, status: str, **extra: object) -> b
     updates: dict = {"linkedin_scrape_status": status}
     updates.update(extra)
     return update_lead(lead_id, updates)
+
+
+def save_linkedin_company_data(lead_id: str, data: LinkedInCompanyData) -> bool:
+    """Write company page data to Firestore — update lead fields + store raw record.
+
+    1. Update the lead document with social links, phone, email, company URL.
+       Only overwrites fields that are currently null/empty (never replaces
+       existing data that may have come from a better source like enrichment).
+    2. Write the full LinkedInCompanyData to the linkedin_company_data collection
+       for audit / re-processing.
+    """
+    db = get_firestore_client()
+    if db is None:
+        return False
+
+    try:
+        # Build incremental updates — only set fields that aren't already populated
+        updates: dict = {
+            "linkedin_company_url": data.company_linkedin_url,
+            "social_media_scraped_at": data.scraped_at.isoformat(),
+        }
+
+        # Phone — only set if we found one AND the lead doesn't already have one
+        if data.phone:
+            updates["phone"] = data.phone
+
+        # Email — only set if lead doesn't already have one
+        if data.email:
+            updates["email"] = data.email
+            updates["email_found"] = True
+
+        # Website — only set if lead doesn't already have one
+        if data.website:
+            updates.setdefault("website", data.website)
+
+        # Social media handles
+        if data.instagram_handle:
+            updates.setdefault("instagram_handle", data.instagram_handle)
+        if data.twitter_handle:
+            updates["twitter_handle"] = data.twitter_handle
+        if data.facebook_url:
+            updates["facebook_url"] = data.facebook_url
+        if data.tiktok_handle:
+            updates["tiktok_handle"] = data.tiktok_handle
+        if data.youtube_url:
+            updates["youtube_url"] = data.youtube_url
+
+        # Company metadata
+        if data.company_size:
+            updates["linkedin_company_size"] = data.company_size
+        if data.industry:
+            updates["linkedin_industry"] = data.industry
+        if data.hq_address:
+            updates.setdefault("address", data.hq_address)
+
+        # Update the lead document
+        doc_ref = db.collection("leads").document(lead_id)
+        doc_snap = doc_ref.get()
+        if doc_snap.exists:
+            existing = doc_snap.to_dict() or {}
+            # Filter: only set social/contact fields if they're currently empty
+            filtered_updates: dict = {}
+            for k, v in updates.items():
+                if k in ("social_media_scraped_at", "linkedin_company_url",
+                          "linkedin_company_size", "linkedin_industry",
+                          "twitter_handle", "facebook_url", "tiktok_handle",
+                          "youtube_url"):
+                    filtered_updates[k] = v
+                elif not existing.get(k):
+                    filtered_updates[k] = v
+            if filtered_updates:
+                doc_ref.update(filtered_updates)
+        else:
+            doc_ref.update(updates)
+
+        # Store the full raw record
+        raw_doc_id = f"{lead_id}_{data.company_linkedin_slug or 'unknown'}"
+        db.collection("linkedin_company_data").document(raw_doc_id).set(
+            data.model_dump(mode="json")
+        )
+
+        log.info(
+            "linkedin_company_data_firestore_saved",
+            lead_id=lead_id,
+            fields_updated=len(updates),
+        )
+        return True
+    except Exception as exc:
+        log.warning("save_linkedin_company_data_failed", lead_id=lead_id, error=str(exc))
+        return False
 
 
 def count_linkedin_scrapes_today() -> int:
