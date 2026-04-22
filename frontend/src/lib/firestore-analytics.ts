@@ -343,23 +343,30 @@ export async function getReplyRateByDimension(
   return { points };
 }
 
+// A reply implies the email was opened
+function wasOpened(msg: Record<string, any>): boolean {
+  return !!(msg.opened || msg.has_reply || (msg.reply_count && msg.reply_count > 0));
+}
+
 export async function getSubjectLineStats(): Promise<{ subjects: SubjectLineStat[] }> {
   const snap = await getDocs(collection(db, "outreach_messages"));
   const msgs = snap.docs.map((d) => d.data());
 
-  // Only count sent messages (includes those that got replies)
   const sentMsgs = msgs.filter((m) => ["sent", "replied"].includes(m.status) || m.sent_at);
 
-  const bySubject: Record<string, { sent: number; replied: number; subject: string }> = {};
+  const bySubject: Record<string, { sent: number; replied: number; opened: number; subject: string }> = {};
 
   for (const msg of sentMsgs) {
     const subject = msg.subject || "(no subject)";
     if (!bySubject[subject]) {
-      bySubject[subject] = { sent: 0, replied: 0, subject };
+      bySubject[subject] = { sent: 0, replied: 0, opened: 0, subject };
     }
     bySubject[subject].sent++;
     if (msg.has_reply || (msg.reply_count && msg.reply_count > 0)) {
       bySubject[subject].replied++;
+    }
+    if (wasOpened(msg)) {
+      bySubject[subject].opened++;
     }
   }
 
@@ -368,9 +375,128 @@ export async function getSubjectLineStats(): Promise<{ subjects: SubjectLineStat
       subject: s.subject,
       sent: s.sent,
       replied: s.replied,
+      opened: s.opened,
       reply_rate: s.sent > 0 ? Math.round((s.replied / s.sent) * 1000) / 10 : 0,
+      open_rate: s.sent > 0 ? Math.round((s.opened / s.sent) * 1000) / 10 : 0,
     }))
-    .sort((a, b) => b.reply_rate - a.reply_rate || b.sent - a.sent);
+    .sort((a, b) => b.open_rate - a.open_rate || b.reply_rate - a.reply_rate || b.sent - a.sent);
 
   return { subjects };
+}
+
+export interface BestPerformingEmail {
+  id: string;
+  lead_id: string;
+  business_name: string;
+  subject: string | null;
+  content: string;
+  reply_count: number;
+  open_count: number;
+  open_rate: number;   // subject-level open rate across all sends with this subject
+  reply_rate: number;  // subject-level reply rate across all sends with this subject
+  subject_sent: number; // how many times this subject was sent total
+  venue_category: string | null;
+  tone_tier: string | null;
+  lead_products: string[];
+  sent_at: string | null;
+  content_rating: "great" | "good" | "not_interested" | null;
+  content_score: number | null;
+  content_rating_reason: string | null;
+}
+
+export async function getBestPerformingContent(limit = 20): Promise<BestPerformingEmail[]> {
+  const snap = await getDocs(collection(db, "outreach_messages"));
+  const all = snap.docs.map((d) => d.data());
+  const sent = all.filter((m) => m.status === "sent" || m.sent_at);
+
+  // Build subject-level aggregates so each row can show open/reply rate
+  const bySubject: Record<string, { sent: number; opened: number; replied: number }> = {};
+  for (const m of sent) {
+    const key = m.subject ?? "(no subject)";
+    if (!bySubject[key]) bySubject[key] = { sent: 0, opened: 0, replied: 0 };
+    bySubject[key].sent++;
+    if (wasOpened(m)) bySubject[key].opened++;
+    if (m.has_reply || (m.reply_count && m.reply_count > 0)) bySubject[key].replied++;
+  }
+
+  return sent
+    .filter((m) => m.has_reply || (m.reply_count && m.reply_count > 0))
+    .map((m) => {
+      const key = m.subject ?? "(no subject)";
+      const agg = bySubject[key] ?? { sent: 1, opened: 0, replied: 0 };
+      return {
+        id: m.id,
+        lead_id: m.lead_id,
+        business_name: m.business_name,
+        subject: m.subject ?? null,
+        content: m.content ?? "",
+        reply_count: m.reply_count ?? 1,
+        open_count: m.open_count > 0 ? m.open_count : wasOpened(m) ? 1 : 0,
+        open_rate: agg.sent > 0 ? Math.round((agg.opened / agg.sent) * 1000) / 10 : 0,
+        reply_rate: agg.sent > 0 ? Math.round((agg.replied / agg.sent) * 1000) / 10 : 0,
+        subject_sent: agg.sent,
+        venue_category: m.venue_category ?? null,
+        tone_tier: m.tone_tier ?? null,
+        lead_products: m.lead_products ?? [],
+        sent_at: m.sent_at ?? null,
+        content_rating: m.content_rating ?? null,
+        content_score: m.content_score ?? null,
+        content_rating_reason: m.content_rating_reason ?? null,
+      };
+    })
+    .sort((a, b) => b.reply_count - a.reply_count || b.open_count - a.open_count)
+    .slice(0, limit);
+}
+
+export async function getEmailsBySubject(subject: string): Promise<BestPerformingEmail[]> {
+  const snap = await getDocs(collection(db, "outreach_messages"));
+  const all = snap.docs.map((d) => d.data());
+  const sentWithSubject = all.filter((m) => (m.status === "sent" || m.sent_at) && (m.subject ?? "(no subject)") === subject);
+
+  const agg = { sent: sentWithSubject.length, opened: 0, replied: 0 };
+  for (const m of sentWithSubject) {
+    if (wasOpened(m)) agg.opened++;
+    if (m.has_reply || (m.reply_count && m.reply_count > 0)) agg.replied++;
+  }
+  const open_rate = agg.sent > 0 ? Math.round((agg.opened / agg.sent) * 1000) / 10 : 0;
+  const reply_rate = agg.sent > 0 ? Math.round((agg.replied / agg.sent) * 1000) / 10 : 0;
+
+  return sentWithSubject
+    .map((m) => ({
+      id: m.id,
+      lead_id: m.lead_id,
+      business_name: m.business_name,
+      subject: m.subject ?? null,
+      content: m.content ?? "",
+      reply_count: m.reply_count ?? 0,
+      open_count: m.open_count > 0 ? m.open_count : wasOpened(m) ? 1 : 0,
+      open_rate,
+      reply_rate,
+      subject_sent: agg.sent,
+      venue_category: m.venue_category ?? null,
+      tone_tier: m.tone_tier ?? null,
+      lead_products: m.lead_products ?? [],
+      sent_at: m.sent_at ?? null,
+      content_rating: m.content_rating ?? null,
+      content_score: m.content_score ?? null,
+      content_rating_reason: m.content_rating_reason ?? null,
+    }))
+    .sort((a, b) => b.reply_count - a.reply_count || b.open_count - a.open_count);
+}
+
+export async function getTopOpeners(limit = 30): Promise<import("./types").TopOpener[]> {
+  const snap = await getDocs(collection(db, "outreach_messages"));
+  return snap.docs
+    .map((d) => d.data())
+    .filter((m) => (m.status === "sent" || m.sent_at) && wasOpened(m))
+    .map((m) => ({
+      lead_id: m.lead_id,
+      business_name: m.business_name,
+      subject: m.subject ?? null,
+      open_count: m.open_count ?? 1,
+      last_opened_at: m.last_opened_at ?? m.opened_at ?? m.sent_at ?? "",
+      has_reply: !!(m.has_reply || (m.reply_count && m.reply_count > 0)),
+    }))
+    .sort((a, b) => (b.last_opened_at > a.last_opened_at ? 1 : -1))
+    .slice(0, limit);
 }
