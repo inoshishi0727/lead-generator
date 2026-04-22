@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import { getFunnel, getCategories, getRatios, getTrends, getSubjectLineStats, getReplyRateTrend, getReplyRateByDimension, getOpenRateTrend } from "@/lib/firestore-analytics";
+import { getFunnel, getCategories, getRatios, getTrends, getSubjectLineStats, getReplyRateTrend, getReplyRateByDimension, getOpenRateTrend, getTopOpeners, getBestPerformingContent, getEmailsBySubject } from "@/lib/firestore-analytics";
 import { getTeamMetrics } from "@/lib/firestore-team-analytics";
 import type {
   FunnelData,
@@ -88,5 +88,27 @@ export function useTeamMetrics() {
   return useQuery<MemberMetrics[]>({
     queryKey: ["analytics", "team-metrics"],
     queryFn: () => getTeamMetrics(),
+  });
+}
+
+export function useTopOpeners() {
+  return useQuery({
+    queryKey: ["analytics", "top-openers"],
+    queryFn: () => getTopOpeners(),
+  });
+}
+
+export function useBestPerformingContent() {
+  return useQuery({
+    queryKey: ["analytics", "best-performing-content"],
+    queryFn: () => getBestPerformingContent(),
+  });
+}
+
+export function useEmailsBySubject(subject: string | null) {
+  return useQuery({
+    queryKey: ["analytics", "emails-by-subject", subject],
+    queryFn: () => getEmailsBySubject(subject!),
+    enabled: !!subject,
   });
 }
