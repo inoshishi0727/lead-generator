@@ -167,6 +167,10 @@ export interface OutreachMessage {
   is_channel_escalation?: boolean;
   // Client campaign flag
   is_client_campaign?: boolean;
+  // Manual content quality rating
+  content_rating?: "great" | "good" | "not_interested" | null;
+  content_rating_note?: string | null;
+  content_rated_at?: string | null;
 }
 
 // --- Edit Feedback / Reflection ---
@@ -310,7 +314,18 @@ export interface SubjectLineStat {
   subject: string;
   sent: number;
   replied: number;
+  opened: number;
   reply_rate: number;
+  open_rate: number;
+}
+
+export interface TopOpener {
+  lead_id: string;
+  business_name: string;
+  subject: string | null;
+  open_count: number;
+  last_opened_at: string;
+  has_reply: boolean;
 }
 
 export interface LeadRecommendation {

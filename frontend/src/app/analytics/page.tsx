@@ -12,6 +12,8 @@ import { SubjectLineChart } from "@/components/subject-line-chart";
 import { ReplyRateTrendChart } from "@/components/reply-rate-trend-chart";
 import { OutreachBreakdownChart } from "@/components/outreach-breakdown-chart";
 import { EmailEngagementChart } from "@/components/email-engagement-chart";
+import { EmailOpensCard } from "@/components/email-opens-card";
+import { BestPerformingContentCard } from "@/components/best-performing-content-card";
 import { Button } from "@/components/ui/button";
 import { useFunnel, useCategories, useReplyRateTrend, useOpenRateTrend } from "@/hooks/use-analytics";
 import { useAuth } from "@/lib/auth-context";
@@ -107,7 +109,12 @@ export default function AnalyticsPage() {
         </div>
       </div>
 
-      <SubjectLineChart />
+      <div className="grid gap-6 lg:grid-cols-2 items-stretch">
+        <EmailOpensCard />
+        <SubjectLineChart />
+      </div>
+
+      <BestPerformingContentCard />
 
       <AIRecommendations />
     </div>
