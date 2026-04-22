@@ -103,12 +103,15 @@ export function useUpdateMessage() {
       restore_original_email?: boolean;
       rejection_reason?: string;
       lead_id?: string;
+<<<<<<< HEAD
       scheduled_send_date?: string | null;
+=======
       // Optional — used only when status="approved" to enforce the
       // "one live email per (lead, step)" singleton.
       step_number?: number;
       channel?: string;
       business_name?: string;
+>>>>>>> d5925e1 (feat: prevent duplicate live outreach emails across UI and functions)
     }) => {
       if (body.status === "approved" && channel === "email" && body.lead_id) {
         const siblings = await getOutreachMessages({ status: "approved", channel: "email", limit: 500 });
