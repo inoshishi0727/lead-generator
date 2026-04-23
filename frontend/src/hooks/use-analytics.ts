@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import { getFunnel, getCategories, getRatios, getTrends, getSubjectLineStats, getReplyRateTrend, getReplyRateByDimension, getOpenRateTrend, getTopOpeners, getBestPerformingContent, getEmailsBySubject } from "@/lib/firestore-analytics";
+import { getFunnel, getCategories, getRatios, getTrends, getSubjectLineStats, getReplyRateTrend, getReplyRateByDimension, getOpenRateTrend, getTopOpeners, getBestPerformingContent, getEmailsBySubject, getEmailPerformance7Day } from "@/lib/firestore-analytics";
 import { getTeamMetrics } from "@/lib/firestore-team-analytics";
 import type {
   FunnelData,
@@ -12,6 +12,7 @@ import type {
   ReplyRateByDimensionPoint,
   OpenRateTrendPoint,
   MemberMetrics,
+  EmailPerformance7Day as EmailPerformance7DayType,
 } from "@/lib/types";
 
 const hasBackend = !!process.env.NEXT_PUBLIC_API_URL;
@@ -110,5 +111,12 @@ export function useEmailsBySubject(subject: string | null) {
     queryKey: ["analytics", "emails-by-subject", subject],
     queryFn: () => getEmailsBySubject(subject!),
     enabled: !!subject,
+  });
+}
+
+export function useEmailPerformance7Day() {
+  return useQuery<EmailPerformance7DayType>({
+    queryKey: ["analytics", "email-performance-7day"],
+    queryFn: () => getEmailPerformance7Day(),
   });
 }
