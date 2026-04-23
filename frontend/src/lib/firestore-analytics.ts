@@ -39,8 +39,9 @@ async function getAllLeads(): Promise<any[]> {
 }
 
 export async function getFunnel(): Promise<FunnelData> {
-  const docs = await getAllLeads();
-  if (!docs.length) return { stages: [], total_leads: 0 };
+  const allDocs = await getAllLeads();
+  if (!allDocs.length) return { stages: [], total_leads: 0 };
+  const docs = allDocs.filter((d) => !!d.email);
 
   const counts: Record<string, number> = {};
   for (const doc of docs) {
@@ -497,6 +498,52 @@ export async function getTopOpeners(limit = 30): Promise<import("./types").TopOp
       last_opened_at: m.last_opened_at ?? m.opened_at ?? m.sent_at ?? "",
       has_reply: !!(m.has_reply || (m.reply_count && m.reply_count > 0)),
     }))
-    .sort((a, b) => (b.last_opened_at > a.last_opened_at ? 1 : -1))
-    .slice(0, limit);
+.sort((a, b) => (b.last_opened_at > a.last_opened_at ? 1 : -1))
+     .slice(0, limit);
+}
+
+export interface EmailPerformance7Day {
+  series: { date: string; sent: number; replied: number }[];
+  totalSent: number;
+  totalReplied: number;
+  replyRate: number;
+}
+
+export async function getEmailPerformance7Day(): Promise<EmailPerformance7Day> {
+  const msgs = await getAllSentOutreachMessages();
+  if (!msgs.length) return { series: [], totalSent: 0, totalReplied: 0, replyRate: 0 };
+
+  const now = new Date();
+  const bucketKeys: string[] = [];
+  const buckets: Record<string, { sent: number; replied: number; repliedNames: { name: string; subject: string | null }[] }> = {};
+
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(now.getTime() - i * 24 * 60 * 60 * 1000);
+    const key = d.toISOString().split("T")[0];
+    bucketKeys.push(key);
+    buckets[key] = { sent: 0, replied: 0, repliedNames: [] };
+  }
+
+  for (const msg of msgs) {
+    if (!msg.sent_at) continue;
+    const dateStr = typeof msg.sent_at === "string" ? msg.sent_at.split("T")[0] : "";
+    if (!buckets[dateStr]) continue;
+    buckets[dateStr].sent++;
+    if (msg.has_reply || (msg.reply_count && msg.reply_count > 0)) {
+      buckets[dateStr].replied++;
+      buckets[dateStr].repliedNames.push({ name: msg.business_name || "Unknown", subject: msg.subject || null });
+    }
+  }
+
+  const series = bucketKeys.map((date) => ({
+    date,
+    sent: buckets[date].sent,
+    replied: buckets[date].replied,
+  }));
+
+  const totalSent = series.reduce((sum, s) => sum + s.sent, 0);
+  const totalReplied = series.reduce((sum, s) => sum + s.replied, 0);
+  const replyRate = totalSent > 0 ? Math.round((totalReplied / totalSent) * 1000) / 10 : 0;
+
+  return { series, totalSent, totalReplied, replyRate };
 }

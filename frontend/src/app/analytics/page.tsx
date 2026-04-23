@@ -14,6 +14,7 @@ import { OutreachBreakdownChart } from "@/components/outreach-breakdown-chart";
 import { EmailEngagementChart } from "@/components/email-engagement-chart";
 import { EmailOpensCard } from "@/components/email-opens-card";
 import { BestPerformingContentCard } from "@/components/best-performing-content-card";
+import { EmailPerformanceCard } from "@/components/email-performance-card";
 import { Button } from "@/components/ui/button";
 import { useFunnel, useCategories, useReplyRateTrend, useOpenRateTrend } from "@/hooks/use-analytics";
 import { useAuth } from "@/lib/auth-context";
@@ -72,7 +73,7 @@ export default function AnalyticsPage() {
       </div>
 
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-        <StatCard icon={Users} label="Total Leads" value={totalLeads} />
+        <StatCard icon={Users} label="Qualified Leads" value={totalLeads} />
         <StatCard icon={TrendingUp} label="Response Rate" value={`${responseRate}%`} />
         <StatCard icon={Target} label="Conversion Rate" value={`${conversionRate}%`} />
         <StatCard icon={BarChart3} label="Avg Score" value={avgScore} />
@@ -100,6 +101,7 @@ export default function AnalyticsPage() {
         <h2 className="px-0.5 text-sm font-semibold uppercase tracking-widest text-muted-foreground">
           Outreach Performance
         </h2>
+        <EmailPerformanceCard />
         <div className="grid gap-6 lg:grid-cols-2">
           <EmailEngagementChart />
           <ReplyRateTrendChart />
