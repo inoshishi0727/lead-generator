@@ -387,3 +387,10 @@ export interface MemberMetrics {
   leads_converted: number;
   leads_by_stage: Record<string, number>;
 }
+
+export interface EmailPerformance7Day {
+  series: { date: string; sent: number; replied: number }[];
+  totalSent: number;
+  totalReplied: number;
+  replyRate: number;
+}
