@@ -109,21 +109,22 @@ export default function OutreachPage() {
   );
 
   const filteredByStatus = statusFilter === "conversations"
-    ? (messages ?? []).filter((m) => m.has_reply)
+    ? (messages ?? []).filter((m) => m.has_reply && !m.is_client_campaign)
     : statusFilter === "follow-ups"
       ? (messages ?? []).filter((m) =>
           ((m.step_number ?? 1) > 1)
           && m.status !== "sent"
           && !m.has_reply
           && leadsWithSentEmail.has(m.lead_id)
+          && !m.is_client_campaign
         )
       : statusFilter === "clients"
         ? (messages ?? []).filter((m) => m.is_client_campaign)
         : statusFilter === "scheduled"
-          ? (messages ?? []).filter((m) => m.status === "approved" && !!m.scheduled_send_date)
+          ? (messages ?? []).filter((m) => m.status === "approved" && !!m.scheduled_send_date && !m.is_client_campaign)
           : (statusFilter === "all")
-            ? (messages ?? [])
-            : (messages ?? []).filter((m) => m.status === statusFilter);
+            ? (messages ?? []).filter((m) => !m.is_client_campaign)
+            : (messages ?? []).filter((m) => m.status === statusFilter && !m.is_client_campaign);
   const filteredByCategory = filteredByStatus.filter(
     (m) => !categoryFilter || m.venue_category === categoryFilter
   );

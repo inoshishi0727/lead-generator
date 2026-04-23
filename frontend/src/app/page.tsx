@@ -118,8 +118,9 @@ export default function DashboardPage() {
   const allLeads = leads ?? [];
   const allMessages = messages ?? [];
 
+  const qualifiedLeads = allLeads.filter((l) => l.email).length;
   const totalLeads = allLeads.length;
-  const emailsFound = allLeads.filter((l) => l.email).length;
+  const emailsFound = qualifiedLeads;
   const drafts = allMessages.filter((m) => m.status === "draft").length;
   const approved = allMessages.filter((m) => m.status === "approved").length;
   const sent = allMessages.filter((m) => m.status === "sent").length;
@@ -164,10 +165,11 @@ export default function DashboardPage() {
       {/* Key Metrics */}
       <div data-tour="metrics" className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <MetricCard
-          label="Total Leads"
-          value={totalLeads}
+          label="Qualified Leads"
+          value={qualifiedLeads}
           icon={Users}
           loading={leadsLoading}
+          subtitle={totalLeads > 0 ? `of ${totalLeads} total` : undefined}
           accent="text-blue-400"
         />
         <MetricCard
