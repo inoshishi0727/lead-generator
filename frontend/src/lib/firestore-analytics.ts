@@ -485,11 +485,20 @@ export async function getEmailsBySubject(subject: string): Promise<BestPerformin
     .sort((a, b) => b.reply_count - a.reply_count || b.open_count - a.open_count);
 }
 
-export async function getTopOpeners(limit = 30): Promise<import("./types").TopOpener[]> {
+export interface TopOpenersResult {
+  openers: import("./types").TopOpener[];
+  totalSentEmails: number;
+  totalSentContacts: number;
+}
+
+export async function getTopOpeners(limit = 30): Promise<TopOpenersResult> {
   const snap = await getDocs(collection(db, "outreach_messages"));
-  return snap.docs
-    .map((d) => d.data())
-    .filter((m) => (m.status === "sent" || m.sent_at) && wasOpened(m))
+  const allDocs = snap.docs.map((d) => d.data());
+  const sentDocs = allDocs.filter((m) => m.status === "sent" || m.sent_at);
+  const totalSentEmails = sentDocs.length;
+  const totalSentContacts = new Set(sentDocs.map((m) => m.lead_id)).size;
+  const openers = sentDocs
+    .filter((m) => wasOpened(m))
     .map((m) => ({
       lead_id: m.lead_id,
       business_name: m.business_name,
@@ -498,8 +507,9 @@ export async function getTopOpeners(limit = 30): Promise<import("./types").TopOp
       last_opened_at: m.last_opened_at ?? m.opened_at ?? m.sent_at ?? "",
       has_reply: !!(m.has_reply || (m.reply_count && m.reply_count > 0)),
     }))
-.sort((a, b) => (b.last_opened_at > a.last_opened_at ? 1 : -1))
-     .slice(0, limit);
+    .sort((a, b) => (b.last_opened_at > a.last_opened_at ? 1 : -1))
+    .slice(0, limit);
+  return { openers, totalSentEmails, totalSentContacts };
 }
 
 export interface EmailPerformance7Day {
