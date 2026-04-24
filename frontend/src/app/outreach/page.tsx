@@ -61,6 +61,7 @@ export default function OutreachPage() {
   const { isAdmin, isMember, user } = useAuth();
   const [statusFilter, setStatusFilter] = useState<string>("draft");
   const [categoryFilter, setCategoryFilter] = useState<string>("");
+  const [stepFilter, setStepFilter] = useState<string>("all");
   const [showSendWarning, setShowSendWarning] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
 
@@ -71,6 +72,9 @@ export default function OutreachPage() {
   const firestoreFilter = statusFilter === "all" || statusFilter === "conversations" || statusFilter === "follow-ups" || statusFilter === "clients" || statusFilter === "scheduled"
     ? { assignedTo } as any
     : { status: statusFilter, assignedTo };
+
+  // Universal fetch for stat cards — always all messages regardless of current tab
+  const { data: universalApiMessages } = useMessages({ assignedTo } as any, 1000);
 
   // Use API-backed messages by default, but when viewing Follow-ups or Clients, fetch directly
   // from Firestore client to avoid server-side cache delays (live functions write directly to Firestore).
@@ -128,10 +132,16 @@ export default function OutreachPage() {
   const filteredByCategory = filteredByStatus.filter(
     (m) => !categoryFilter || m.venue_category === categoryFilter
   );
+  const filteredByStep = useMemo(() => {
+    if (stepFilter === "all") return filteredByCategory;
+    const step = stepFilter === "initial" ? 1 : stepFilter === "followup1" ? 2 : stepFilter === "followup2" ? 3 : 4;
+    return filteredByCategory.filter((m) => (m.step_number ?? 1) === step);
+  }, [filteredByCategory, stepFilter]);
+
   const allMessages = useMemo(() => {
-    if (!searchQuery.trim()) return filteredByCategory;
+    if (!searchQuery.trim()) return filteredByStep;
     const q = searchQuery.toLowerCase();
-    return filteredByCategory.filter(
+    return filteredByStep.filter(
       (m) =>
         m.business_name?.toLowerCase().includes(q) ||
         m.contact_name?.toLowerCase().includes(q) ||
@@ -139,7 +149,7 @@ export default function OutreachPage() {
         m.subject?.toLowerCase().includes(q) ||
         m.content?.toLowerCase().includes(q)
     );
-  }, [filteredByCategory, searchQuery]);
+  }, [filteredByStep, searchQuery]);
   const { data: approvedEmailCount = 0 } = useApprovedEmailCount();
   const emailCapReached = approvedEmailCount >= 20;
 
@@ -168,10 +178,11 @@ export default function OutreachPage() {
     return ids;
   }, [messages]);
 
-  const draftCount = allMessages.filter((m) => m.status === "draft").length;
-  const approvedCount = allMessages.filter((m) => m.status === "approved").length;
-  const sentCount = allMessages.filter((m) => m.status === "sent").length;
-  const repliedCount = (messages ?? []).filter((m) => m.has_reply).length;
+  const universalMessages = (universalApiMessages ?? []).filter((m) => !m.is_client_campaign);
+  const draftCount = universalMessages.filter((m) => m.status === "draft").length;
+  const approvedCount = universalMessages.filter((m) => m.status === "approved").length;
+  const sentCount = universalMessages.filter((m) => m.status === "sent").length;
+  const repliedCount = universalMessages.filter((m) => m.has_reply).length;
   const draftIds = allMessages
     .filter((m) => m.status === "draft")
     .map((m) => m.id);
@@ -316,7 +327,7 @@ export default function OutreachPage() {
         <StatCard
           icon={FileText}
           label="Total Messages"
-          value={allMessages.length}
+          value={universalMessages.length}
         />
         <StatCard
           icon={FileText}
@@ -358,6 +369,27 @@ export default function OutreachPage() {
               </button>
             ))}
           </div>
+        </div>
+        <div className="flex items-center gap-1">
+          {[
+            { value: "all", label: "All Steps" },
+            { value: "initial", label: "Initial" },
+            { value: "followup1", label: "Follow-up 1" },
+            { value: "followup2", label: "Follow-up 2" },
+            { value: "followup3", label: "Follow-up 3" },
+          ].map(({ value, label }) => (
+            <button
+              key={value}
+              onClick={() => setStepFilter(value)}
+              className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                stepFilter === value
+                  ? "bg-primary/15 text-primary border border-primary/30"
+                  : "text-muted-foreground hover:text-foreground border border-transparent hover:border-border/50"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
         </div>
         <div className="flex items-center gap-3 w-full">
           <select
