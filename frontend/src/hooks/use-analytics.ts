@@ -93,7 +93,7 @@ export function useTeamMetrics() {
 }
 
 export function useTopOpeners() {
-  return useQuery({
+  return useQuery<import("@/lib/firestore-analytics").TopOpenersResult>({
     queryKey: ["analytics", "top-openers"],
     queryFn: () => getTopOpeners(),
   });
