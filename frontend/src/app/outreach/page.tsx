@@ -183,6 +183,15 @@ export default function OutreachPage() {
   const approvedCount = universalMessages.filter((m) => m.status === "approved").length;
   const sentCount = universalMessages.filter((m) => m.status === "sent").length;
   const repliedCount = universalMessages.filter((m) => m.has_reply).length;
+  const draftsByStep = useMemo(() => {
+    const drafts = universalMessages.filter((m) => m.status === "draft");
+    return {
+      initial: drafts.filter((m) => (m.step_number ?? 1) === 1).length,
+      followUp1: drafts.filter((m) => m.step_number === 2).length,
+      followUp2: drafts.filter((m) => m.step_number === 3).length,
+      followUp3Plus: drafts.filter((m) => (m.step_number ?? 1) >= 4).length,
+    };
+  }, [universalMessages]);
   const draftIds = allMessages
     .filter((m) => m.status === "draft")
     .map((m) => m.id);
@@ -323,32 +332,43 @@ export default function OutreachPage() {
       <EditReflectionBanner />
 
       {/* Stats */}
-      <div className="grid grid-cols-5 gap-4">
-        <StatCard
-          icon={FileText}
-          label="Total Messages"
-          value={universalMessages.length}
-        />
-        <StatCard
-          icon={FileText}
-          label="Pending Drafts"
-          value={draftCount}
-        />
-        <StatCard
-          icon={CheckCheck}
-          label="Approved"
-          value={approvedCount}
-        />
-        <StatCard
-          icon={Send}
-          label="Sent"
-          value={sentCount}
-        />
-        <StatCard
-          icon={Reply}
-          label="Replied"
-          value={repliedCount}
-        />
+      <div className="space-y-3">
+        <div className="grid grid-cols-5 gap-4">
+          <StatCard
+            icon={FileText}
+            label="Total Messages"
+            value={universalMessages.length}
+          />
+          <StatCard
+            icon={FileText}
+            label="Pending Drafts"
+            value={draftCount}
+          />
+          <StatCard
+            icon={CheckCheck}
+            label="Approved"
+            value={approvedCount}
+          />
+          <StatCard
+            icon={Send}
+            label="Sent"
+            value={sentCount}
+          />
+          <StatCard
+            icon={Reply}
+            label="Replied"
+            value={repliedCount}
+          />
+        </div>
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-muted-foreground font-medium whitespace-nowrap">Drafts by type:</span>
+          <div className="grid grid-cols-4 gap-3 flex-1">
+            <StatCard icon={FileText} label="Initial Outreach" value={draftsByStep.initial} />
+            <StatCard icon={FileText} label="Follow-up 1" value={draftsByStep.followUp1} />
+            <StatCard icon={FileText} label="Follow-up 2" value={draftsByStep.followUp2} />
+            <StatCard icon={FileText} label="Follow-up 3+" value={draftsByStep.followUp3Plus} />
+          </div>
+        </div>
       </div>
 
       {/* Filters */}
