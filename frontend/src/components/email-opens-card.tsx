@@ -183,7 +183,9 @@ export function EmailOpensCard() {
   const [modalOpen, setModalOpen] = useState(false);
   const [preview, setPreview] = useState<TopOpener | null>(null);
 
-  const openers = data ?? [];
+  const openers = data?.openers ?? [];
+  const totalSentEmails = data?.totalSentEmails ?? 0;
+  const totalSentContacts = data?.totalSentContacts ?? 0;
   const totalOpens = openers.reduce((sum, o) => sum + o.open_count, 0);
   const replied = openers.filter((o) => o.has_reply).length;
   const series = trendData?.series ?? [];
@@ -224,9 +226,14 @@ export function EmailOpensCard() {
             <p className="text-sm text-muted-foreground">No opens tracked yet.</p>
           ) : (
             <div className="space-y-4">
-              <div className="flex items-end gap-6">
+              <div className="flex items-end gap-6 flex-wrap">
                 <div>
-                  <p className="text-3xl font-bold">{openers.length}</p>
+                  <p className="text-3xl font-bold">
+                    {openers.length}
+                    {totalSentContacts > 0 && (
+                      <span className="text-lg font-normal text-muted-foreground">/{totalSentContacts}</span>
+                    )}
+                  </p>
                   <p className="text-xs text-muted-foreground mt-0.5">contacts opened</p>
                 </div>
                 <div>
@@ -234,9 +241,20 @@ export function EmailOpensCard() {
                   <p className="text-xs text-muted-foreground mt-0.5">total opens</p>
                 </div>
                 <div>
-                  <p className="text-xl font-semibold text-blue-400">{replied}</p>
+                  <p className="text-xl font-semibold text-blue-400">
+                    {replied}
+                    {totalSentContacts > 0 && (
+                      <span className="text-base font-normal text-muted-foreground">/{totalSentContacts}</span>
+                    )}
+                  </p>
                   <p className="text-xs text-muted-foreground mt-0.5">also replied</p>
                 </div>
+                {totalSentEmails > 0 && (
+                  <div>
+                    <p className="text-xl font-semibold text-muted-foreground">{totalSentEmails}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">emails sent</p>
+                  </div>
+                )}
               </div>
               {series.length > 0 && <MiniTrendChart series={series} />}
 
