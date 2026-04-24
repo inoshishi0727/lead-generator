@@ -360,14 +360,19 @@ export default function OutreachPage() {
             value={repliedCount}
           />
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 px-1">
           <span className="text-xs text-muted-foreground font-medium whitespace-nowrap">Drafts by type:</span>
-          <div className="grid grid-cols-4 gap-3 flex-1">
-            <StatCard icon={FileText} label="Initial Outreach" value={draftsByStep.initial} />
-            <StatCard icon={FileText} label="Follow-up 1" value={draftsByStep.followUp1} />
-            <StatCard icon={FileText} label="Follow-up 2" value={draftsByStep.followUp2} />
-            <StatCard icon={FileText} label="Follow-up 3+" value={draftsByStep.followUp3Plus} />
-          </div>
+          {[
+            { label: "Initial", value: draftsByStep.initial },
+            { label: "Follow-up 1", value: draftsByStep.followUp1 },
+            { label: "Follow-up 2", value: draftsByStep.followUp2 },
+            { label: "Follow-up 3+", value: draftsByStep.followUp3Plus },
+          ].map(({ label, value }) => (
+            <div key={label} className="flex items-center gap-1.5 rounded-md border border-border/50 bg-muted/40 px-2.5 py-1">
+              <span className="text-xs text-muted-foreground">{label}</span>
+              <span className="text-sm font-semibold tabular-nums">{value}</span>
+            </div>
+          ))}
         </div>
       </div>
 
