@@ -10,16 +10,14 @@ async function getAllUsers(): Promise<any[]> {
   return snap.docs.map((d) => ({ ...d.data(), uid: d.id }));
 }
 
-// Fetch only sent emails — much smaller than full collection scan
+// Fetch only sent emails — filter channel client-side (old docs may lack the field)
 async function getAllSentEmails(): Promise<any[]> {
   const snap = await getDocs(
-    query(
-      collection(db, "outreach_messages"),
-      where("status", "==", "sent"),
-      where("channel", "==", "email")
-    )
+    query(collection(db, "outreach_messages"), where("status", "==", "sent"))
   );
-  return snap.docs.map((d) => d.data());
+  return snap.docs
+    .map((d) => d.data())
+    .filter((d) => (d.channel || "email") === "email");
 }
 
 export async function getTeamMetrics(): Promise<MemberMetrics[]> {
