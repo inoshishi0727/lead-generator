@@ -30,6 +30,7 @@ import { getOutreachMessages } from "@/lib/firestore-api";
 import { EditReflectionBanner } from "@/components/edit-reflection-banner";
 import { ThreadCard } from "@/components/thread-card";
 import { toast } from "sonner";
+import { useReplyNotifications } from "@/hooks/use-notifications";
 
 const STATUS_FILTERS = ["draft", "approved", "scheduled", "sent", "conversations", "rejected", "follow-ups", "clients", "all"] as const;
 
@@ -98,6 +99,24 @@ export default function OutreachPage() {
 
   const messages = (statusFilter === "follow-ups" || statusFilter === "clients" || statusFilter === "scheduled") ? (clientSideMessages ?? []) : (apiMessages ?? []);
   const isLoading = (statusFilter === "follow-ups" || statusFilter === "clients" || statusFilter === "scheduled") ? clientSideLoading : apiLoading;
+
+  const { replies: inboundReplies, lastReadAt } = useReplyNotifications();
+
+  // Count unread replies per lead (for per-thread badges)
+  const unreadByLead = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const r of inboundReplies) {
+      if (lastReadAt && r.created_at <= lastReadAt) continue;
+      if (!r.lead_id) continue;
+      map.set(r.lead_id, (map.get(r.lead_id) ?? 0) + 1);
+    }
+    return map;
+  }, [inboundReplies, lastReadAt]);
+
+  const unreadConversations = useMemo(
+    () => [...unreadByLead.values()].filter((c) => c > 0).length,
+    [unreadByLead]
+  );
 
   const generateMutation = useGenerateDrafts();
   const regenerateAllMutation = useRegenerateAll();
@@ -384,13 +403,18 @@ export default function OutreachPage() {
               <button
                 key={s}
                 onClick={() => { setStatusFilter(s); setSearchQuery(""); }}
-                className={`rounded-md px-3 py-1.5 text-sm font-medium capitalize transition-colors ${
+                className={`relative rounded-md px-3 py-1.5 text-sm font-medium capitalize transition-colors ${
                   statusFilter === s
                     ? "bg-primary text-primary-foreground shadow-sm"
                     : "text-muted-foreground hover:text-foreground hover:bg-muted-foreground/10"
                 }`}
               >
                 {s}
+                {s === "conversations" && unreadConversations > 0 && (
+                  <span className="absolute -top-1 -right-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-red-500 text-[8px] font-bold text-white leading-none">
+                    {unreadConversations > 9 ? "9+" : unreadConversations}
+                  </span>
+                )}
               </button>
             ))}
           </div>
@@ -516,6 +540,7 @@ export default function OutreachPage() {
                   leadId={leadId}
                   businessName={businessName}
                   messages={msgs}
+                  unreadReplies={unreadByLead.get(leadId) ?? 0}
                 />
               ));
             })()}

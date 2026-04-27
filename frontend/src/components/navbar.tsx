@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
-import { BarChart3, Building2, Mail, Megaphone, Search, Settings, TrendingUp, LogOut, User, HelpCircle, Bell, Reply } from "lucide-react";
+import { BarChart3, Building2, Mail, Megaphone, Search, Settings, TrendingUp, LogOut, User, HelpCircle, Bell } from "lucide-react";
 import { useTour } from "@/components/tour-provider";
 import { DarkModeToggle } from "@/components/dark-mode-toggle";
 import { useAuth } from "@/lib/auth-context";
@@ -22,8 +22,9 @@ function timeAgo(iso: string) {
   return `${Math.floor(hrs / 24)}d ago`;
 }
 
-function NotificationDropdown({ replies, onClose, onMarkRead }: {
+function NotificationDropdown({ replies, lastReadAt, onClose, onMarkRead }: {
   replies: ReplyNotification[];
+  lastReadAt: string;
   onClose: () => void;
   onMarkRead: () => void;
 }) {
@@ -43,23 +44,32 @@ function NotificationDropdown({ replies, onClose, onMarkRead }: {
         {replies.length === 0 ? (
           <p className="px-3 py-4 text-xs text-muted-foreground text-center">No replies yet</p>
         ) : (
-          replies.map((r) => (
-            <button
-              key={r.id}
-              onClick={() => { onClose(); router.push("/outreach"); }}
-              className="w-full text-left px-3 py-2.5 hover:bg-muted/30 transition-colors"
-            >
-              <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0 flex-1">
-                  <p className="text-xs font-medium truncate">
-                    {r.business_name || r.from_name || r.from_email}
-                  </p>
-                  <p className="text-[10px] text-muted-foreground truncate">{r.from_email}</p>
+          replies.map((r) => {
+            const isUnread = !lastReadAt || r.created_at > lastReadAt;
+            return (
+              <button
+                key={r.id}
+                onClick={() => { onClose(); router.push("/outreach"); }}
+                className={cn(
+                  "w-full text-left px-3 py-2.5 hover:bg-muted/30 transition-colors",
+                  isUnread && "bg-primary/5 border-l-2 border-l-primary"
+                )}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-1.5">
+                      {isUnread && <span className="h-1.5 w-1.5 rounded-full bg-primary shrink-0" />}
+                      <p className={cn("text-xs truncate", isUnread ? "font-semibold" : "font-medium")}>
+                        {r.business_name || r.from_name || r.from_email}
+                      </p>
+                    </div>
+                    <p className="text-[10px] text-muted-foreground truncate pl-3">{r.from_email}</p>
+                  </div>
+                  <span className="text-[10px] text-muted-foreground shrink-0">{timeAgo(r.created_at)}</span>
                 </div>
-                <span className="text-[10px] text-muted-foreground shrink-0">{timeAgo(r.created_at)}</span>
-              </div>
-            </button>
-          ))
+              </button>
+            );
+          })
         )}
       </div>
       {replies.length > 0 && (
@@ -78,10 +88,9 @@ function NotificationDropdown({ replies, onClose, onMarkRead }: {
 
 export function Navbar() {
   const pathname = usePathname();
-  const router = useRouter();
-  const { displayName, role, signOut, isAdmin } = useAuth();
+  const { displayName, role, signOut } = useAuth();
   const { start: startTour } = useTour();
-  const { unreadCount, replies, markAllRead } = useReplyNotifications();
+  const { unreadCount, replies, lastReadAt, markAllRead } = useReplyNotifications();
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const bellRef = useRef<HTMLDivElement>(null);
 
@@ -155,6 +164,7 @@ export function Navbar() {
             {dropdownOpen && (
               <NotificationDropdown
                 replies={replies}
+                lastReadAt={lastReadAt}
                 onClose={() => setDropdownOpen(false)}
                 onMarkRead={() => { markAllRead(); setDropdownOpen(false); }}
               />

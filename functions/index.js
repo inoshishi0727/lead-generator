@@ -1272,6 +1272,7 @@ export const sendApproved = functions
 
     const userSnap = await db.collection("users").doc(context.auth.uid).get();
     const senderRole = userSnap.exists ? userSnap.data().role : "viewer";
+    const senderName = userSnap.exists ? (userSnap.data().display_name || userSnap.data().email || context.auth.uid) : context.auth.uid;
     if (!["admin", "member"].includes(senderRole)) {
       throw new HttpsError("permission-denied", "Admin or member only.");
     }
@@ -1427,6 +1428,8 @@ export const sendApproved = functions
           reply_to_address: replyToAddress,
           email_message_id: resendData?.id ?? null,
           assigned_to_name: lead.assigned_to_name || msg.assigned_to_name || null,
+          sent_by: context.auth.uid,
+          sent_by_name: senderName,
         });
 
         // Set the correct stage based on step number
