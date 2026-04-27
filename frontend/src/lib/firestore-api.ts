@@ -16,7 +16,7 @@ import {
   deleteDoc,
   onSnapshot,
 } from "firebase/firestore";
-import { db } from "./firebase";
+import { db, auth } from "./firebase";
 import type { Lead, LeadDetail, LinkedInEmployee, OutreachMessage, InboundReply, EditFeedback, ReflectionCategory, Campaign } from "./types";
 
 // --- Leads ---
@@ -362,6 +362,11 @@ export async function updateOutreachMessage(
 
   // Strip lead_id (not a message field) but keep rejection_reason on the message doc
   const { lead_id: _leadId, ...messageUpdates } = updates;
+  if (updates.status === "approved") {
+    const user = auth.currentUser;
+    (messageUpdates as Record<string, unknown>).approved_by = user?.uid ?? null;
+    (messageUpdates as Record<string, unknown>).approved_at = new Date().toISOString();
+  }
   await updateDoc(ref, messageUpdates as Record<string, unknown>);
 }
 
