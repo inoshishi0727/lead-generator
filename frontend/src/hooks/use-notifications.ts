@@ -18,11 +18,13 @@ function setLastReadAt(iso: string) {
 
 export interface NotificationState {
   unreadCount: number;
+  replies: ReplyNotification[];
   markAllRead: () => void;
 }
 
 export function useReplyNotifications(): NotificationState {
   const [unreadCount, setUnreadCount] = useState(0);
+  const [replies, setReplies] = useState<ReplyNotification[]>([]);
   const initialised = useRef(false);
   const knownIds = useRef<Set<string>>(new Set());
 
@@ -34,6 +36,8 @@ export function useReplyNotifications(): NotificationState {
   useEffect(() => {
     const unsub = watchRecentReplies((replies) => {
       const lastReadAt = getLastReadAt();
+
+      setReplies(replies);
 
       if (!initialised.current) {
         // First snapshot — baseline, no toasts
@@ -72,5 +76,5 @@ export function useReplyNotifications(): NotificationState {
     return unsub;
   }, []);
 
-  return { unreadCount, markAllRead };
+  return { unreadCount, replies, markAllRead };
 }
