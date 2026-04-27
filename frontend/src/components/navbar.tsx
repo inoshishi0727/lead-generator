@@ -2,20 +2,98 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
-import { BarChart3, Building2, Mail, Megaphone, Search, Settings, TrendingUp, LogOut, User, HelpCircle, Bell } from "lucide-react";
+import { BarChart3, Building2, Mail, Megaphone, Search, Settings, TrendingUp, LogOut, User, HelpCircle, Bell, Reply } from "lucide-react";
 import { useTour } from "@/components/tour-provider";
 import { DarkModeToggle } from "@/components/dark-mode-toggle";
 import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
 import { useReplyNotifications } from "@/hooks/use-notifications";
+import type { ReplyNotification } from "@/lib/firestore-api";
+
+function timeAgo(iso: string) {
+  if (!iso) return "";
+  const diff = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.floor(hrs / 24)}d ago`;
+}
+
+function NotificationDropdown({ replies, onClose, onMarkRead }: {
+  replies: ReplyNotification[];
+  onClose: () => void;
+  onMarkRead: () => void;
+}) {
+  const router = useRouter();
+  return (
+    <div className="absolute right-0 top-full mt-2 w-80 rounded-lg border border-border/50 bg-card shadow-2xl z-50 overflow-hidden">
+      <div className="flex items-center justify-between px-3 py-2 border-b border-border/40">
+        <span className="text-xs font-semibold">Recent Replies</span>
+        <button
+          onClick={onMarkRead}
+          className="text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+        >
+          Mark all read
+        </button>
+      </div>
+      <div className="max-h-72 overflow-y-auto divide-y divide-border/30">
+        {replies.length === 0 ? (
+          <p className="px-3 py-4 text-xs text-muted-foreground text-center">No replies yet</p>
+        ) : (
+          replies.map((r) => (
+            <button
+              key={r.id}
+              onClick={() => { onClose(); router.push("/outreach"); }}
+              className="w-full text-left px-3 py-2.5 hover:bg-muted/30 transition-colors"
+            >
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs font-medium truncate">
+                    {r.business_name || r.from_name || r.from_email}
+                  </p>
+                  <p className="text-[10px] text-muted-foreground truncate">{r.from_email}</p>
+                </div>
+                <span className="text-[10px] text-muted-foreground shrink-0">{timeAgo(r.created_at)}</span>
+              </div>
+            </button>
+          ))
+        )}
+      </div>
+      {replies.length > 0 && (
+        <div className="border-t border-border/40 px-3 py-2">
+          <button
+            onClick={() => { onClose(); router.push("/outreach"); }}
+            className="text-[10px] text-primary hover:underline"
+          >
+            View all in Conversations →
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function Navbar() {
   const pathname = usePathname();
   const router = useRouter();
   const { displayName, role, signOut, isAdmin } = useAuth();
   const { start: startTour } = useTour();
-  const { unreadCount, markAllRead } = useReplyNotifications();
+  const { unreadCount, replies, markAllRead } = useReplyNotifications();
+  const [dropdownOpen, setDropdownOpen] = useState(false);
+  const bellRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (bellRef.current && !bellRef.current.contains(e.target as Node)) {
+        setDropdownOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
 
   const links = [
     { href: "/", label: "Dashboard", icon: BarChart3, show: true },
@@ -61,21 +139,27 @@ export function Navbar() {
             )}
           </div>
           {/* Reply notifications bell */}
-          <button
-            onClick={() => {
-              markAllRead();
-              router.push("/outreach");
-            }}
-            className="relative text-muted-foreground hover:text-foreground transition-colors"
-            title="Reply notifications"
-          >
-            <Bell className="h-3.5 w-3.5" />
-            {unreadCount > 0 && (
-              <span className="absolute -top-1.5 -right-1.5 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-red-500 text-[8px] font-bold text-white leading-none">
-                {unreadCount > 9 ? "9+" : unreadCount}
-              </span>
+          <div ref={bellRef} className="relative">
+            <button
+              onClick={() => setDropdownOpen((o) => !o)}
+              className="relative text-muted-foreground hover:text-foreground transition-colors"
+              title="Reply notifications"
+            >
+              <Bell className="h-3.5 w-3.5" />
+              {unreadCount > 0 && (
+                <span className="absolute -top-1.5 -right-1.5 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-red-500 text-[8px] font-bold text-white leading-none">
+                  {unreadCount > 9 ? "9+" : unreadCount}
+                </span>
+              )}
+            </button>
+            {dropdownOpen && (
+              <NotificationDropdown
+                replies={replies}
+                onClose={() => setDropdownOpen(false)}
+                onMarkRead={() => { markAllRead(); setDropdownOpen(false); }}
+              />
             )}
-          </button>
+          </div>
           <Link
             href="/help"
             data-tour="help-button"
