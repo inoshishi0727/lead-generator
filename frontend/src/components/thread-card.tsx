@@ -19,6 +19,7 @@ interface Props {
   leadId: string;
   businessName: string;
   messages: OutreachMessage[];
+  unreadReplies?: number;
 }
 
 function timeAgo(dateStr: string): string {
@@ -32,7 +33,7 @@ function timeAgo(dateStr: string): string {
   return new Date(dateStr).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
 }
 
-export function ThreadCard({ leadId, businessName, messages }: Props) {
+export function ThreadCard({ leadId, businessName, messages, unreadReplies = 0 }: Props) {
   const [expanded, setExpanded] = useState(false);
 
   // Sort messages by step_number, then created_at
@@ -72,6 +73,11 @@ export function ThreadCard({ leadId, businessName, messages }: Props) {
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
               <span className="font-semibold text-sm truncate">{businessName}</span>
+              {unreadReplies > 0 && (
+                <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[9px] font-bold text-white leading-none shrink-0">
+                  {unreadReplies > 9 ? "9+" : unreadReplies}
+                </span>
+              )}
               {venueCategory && (
                 <Badge variant="secondary" className="text-[10px] capitalize shrink-0">
                   {venueCategory.replace(/_/g, " ")}

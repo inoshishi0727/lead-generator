@@ -97,13 +97,11 @@ export async function getTeamMembers(
 ): Promise<
   { uid: string; email: string; display_name: string; role: string }[]
 > {
-  if (!workspaceId) return [];
+  // Try workspace filter first; fall back to all users if workspaceId is missing
+  const snap = workspaceId
+    ? await getDocs(query(collection(db, "users"), where("workspace_id", "==", workspaceId)))
+    : await getDocs(collection(db, "users"));
 
-  const q = query(
-    collection(db, "users"),
-    where("workspace_id", "==", workspaceId)
-  );
-  const snap = await getDocs(q);
   return snap.docs.map((d) => {
     const data = d.data();
     return {

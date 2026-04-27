@@ -19,17 +19,21 @@ function setLastReadAt(iso: string) {
 export interface NotificationState {
   unreadCount: number;
   replies: ReplyNotification[];
+  lastReadAt: string;
   markAllRead: () => void;
 }
 
 export function useReplyNotifications(): NotificationState {
   const [unreadCount, setUnreadCount] = useState(0);
   const [replies, setReplies] = useState<ReplyNotification[]>([]);
+  const [lastReadAt, setLastReadAtState] = useState<string>(() => getLastReadAt());
   const initialised = useRef(false);
   const knownIds = useRef<Set<string>>(new Set());
 
   const markAllRead = useCallback(() => {
-    setLastReadAt(new Date().toISOString());
+    const now = new Date().toISOString();
+    setLastReadAt(now);
+    setLastReadAtState(now);
     setUnreadCount(0);
   }, []);
 
@@ -76,5 +80,5 @@ export function useReplyNotifications(): NotificationState {
     return unsub;
   }, []);
 
-  return { unreadCount, replies, markAllRead };
+  return { unreadCount, replies, lastReadAt, markAllRead };
 }
