@@ -24,22 +24,33 @@ export async function getTeamMetrics(): Promise<MemberMetrics[]> {
   try {
     const [users, allSentEmails] = await Promise.all([getAllUsers(), getAllSentEmails()]);
 
-    // Group sent emails by assigned_to (null → "unassigned")
+    // Fetch all leads to build lead_id → assigned_to lookup
+    // (messages sent before assignment have no assigned_to, so we fall back to lead's current value)
+    const allLeadsSnap = await getDocs(collection(db, "leads"));
+    const leadAssignedTo = new Map<string, string>();
+    const leadsByUid = new Map<string, any[]>();
+    allLeadsSnap.docs.forEach((d) => {
+      const data = d.data();
+      const docId = d.id;
+      if (data.assigned_to) {
+        leadAssignedTo.set(docId, data.assigned_to);
+        if (!leadsByUid.has(data.assigned_to)) leadsByUid.set(data.assigned_to, []);
+        leadsByUid.get(data.assigned_to)!.push(data);
+      }
+    });
+
+    // Group sent emails by assigned_to — message field takes priority, fall back to lead's
     const msgsByUser = new Map<string, any[]>();
     for (const msg of allSentEmails) {
-      const key = msg.assigned_to || "unassigned";
+      const key = msg.assigned_to || leadAssignedTo.get(msg.lead_id) || "unassigned";
       if (!msgsByUser.has(key)) msgsByUser.set(key, []);
       msgsByUser.get(key)!.push(msg);
     }
 
-    // Per-user lead queries in parallel
-    const metricsArr = await Promise.all(
-      users.map(async (user) => {
+    // Per-user metrics — no extra Firestore queries needed
+    const metricsArr = users.map((user) => {
         const uid = user.uid || "";
-        const leadsSnap = await getDocs(
-          query(collection(db, "leads"), where("assigned_to", "==", uid))
-        );
-        const userLeads = leadsSnap.docs.map((d) => d.data());
+        const userLeads = leadsByUid.get(uid) ?? [];
         const userMessages = msgsByUser.get(uid) ?? [];
 
         let emailsOpened = 0;
@@ -70,8 +81,7 @@ export async function getTeamMetrics(): Promise<MemberMetrics[]> {
           leads_converted: userLeads.filter((l) => l.stage === "converted").length,
           leads_by_stage: stageMap,
         } as MemberMetrics;
-      })
-    );
+      });
 
     // Add unassigned bucket if any orphaned sent emails exist
     const unassignedMsgs = msgsByUser.get("unassigned") ?? [];
