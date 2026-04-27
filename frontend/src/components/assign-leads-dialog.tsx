@@ -24,7 +24,6 @@ export function AssignLeadsDialog({ leadIds, leads, onDone }: AssignLeadsDialogP
   const teamQuery = useQuery({
     queryKey: ["team", workspaceId],
     queryFn: () => getTeamMembers(workspaceId ?? ""),
-    enabled: !!workspaceId,
   });
 
   const members = (teamQuery.data ?? []).filter(
