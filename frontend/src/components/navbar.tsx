@@ -1,18 +1,21 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { BarChart3, Building2, Mail, Megaphone, Search, Settings, TrendingUp, LogOut, User, HelpCircle } from "lucide-react";
+import { BarChart3, Building2, Mail, Megaphone, Search, Settings, TrendingUp, LogOut, User, HelpCircle, Bell } from "lucide-react";
 import { useTour } from "@/components/tour-provider";
 import { DarkModeToggle } from "@/components/dark-mode-toggle";
 import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
+import { useReplyNotifications } from "@/hooks/use-notifications";
 
 export function Navbar() {
   const pathname = usePathname();
+  const router = useRouter();
   const { displayName, role, signOut, isAdmin } = useAuth();
   const { start: startTour } = useTour();
+  const { unreadCount, markAllRead } = useReplyNotifications();
 
   const links = [
     { href: "/", label: "Dashboard", icon: BarChart3, show: true },
@@ -57,6 +60,22 @@ export function Navbar() {
               </span>
             )}
           </div>
+          {/* Reply notifications bell */}
+          <button
+            onClick={() => {
+              markAllRead();
+              router.push("/outreach");
+            }}
+            className="relative text-muted-foreground hover:text-foreground transition-colors"
+            title="Reply notifications"
+          >
+            <Bell className="h-3.5 w-3.5" />
+            {unreadCount > 0 && (
+              <span className="absolute -top-1.5 -right-1.5 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-red-500 text-[8px] font-bold text-white leading-none">
+                {unreadCount > 9 ? "9+" : unreadCount}
+              </span>
+            )}
+          </button>
           <Link
             href="/help"
             data-tour="help-button"
