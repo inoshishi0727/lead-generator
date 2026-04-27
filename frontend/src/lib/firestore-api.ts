@@ -487,6 +487,40 @@ export async function deleteInboundReply(replyId: string): Promise<void> {
   await deleteDoc(ref);
 }
 
+export interface ReplyNotification {
+  id: string;
+  lead_id: string | null;
+  from_name: string | null;
+  from_email: string;
+  business_name: string | null;
+  created_at: string;
+  matched: boolean;
+}
+
+export function watchRecentReplies(
+  callback: (replies: ReplyNotification[]) => void,
+  limit = 30
+): () => void {
+  const ref = collection(db, "inbound_replies");
+  const q = query(ref, where("matched", "==", true), orderBy("created_at", "desc"), fbLimit(limit));
+  return onSnapshot(q, (snap) => {
+    callback(
+      snap.docs.map((d) => {
+        const data = d.data();
+        return {
+          id: d.id,
+          lead_id: data.lead_id ?? null,
+          from_name: data.from_name ?? null,
+          from_email: data.from_email ?? "",
+          business_name: data.business_name ?? data.from_name ?? null,
+          created_at: data.created_at ?? "",
+          matched: data.matched ?? false,
+        };
+      })
+    );
+  });
+}
+
 export async function deleteOutreachMessage(messageId: string): Promise<void> {
   const ref = doc(db, "outreach_messages", messageId);
   await deleteDoc(ref);
