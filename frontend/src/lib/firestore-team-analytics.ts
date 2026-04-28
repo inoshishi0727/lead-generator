@@ -93,6 +93,7 @@ export async function getTeamMetrics(): Promise<MemberMetrics[]> {
         if (msg.has_reply) repliesReceived++;
       }
       const emailsSent = unassignedMsgs.length;
+      const unassignedLeadIds = [...new Set(unassignedMsgs.map((m: any) => m.lead_id).filter(Boolean))] as string[];
       metricsArr.push({
         uid: "unassigned",
         display_name: "Unassigned",
@@ -106,6 +107,7 @@ export async function getTeamMetrics(): Promise<MemberMetrics[]> {
         reply_rate: emailsSent > 0 ? Math.round((repliesReceived / emailsSent) * 1000) / 10 : 0,
         leads_converted: 0,
         leads_by_stage: {},
+        lead_ids: unassignedLeadIds,
       });
     }
 

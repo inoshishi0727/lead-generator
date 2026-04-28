@@ -100,7 +100,7 @@ export default function OutreachPage() {
   const messages = (statusFilter === "follow-ups" || statusFilter === "clients" || statusFilter === "scheduled") ? (clientSideMessages ?? []) : (apiMessages ?? []);
   const isLoading = (statusFilter === "follow-ups" || statusFilter === "clients" || statusFilter === "scheduled") ? clientSideLoading : apiLoading;
 
-  const { replies: inboundReplies, lastReadAt } = useReplyNotifications();
+  const { replies: inboundReplies, lastReadAt, markLeadRead } = useReplyNotifications();
 
   // Count unread replies per lead (for per-thread badges)
   const unreadByLead = useMemo(() => {
@@ -541,6 +541,7 @@ export default function OutreachPage() {
                   businessName={businessName}
                   messages={msgs}
                   unreadReplies={unreadByLead.get(leadId) ?? 0}
+                  onOpen={() => markLeadRead(leadId)}
                 />
               ));
             })()}
