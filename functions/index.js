@@ -4271,8 +4271,9 @@ function buildDailyReportHtml(stats) {
           <td style="padding:8px;border-bottom:1px solid #e5e7eb;text-align:right;">${m.assignedLeads}</td>
           <td style="padding:8px;border-bottom:1px solid #e5e7eb;text-align:right;">${m.sentYesterday}</td>
           <td style="padding:8px;border-bottom:1px solid #e5e7eb;text-align:right;">${m.repliedYesterday}</td>
+          <td style="padding:8px;border-bottom:1px solid #e5e7eb;text-align:right;font-weight:${m.converted > 0 ? "600" : "normal"};color:${m.converted > 0 ? "#059669" : "inherit"};">${m.converted}</td>
         </tr>`).join("")
-    : `<tr><td colspan="4" style="padding:12px;text-align:center;color:#9ca3af;font-size:13px;">No activity recorded yesterday</td></tr>`;
+    : `<tr><td colspan="5" style="padding:12px;text-align:center;color:#9ca3af;font-size:13px;">No activity recorded yesterday</td></tr>`;
 
   const stageRows = stageBreakdown.map(s => `
     <tr>
@@ -4480,9 +4481,10 @@ function buildDailyReportHtml(stats) {
               <thead>
                 <tr>
                   <th>Member</th>
-                  <th style="text-align:right;">Assigned Leads</th>
+                  <th style="text-align:right;">Assigned</th>
                   <th style="text-align:right;">Sent</th>
                   <th style="text-align:right;">Replies</th>
+                  <th style="text-align:right;">Converted</th>
                 </tr>
               </thead>
               <tbody>
@@ -4680,11 +4682,18 @@ export const scheduledDailyReport = functions
         sentByUid.set(uid, (sentByUid.get(uid) || 0) + 1);
         if (m.has_reply) repliesByUid.set(uid, (repliesByUid.get(uid) || 0) + 1);
       });
+      const convertedByUid = new Map();
+      allLeads.forEach(l => {
+        if (l.stage === "converted" && l.assigned_to) {
+          convertedByUid.set(l.assigned_to, (convertedByUid.get(l.assigned_to) || 0) + 1);
+        }
+      });
       const memberBreakdown = adminUsers.map(u => ({
         name: u.display_name || u.email,
         assignedLeads: leadsByUid.get(u.uid) || 0,
         sentYesterday: sentByUid.get(u.uid) || 0,
         repliedYesterday: repliesByUid.get(u.uid) || 0,
+        converted: convertedByUid.get(u.uid) || 0,
       })).sort((a, b) => b.sentYesterday - a.sentYesterday);
 
       const date = yesterdayStart.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
