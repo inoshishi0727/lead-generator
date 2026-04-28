@@ -35,8 +35,11 @@ function escapeHtml(text: string): string {
 }
 
 function buildHtmlEmail(content: string): string {
-  const escaped = escapeHtml(content);
-  return `<div style="font-family: Arial, sans-serif; font-size: 14px; color: #333; line-height: 1.5;"><div style="white-space: pre-wrap;">${escaped}</div><br>${EMAIL_SIGNATURE_HTML}</div>`;
+  const paragraphs = escapeHtml(content)
+    .split(/\n{2,}/)
+    .map(para => `<p style="margin:0 0 12px 0;">${para.replace(/\n/g, "<br>")}</p>`)
+    .join("");
+  return `<div style="font-family: Arial, sans-serif; font-size: 14px; color: #333; line-height: 1.5;">${paragraphs}${EMAIL_SIGNATURE_HTML}</div>`;
 }
 
 function isOptimalWindow(): boolean {

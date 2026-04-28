@@ -1208,8 +1208,12 @@ function escapeHtml(text) {
 }
 
 function buildHtmlEmail(content) {
-  const escaped = escapeHtml(content);
-  return `<div style="font-family: Arial, sans-serif; font-size: 14px; color: #333; line-height: 1.5;"><div style="white-space: pre-wrap;">${escaped}</div><br>${EMAIL_SIGNATURE_HTML}</div>`;
+  // Convert plain-text content to HTML paragraphs — white-space:pre-wrap is ignored by Outlook
+  const paragraphs = escapeHtml(content)
+    .split(/\n{2,}/)
+    .map(para => `<p style="margin:0 0 12px 0;">${para.replace(/\n/g, "<br>")}</p>`)
+    .join("");
+  return `<div style="font-family: Arial, sans-serif; font-size: 14px; color: #333; line-height: 1.5;">${paragraphs}${EMAIL_SIGNATURE_HTML}</div>`;
 }
 
 // UK bank holidays (England & Wales) for 2026-2027.
