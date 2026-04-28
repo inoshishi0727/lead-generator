@@ -386,6 +386,7 @@ export interface MemberMetrics {
   reply_rate: number;
   leads_converted: number;
   leads_by_stage: Record<string, number>;
+  lead_ids?: string[];
 }
 
 export interface EmailPerformance7Day {
