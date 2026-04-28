@@ -4234,284 +4234,273 @@ function buildDailyReportHtml(stats) {
     approvedWaiting, activeInSequence, repliesYesterday,
     memberBreakdown,
     totalLeads, responseRate, conversionRate,
-    replyRate12wk, openRate12wk, totalSent12wk,
+    replyRate12wk, openRate12wk, deliveryRate12wk, totalSent12wk,
     stageBreakdown,
     categoryBreakdown,
     topSubjects,
     weeks,
   } = stats;
 
-  const fp = (n) => (isNaN(n) || !isFinite(n) ? "0%" : `${Math.round(n)}%`);
+  const formatPercent = (n) => (isNaN(n) || !isFinite(n) ? "0%" : `${Math.round(n)}%`);
+  const accent = "#3b82f6";
 
-  // Light mode palette — same layout as analytics tab
-  const C = {
-    outerBg:   "#f1f5f9",
-    cardBg:    "#ffffff",
-    statBg:    "#f8fafc",
-    border:    "#e2e8f0",
-    textPri:   "#0f172a",
-    textMuted: "#64748b",
-    textLabel: "#94a3b8",
-    barEmpty:  "#e2e8f0",
-    rowHover:  "#f8fafc",
-    // chart colors matching analytics exactly
-    green:     "#059669",
-    blue:      "#3b82f6",
-    indigo:    "#6366f1",
-    purple:    "#8b5cf6",
-    teal:      "#0891b2",
-    amber:     "#d97706",
-    red:       "#ef4444",
-    gray:      "#94a3b8",
-  };
-
-  // Section card wrapper
-  const cardWrap = (content) =>
-    `<table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:16px;">
-      <tr><td bgcolor="${C.cardBg}" style="border:1px solid ${C.border};border-radius:12px;padding:20px;">
-        ${content}
-      </td></tr>
-    </table>`;
-
-  const sectionTitle = (text) =>
-    `<div style="font-size:15px;font-weight:600;color:${C.textPri};margin-bottom:14px;">${text}</div>`;
-
-  // 4-col stat card row — matches analytics tab layout
-  const statCardRow = (cards) => {
-    const cell = c => c
-      ? `<td valign="top" bgcolor="${C.statBg}" style="border:1px solid ${C.border};border-radius:8px;padding:14px;width:22%;">
-          <div style="color:${C.textLabel};font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">${c.label}</div>
-          <div style="font-size:22px;font-weight:700;color:${c.valueColor || C.textPri};line-height:1.2;">${c.value}</div>
-          ${c.sub ? `<div style="font-size:11px;color:${C.textMuted};margin-top:3px;">${c.sub}</div>` : ""}
-        </td>`
-      : `<td style="width:22%;"></td>`;
-    const sp = `<td style="width:4%;"></td>`;
-    const cells = cards.map(cell);
-    return `<table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:10px;">
-      <tr>${cells[0]}${sp}${cells[1] || "<td></td>"}${sp}${cells[2] || "<td></td>"}${sp}${cells[3] || "<td></td>"}</tr>
-    </table>`;
-  };
-
-  // Outlook-safe horizontal bar row (funnel / category)
-  const barRow = (label, value, maxValue, barColor = C.blue) => {
-    const pct   = maxValue > 0 ? Math.max(2, Math.round((value / maxValue) * 100)) : 2;
-    const empty = 100 - pct;
-    return `<tr>
-      <td style="font-size:12px;color:${C.textMuted};padding:5px 12px 5px 0;width:140px;white-space:nowrap;">${label}</td>
-      <td style="padding:5px 0;">
-        <table width="100%" cellpadding="0" cellspacing="0"><tr>
-          <td bgcolor="${barColor}" width="${pct}%" style="height:18px;font-size:0;line-height:0;border-radius:4px 0 0 4px;">&nbsp;</td>
-          ${empty > 0 ? `<td bgcolor="${C.barEmpty}" width="${empty}%" style="height:18px;font-size:0;line-height:0;border-radius:0 4px 4px 0;">&nbsp;</td>` : ""}
-        </tr></table>
-      </td>
-      <td style="font-size:12px;font-weight:600;color:${C.textPri};padding:5px 0 5px 12px;text-align:right;width:44px;">${value}</td>
-    </tr>`;
-  };
-
-  // Mini reply-rate bar for subject line table
-  const miniBar = (pct, color = C.green) => {
-    const w = Math.max(1, Math.round(pct));
-    return `<table cellpadding="0" cellspacing="0" style="display:inline-table;vertical-align:middle;width:50px;margin-right:5px;"><tr>
-      <td bgcolor="${color}" width="${w}%" style="height:8px;font-size:0;line-height:0;border-radius:2px;">&nbsp;</td>
-      ${100 - w > 0 ? `<td bgcolor="${C.barEmpty}" width="${100 - w}%" style="height:8px;font-size:0;line-height:0;">&nbsp;</td>` : ""}
-    </tr></table>`;
-  };
-
-  // QuickChart line chart — light mode, matching analytics colors
-  const makeChartUrl = (labels, datasets, height = 220) => {
-    const cfg = {
-      type: "line",
-      data: {
-        labels,
-        datasets: datasets.map(d => ({
-          label: d.label, data: d.data,
-          borderColor: d.color, backgroundColor: d.fill,
-          borderWidth: 2, pointRadius: 3, pointBackgroundColor: d.color,
-          fill: true, tension: 0.4,
-        })),
+  // QuickChart line chart — light background, analytics tab colors
+  const weekLabels = (weeks || []).map(w => w.label);
+  const chartCfg = {
+    type: "line",
+    data: {
+      labels: weekLabels,
+      datasets: [
+        { label: "Sent",    data: (weeks || []).map(w => w.sent),    borderColor: "#059669", backgroundColor: "rgba(5,150,105,0.08)",  borderWidth: 2, pointRadius: 3, fill: true, tension: 0.4 },
+        { label: "Replied", data: (weeks || []).map(w => w.replied), borderColor: "#3b82f6", backgroundColor: "rgba(59,130,246,0.08)", borderWidth: 2, pointRadius: 3, fill: true, tension: 0.4 },
+        { label: "Opened",  data: (weeks || []).map(w => w.opened),  borderColor: "#6366f1", backgroundColor: "rgba(99,102,241,0.06)", borderWidth: 2, pointRadius: 3, fill: true, tension: 0.4 },
+      ],
+    },
+    options: {
+      plugins: { legend: { display: true, position: "top", labels: { boxWidth: 10, color: "#6b7280", font: { size: 11 } } } },
+      scales: {
+        y: { beginAtZero: true, ticks: { color: "#9ca3af", font: { size: 10 } }, grid: { color: "#f3f4f6" } },
+        x: { ticks: { color: "#9ca3af", font: { size: 10 } }, grid: { color: "#f9fafb" } },
       },
-      options: {
-        plugins: { legend: { display: true, position: "top", labels: { boxWidth: 10, color: "#64748b", font: { size: 11 } } } },
-        scales: {
-          y: { beginAtZero: true, ticks: { color: "#94a3b8", font: { size: 10 } }, grid: { color: "#f1f5f9" } },
-          x: { ticks: { color: "#94a3b8", font: { size: 10 } }, grid: { color: "#f8fafc" } },
-        },
-      },
-    };
-    return `https://quickchart.io/chart?c=${encodeURIComponent(JSON.stringify(cfg))}&width=540&height=${height}&backgroundColor=white`;
+    },
   };
+  const chartUrl = `https://quickchart.io/chart?c=${encodeURIComponent(JSON.stringify(chartCfg))}&width=560&height=220&backgroundColor=white`;
 
-  const weekLabels   = (weeks || []).map(w => w.label);
-  const engagementChartUrl = makeChartUrl(weekLabels, [
-    { label: "Sent",    data: (weeks || []).map(w => w.sent),    color: C.green,  fill: "rgba(5,150,105,0.08)"  },
-    { label: "Replied", data: (weeks || []).map(w => w.replied), color: C.blue,   fill: "rgba(59,130,246,0.08)" },
-    { label: "Opened",  data: (weeks || []).map(w => w.opened),  color: C.indigo, fill: "rgba(99,102,241,0.06)" },
-  ]);
-
-  // ── Stat card rows ──────────────────────────────────────────────────────────
-  const performanceCards = statCardRow([
-    { label: "Qualified Leads",    value: totalLeads,         sub: "with email address" },
-    { label: "Response Rate",      value: fp(responseRate),   sub: `${Math.round(totalLeads * (responseRate / 100))} replied`, valueColor: C.green },
-    { label: "Conversion Rate",    value: fp(conversionRate), sub: `${Math.round(totalLeads * (conversionRate / 100))} converted` },
-    { label: "Active in Sequence", value: activeInSequence,   sub: "sent / follow-up" },
-  ]);
-
-  const engagement12wkCards = statCardRow([
-    { label: "Reply Rate (12wk)",    value: fp(replyRate12wk),  valueColor: C.green },
-    { label: "Open Rate (12wk)",     value: fp(openRate12wk) },
-    { label: "Delivery Rate (12wk)", value: "100%" },
-    { label: "Total Sent (12wk)",    value: totalSent12wk },
-  ]);
-
-  const yesterdayCards = statCardRow([
-    { label: "Sent Yesterday",    value: sentYesterday,            sub: `${openedYesterday} opened · ${fp(openRateYesterday)} open rate` },
-    { label: "Replies Yesterday", value: repliedYesterday,         sub: `${fp(replyRateYesterday)} reply rate`, valueColor: C.green },
-    { label: "New Leads",         value: newLeadsYesterday,        sub: "scraped yesterday" },
-    { label: "Drafts Generated",  value: draftsGeneratedYesterday, sub: "created yesterday" },
-  ]);
-
-  // ── Funnel ──────────────────────────────────────────────────────────────────
-  const maxStageCount = Math.max(...(stageBreakdown || []).map(s => s.count), 1);
-  const funnelRows    = (stageBreakdown || []).map(s => barRow(s.label, s.count, maxStageCount, s.color)).join("");
-
-  // ── Categories ──────────────────────────────────────────────────────────────
-  const top5cats   = (categoryBreakdown || []).slice(0, 5);
-  const maxCatSent = Math.max(...top5cats.map(c => c.sent), 1);
-  const categoryBarRows = top5cats.map(c => {
-    const pct   = maxCatSent > 0 ? Math.max(2, Math.round((c.sent / maxCatSent) * 100)) : 2;
-    const empty = 100 - pct;
-    const rColor = c.replyRate >= 10 ? C.green : c.replyRate > 0 ? C.amber : C.gray;
-    return `<tr>
-      <td style="font-size:12px;color:${C.textMuted};padding:5px 12px 5px 0;width:140px;text-transform:capitalize;white-space:nowrap;">${(c.category || "unknown").replace(/_/g, " ")}</td>
-      <td style="padding:5px 0;">
-        <table width="100%" cellpadding="0" cellspacing="0"><tr>
-          <td bgcolor="${C.indigo}" width="${pct}%" style="height:18px;font-size:0;line-height:0;border-radius:4px 0 0 4px;">&nbsp;</td>
-          ${empty > 0 ? `<td bgcolor="${C.barEmpty}" width="${empty}%" style="height:18px;font-size:0;line-height:0;border-radius:0 4px 4px 0;">&nbsp;</td>` : ""}
-        </tr></table>
-      </td>
-      <td style="font-size:12px;font-weight:600;color:${C.textPri};padding:5px 0 5px 12px;text-align:right;width:36px;">${c.sent}</td>
-      <td style="font-size:12px;padding:5px 0 5px 6px;width:52px;text-align:right;color:${rColor};font-weight:${c.replyRate > 0 ? "600" : "normal"};">${fp(c.replyRate)}</td>
-    </tr>`;
-  }).join("");
-
-  // ── Subject lines ───────────────────────────────────────────────────────────
-  const subjectTableRows = (topSubjects || []).map(s => `<tr>
-    <td style="padding:8px;border-bottom:1px solid ${C.border};font-size:12px;color:${C.textPri};">${s.subject}</td>
-    <td style="padding:8px;border-bottom:1px solid ${C.border};text-align:right;font-size:12px;color:${C.textMuted};width:38px;">${s.sent}</td>
-    <td style="padding:8px;border-bottom:1px solid ${C.border};text-align:right;font-size:12px;color:${C.textMuted};width:48px;">${fp(s.openRate)}</td>
-    <td style="padding:8px;border-bottom:1px solid ${C.border};white-space:nowrap;width:95px;">
-      ${miniBar(s.replyRate)}<span style="font-size:12px;font-weight:${s.replyRate > 0 ? "600" : "normal"};color:${s.replyRate > 0 ? C.green : C.gray};">${fp(s.replyRate)}</span>
-    </td>
-  </tr>`).join("");
-
-  // ── Team ────────────────────────────────────────────────────────────────────
-  const memberTableRows = memberBreakdown.length > 0
-    ? memberBreakdown.map(m => `<tr>
-        <td style="padding:8px;border-bottom:1px solid ${C.border};font-size:13px;color:${C.textPri};">${m.name}</td>
-        <td style="padding:8px;border-bottom:1px solid ${C.border};text-align:right;font-size:13px;color:${C.textMuted};">${m.assignedLeads}</td>
-        <td style="padding:8px;border-bottom:1px solid ${C.border};text-align:right;font-size:13px;font-weight:${m.sentYesterday > 0 ? "600" : "normal"};color:${C.textPri};">${m.sentYesterday}</td>
-        <td style="padding:8px;border-bottom:1px solid ${C.border};text-align:right;font-size:13px;color:${m.repliedYesterday > 0 ? C.green : C.gray};">${m.repliedYesterday}</td>
-      </tr>`).join("")
-    : `<tr><td colspan="4" style="padding:12px;text-align:center;color:${C.gray};font-size:13px;">No activity recorded yesterday</td></tr>`;
-
-  const thStyle = `padding:8px;text-align:right;font-size:11px;font-weight:600;color:${C.textLabel};border-bottom:1px solid ${C.border};text-transform:uppercase;letter-spacing:0.3px;`;
-
-  return `<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>Daily Report</title></head>
-<body style="margin:0;padding:0;background:${C.outerBg};font-family:Arial,sans-serif;color:${C.textPri};">
-<table width="100%" cellpadding="0" cellspacing="0" bgcolor="${C.outerBg}" style="padding:24px 0;">
-<tr><td align="center">
-<table width="620" cellpadding="0" cellspacing="0" bgcolor="${C.cardBg}" style="border-radius:12px;border:1px solid ${C.border};">
-
-  <!-- Header -->
-  <tr><td bgcolor="#1e3a5f" style="padding:28px 24px;text-align:center;border-radius:11px 11px 0 0;">
-    <div style="font-size:11px;font-weight:600;letter-spacing:2px;text-transform:uppercase;color:#93c5fd;margin-bottom:6px;">ASTERLEY BROS</div>
-    <div style="font-size:22px;font-weight:700;color:#ffffff;margin-bottom:4px;">Daily Report</div>
-    <div style="font-size:13px;color:#93c5fd;">${date}</div>
-  </td></tr>
-
-  <tr><td bgcolor="${C.cardBg}" style="padding:24px;">
-
-    <!-- Analytics stat cards — 2 rows of 4 matching the analytics tab -->
-    ${cardWrap(sectionTitle("Analytics") + performanceCards + engagement12wkCards)}
-
-    <!-- Action Required -->
-    ${(approvedWaiting > 0 || repliesYesterday > 0) ? `
-    <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:16px;">
-    <tr><td bgcolor="#fffbeb" style="padding:16px;border-radius:8px;border:1px solid #fde68a;">
-      <div style="font-size:14px;font-weight:600;color:#92400e;margin-bottom:8px;">⚠️ Action Required</div>
-      ${approvedWaiting > 0 ? `<div style="font-size:13px;color:#78350f;margin-bottom:5px;">📤 <strong>${approvedWaiting}</strong> approved email${approvedWaiting !== 1 ? "s" : ""} queued and ready to send</div>` : ""}
-      ${repliesYesterday > 0 ? `<div style="font-size:13px;color:#78350f;margin-bottom:5px;">💬 <strong>${repliesYesterday}</strong> repl${repliesYesterday !== 1 ? "ies" : "y"} received yesterday — check Conversations</div>` : ""}
-      <div style="margin-top:10px;"><a href="https://asterleyleadgen.netlify.app/outreach" style="color:#b45309;font-weight:600;font-size:13px;text-decoration:none;">Go to Outreach →</a></div>
-    </td></tr></table>` : ""}
-
-    <!-- Yesterday at a Glance -->
-    ${cardWrap(sectionTitle("Yesterday at a Glance") + yesterdayCards)}
-
-    <!-- Email Engagement line chart -->
-    ${cardWrap(sectionTitle("Email Engagement (12wk)") +
-      `<img src="${engagementChartUrl}" width="540" alt="12-week engagement trend" style="display:block;max-width:100%;border-radius:6px;border:1px solid ${C.border};" />`
-    )}
-
-    <!-- Pipeline Funnel -->
-    ${cardWrap(sectionTitle("Pipeline Funnel") +
-      `<table width="100%" cellpadding="0" cellspacing="0">${funnelRows}
-        <tr><td colspan="3" style="padding-top:10px;font-size:12px;color:${C.textMuted};border-top:1px solid ${C.border};">
-          Total qualified leads: <strong style="color:${C.textPri};">${totalLeads}</strong>
-        </td></tr>
-      </table>`
-    )}
-
-    <!-- Top Categories -->
-    ${categoryBarRows ? cardWrap(sectionTitle("Top Categories") +
-      `<table width="100%" cellpadding="0" cellspacing="0">
+  const memberRows = memberBreakdown.length > 0
+    ? memberBreakdown.map(m => `
         <tr>
-          <td style="font-size:10px;font-weight:600;color:${C.textLabel};padding:0 12px 8px 0;width:140px;text-transform:uppercase;letter-spacing:0.4px;">Category</td>
-          <td></td>
-          <td style="font-size:10px;font-weight:600;color:${C.textLabel};padding:0 0 8px 12px;text-align:right;width:36px;text-transform:uppercase;letter-spacing:0.4px;">Sent</td>
-          <td style="font-size:10px;font-weight:600;color:${C.textLabel};padding:0 0 8px 6px;text-align:right;width:52px;text-transform:uppercase;letter-spacing:0.4px;">Reply%</td>
-        </tr>
-        ${categoryBarRows}
-      </table>`) : ""}
+          <td style="padding:8px;border-bottom:1px solid #e5e7eb;">${m.name}</td>
+          <td style="padding:8px;border-bottom:1px solid #e5e7eb;text-align:right;">${m.assignedLeads}</td>
+          <td style="padding:8px;border-bottom:1px solid #e5e7eb;text-align:right;">${m.sentYesterday}</td>
+          <td style="padding:8px;border-bottom:1px solid #e5e7eb;text-align:right;">${m.repliedYesterday}</td>
+        </tr>`).join("")
+    : `<tr><td colspan="4" style="padding:12px;text-align:center;color:#9ca3af;font-size:13px;">No activity recorded yesterday</td></tr>`;
 
-    <!-- Top Subject Lines -->
-    ${subjectTableRows ? cardWrap(sectionTitle("Top Subject Lines") +
-      `<table width="100%" cellpadding="0" cellspacing="0" style="font-size:13px;">
-        <tr bgcolor="${C.statBg}">
-          <th style="padding:8px;text-align:left;font-size:11px;font-weight:600;color:${C.textLabel};border-bottom:1px solid ${C.border};text-transform:uppercase;letter-spacing:0.3px;">Subject</th>
-          <th style="${thStyle}width:38px;">Sent</th>
-          <th style="${thStyle}width:48px;">Open%</th>
-          <th style="padding:8px;font-size:11px;font-weight:600;color:${C.textLabel};border-bottom:1px solid ${C.border};text-transform:uppercase;letter-spacing:0.3px;width:95px;">Reply%</th>
-        </tr>
-        ${subjectTableRows}
-      </table>`) : ""}
+  const stageRows = stageBreakdown.map(s => `
+    <tr>
+      <td style="padding:8px;border-bottom:1px solid #e5e7eb;">${s.label}</td>
+      <td style="padding:8px;border-bottom:1px solid #e5e7eb;text-align:right;font-weight:600;">${s.count}</td>
+    </tr>`).join("");
 
-    <!-- Team Activity -->
-    ${cardWrap(sectionTitle("Team Activity (Yesterday)") +
-      `<table width="100%" cellpadding="0" cellspacing="0" style="font-size:13px;">
-        <tr bgcolor="${C.statBg}">
-          <th style="padding:8px;text-align:left;font-size:11px;font-weight:600;color:${C.textLabel};border-bottom:1px solid ${C.border};text-transform:uppercase;letter-spacing:0.3px;">Member</th>
-          <th style="${thStyle}">Assigned</th>
-          <th style="${thStyle}">Sent</th>
-          <th style="${thStyle}">Replies</th>
-        </tr>
-        ${memberTableRows}
-      </table>`
-    )}
+  const categoryRows = categoryBreakdown.slice(0, 5).map(c => `
+    <tr>
+      <td style="padding:8px;border-bottom:1px solid #e5e7eb;text-transform:capitalize;">${(c.category || "unknown").replace(/_/g, " ")}</td>
+      <td style="padding:8px;border-bottom:1px solid #e5e7eb;text-align:right;">${c.leads}</td>
+      <td style="padding:8px;border-bottom:1px solid #e5e7eb;text-align:right;">${c.sent}</td>
+      <td style="padding:8px;border-bottom:1px solid #e5e7eb;text-align:right;${c.replyRate > 0 ? "color:#059669;font-weight:600;" : ""}">${formatPercent(c.replyRate)}</td>
+    </tr>`).join("");
 
-    <!-- Footer -->
-    <table width="100%" cellpadding="0" cellspacing="0" style="margin-top:8px;">
-    <tr><td bgcolor="${C.statBg}" style="padding:16px;border-radius:8px;border:1px solid ${C.border};text-align:center;font-size:12px;color:${C.textMuted};">
-      <a href="https://asterleyleadgen.netlify.app/analytics" style="color:${C.blue};text-decoration:none;font-weight:600;">View Full Analytics</a>
-      &nbsp;·&nbsp;
-      <a href="https://asterleyleadgen.netlify.app/outreach" style="color:${C.blue};text-decoration:none;font-weight:600;">Outreach</a>
-      <div style="margin-top:6px;color:${C.gray};">Daily report — sent every weekday at 8am London time (admins only).</div>
-    </td></tr></table>
+  const subjectRows = topSubjects.map(s => `
+    <tr>
+      <td style="padding:8px;border-bottom:1px solid #e5e7eb;font-size:12px;">${s.subject}</td>
+      <td style="padding:8px;border-bottom:1px solid #e5e7eb;text-align:right;">${s.sent}</td>
+      <td style="padding:8px;border-bottom:1px solid #e5e7eb;text-align:right;">${formatPercent(s.openRate)}</td>
+      <td style="padding:8px;border-bottom:1px solid #e5e7eb;text-align:right;${s.replyRate > 0 ? "color:#059669;font-weight:600;" : ""}">${formatPercent(s.replyRate)}</td>
+    </tr>`).join("");
 
-  </td></tr>
-</table>
-</td></tr></table>
-</body></html>`;
+  return `
+    <html>
+      <head>
+        <style>
+          body{font-family:Arial,sans-serif;color:#333;line-height:1.6;margin:0;padding:0;}
+          .container{max-width:620px;margin:0 auto;padding:24px;}
+          .header{text-align:center;margin-bottom:28px;}
+          .header h1{color:#1f2937;margin:0 0 4px;font-size:22px;}
+          .header p{color:#6b7280;margin:0;font-size:13px;}
+          .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:24px;}
+          .card{background:#f3f4f6;border-left:4px solid ${accent};padding:14px;border-radius:4px;}
+          .card-label{color:#6b7280;font-size:11px;font-weight:600;text-transform:uppercase;margin-bottom:4px;}
+          .card-value{font-size:24px;font-weight:bold;color:#1f2937;}
+          .card-sub{font-size:12px;color:#6b7280;margin-top:2px;}
+          .section{margin-bottom:24px;}
+          .section-title{font-size:15px;font-weight:600;color:#1f2937;margin-bottom:10px;border-bottom:2px solid #e5e7eb;padding-bottom:6px;}
+          table{width:100%;border-collapse:collapse;font-size:13px;}
+          th{background:#f9fafb;padding:8px;text-align:left;font-weight:600;color:#374151;border-bottom:1px solid #e5e7eb;}
+          td{padding:8px;border-bottom:1px solid #e5e7eb;}
+          .action-box{background:#fef3c7;border:1px solid #fde68a;border-radius:6px;padding:16px;margin-bottom:24px;}
+          .action-title{font-size:14px;font-weight:600;color:#92400e;margin-bottom:8px;}
+          .action-item{font-size:13px;color:#78350f;margin-bottom:4px;}
+          .divider{border:none;border-top:1px solid #e5e7eb;margin:24px 0;}
+          .footer{background:#f3f4f6;padding:14px;border-radius:4px;text-align:center;font-size:12px;color:#6b7280;}
+          .footer a{color:${accent};text-decoration:none;}
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>Asterley Bros — Daily Report</h1>
+            <p>${date}</p>
+          </div>
+
+          <!-- Yesterday snapshot -->
+          <div class="grid2">
+            <div class="card">
+              <div class="card-label">Sent Yesterday</div>
+              <div class="card-value">${sentYesterday}</div>
+              <div class="card-sub">${openedYesterday} opened (${formatPercent(openRateYesterday)})</div>
+            </div>
+            <div class="card">
+              <div class="card-label">Replies Yesterday</div>
+              <div class="card-value">${repliedYesterday}</div>
+              <div class="card-sub">${formatPercent(replyRateYesterday)} reply rate</div>
+            </div>
+            <div class="card">
+              <div class="card-label">New Leads</div>
+              <div class="card-value">${newLeadsYesterday}</div>
+              <div class="card-sub">added yesterday</div>
+            </div>
+            <div class="card">
+              <div class="card-label">Drafts Generated</div>
+              <div class="card-value">${draftsGeneratedYesterday}</div>
+              <div class="card-sub">ready for review</div>
+            </div>
+          </div>
+
+          <!-- Action items -->
+          ${(approvedWaiting > 0 || repliesYesterday > 0) ? `
+          <div class="action-box">
+            <div class="action-title">Action Required</div>
+            ${approvedWaiting > 0 ? `<div class="action-item">📤 <strong>${approvedWaiting}</strong> approved email${approvedWaiting !== 1 ? "s" : ""} queued and ready to send</div>` : ""}
+            ${repliesYesterday > 0 ? `<div class="action-item">💬 <strong>${repliesYesterday}</strong> repl${repliesYesterday !== 1 ? "ies" : "y"} received yesterday — check Conversations</div>` : ""}
+            <div style="margin-top:10px;">
+              <a href="https://asterleyleadgen.netlify.app/outreach" style="color:#b45309;font-weight:600;font-size:13px;">Go to Outreach →</a>
+            </div>
+          </div>` : ""}
+
+          <hr class="divider" />
+
+          <!-- Overall headline stats -->
+          <div class="section">
+            <div class="section-title">Overall Performance</div>
+            <div class="grid2">
+              <div class="card" style="border-left-color:#8b5cf6;">
+                <div class="card-label">Qualified Leads</div>
+                <div class="card-value">${totalLeads}</div>
+              </div>
+              <div class="card" style="border-left-color:#059669;">
+                <div class="card-label">Response Rate</div>
+                <div class="card-value">${formatPercent(responseRate)}</div>
+              </div>
+              <div class="card" style="border-left-color:#f59e0b;">
+                <div class="card-label">Conversion Rate</div>
+                <div class="card-value">${formatPercent(conversionRate)}</div>
+              </div>
+              <div class="card" style="border-left-color:#3b82f6;">
+                <div class="card-label">Active in Sequence</div>
+                <div class="card-value">${activeInSequence}</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 12-week engagement -->
+          <div class="section">
+            <div class="section-title">12-Week Engagement</div>
+            <div class="grid2">
+              <div class="card" style="border-left-color:#059669;">
+                <div class="card-label">Reply Rate</div>
+                <div class="card-value" style="color:#059669;">${formatPercent(replyRate12wk)}</div>
+              </div>
+              <div class="card">
+                <div class="card-label">Open Rate</div>
+                <div class="card-value">${formatPercent(openRate12wk)}</div>
+              </div>
+              <div class="card">
+                <div class="card-label">Delivery Rate</div>
+                <div class="card-value">${formatPercent(deliveryRate12wk)}</div>
+              </div>
+              <div class="card">
+                <div class="card-label">Total Sent</div>
+                <div class="card-value">${totalSent12wk}</div>
+              </div>
+            </div>
+            <!-- 12-week trend line chart -->
+            ${weekLabels.length > 0 ? `<img src="${chartUrl}" width="572" alt="12-week send/reply/open trend" style="display:block;max-width:100%;margin-top:8px;border-radius:6px;border:1px solid #e5e7eb;" />` : ""}
+          </div>
+
+          <!-- Funnel / stage breakdown -->
+          <div class="section">
+            <div class="section-title">Funnel Pipeline</div>
+            <table>
+              <thead>
+                <tr>
+                  <th>Stage</th>
+                  <th style="text-align:right;">Count</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${stageRows}
+                <tr style="font-weight:600;background:#f0f4ff;">
+                  <td>Total Leads</td>
+                  <td style="text-align:right;">${totalLeads}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- Category breakdown -->
+          ${categoryRows ? `
+          <div class="section">
+            <div class="section-title">Top Categories</div>
+            <table>
+              <thead>
+                <tr>
+                  <th>Category</th>
+                  <th style="text-align:right;">Leads</th>
+                  <th style="text-align:right;">Sent</th>
+                  <th style="text-align:right;">Reply Rate</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${categoryRows}
+              </tbody>
+            </table>
+          </div>` : ""}
+
+          <!-- Subject line performance -->
+          ${subjectRows ? `
+          <div class="section">
+            <div class="section-title">Top Subject Lines</div>
+            <table>
+              <thead>
+                <tr>
+                  <th>Subject</th>
+                  <th style="text-align:right;">Sent</th>
+                  <th style="text-align:right;">Open %</th>
+                  <th style="text-align:right;">Reply %</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${subjectRows}
+              </tbody>
+            </table>
+          </div>` : ""}
+
+          <!-- Team breakdown -->
+          <div class="section">
+            <div class="section-title">Team Activity (Yesterday)</div>
+            <table>
+              <thead>
+                <tr>
+                  <th>Member</th>
+                  <th style="text-align:right;">Assigned Leads</th>
+                  <th style="text-align:right;">Sent</th>
+                  <th style="text-align:right;">Replies</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${memberRows}
+              </tbody>
+            </table>
+          </div>
+
+          <div class="footer">
+            <p><a href="https://asterleyleadgen.netlify.app/analytics">View Full Analytics</a> &nbsp;·&nbsp; <a href="https://asterleyleadgen.netlify.app/outreach">Outreach</a></p>
+            <p style="margin-top:8px;color:#9ca3af;">Daily report — sent every weekday at 8am London time (admins only).</p>
+          </div>
+        </div>
+      </body>
+    </html>
+  `;
 }
 
 /**
