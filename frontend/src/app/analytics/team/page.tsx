@@ -1,12 +1,17 @@
 "use client";
 
+import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/lib/auth-context";
 import { useTeamMetrics } from "@/hooks/use-analytics";
+import { useAssignLeads } from "@/hooks/use-assign-leads";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Mail, Eye, MessageCircle, Check, Users } from "lucide-react";
+import { Mail, Eye, MessageCircle, Check, Users, Loader2 } from "lucide-react";
+import { toast } from "sonner";
 
 function StatBox({
   label,
@@ -38,6 +43,9 @@ export default function TeamAnalyticsPage() {
   const { isAdmin, loading } = useAuth();
   const router = useRouter();
   const { data: metrics = [], isLoading } = useTeamMetrics();
+  const assignMutation = useAssignLeads();
+  const qc = useQueryClient();
+  const [assignTarget, setAssignTarget] = useState("");
 
   if (loading || isLoading) {
     return (
@@ -114,6 +122,43 @@ export default function TeamAnalyticsPage() {
                           </Badge>
                         ))}
                     </div>
+                  </div>
+                )}
+
+                {/* Bulk assign — only on Unassigned row */}
+                {member.uid === "unassigned" && (
+                  <div className="border-t border-border pt-3 flex items-center gap-3">
+                    <p className="text-xs text-muted-foreground flex-1">
+                      {member.lead_ids?.length ?? 0} leads unassigned
+                    </p>
+                    <select
+                      value={assignTarget}
+                      onChange={(e) => setAssignTarget(e.target.value)}
+                      className="rounded-md border border-input bg-background px-2 h-8 text-xs"
+                    >
+                      <option value="">Pick member...</option>
+                      {metrics.filter((m) => m.uid !== "unassigned").map((m) => (
+                        <option key={m.uid} value={m.uid}>{m.display_name}</option>
+                      ))}
+                    </select>
+                    <Button
+                      size="sm"
+                      disabled={!assignTarget || assignMutation.isPending || !member.lead_ids?.length}
+                      onClick={() =>
+                        assignMutation.mutate(
+                          { lead_ids: member.lead_ids!, assigned_to: assignTarget },
+                          {
+                            onSuccess: (data) => {
+                              qc.invalidateQueries({ queryKey: ["team-metrics"] });
+                              toast.success(`Assigned ${data.assigned} leads to ${data.assigned_to_name}`);
+                              setAssignTarget("");
+                            },
+                          }
+                        )
+                      }
+                    >
+                      {assignMutation.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : "Assign All"}
+                    </Button>
                   </div>
                 )}
               </CardContent>
