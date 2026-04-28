@@ -49,7 +49,7 @@ function NotificationDropdown({ replies, lastReadAt, onClose, onMarkRead }: {
             return (
               <button
                 key={r.id}
-                onClick={() => { onClose(); router.push("/outreach"); }}
+                onClick={() => { onClose(); router.push("/outreach?tab=conversations"); }}
                 className={cn(
                   "w-full text-left px-3 py-2.5 hover:bg-muted/30 transition-colors",
                   isUnread && "bg-primary/5 border-l-2 border-l-primary"
@@ -75,7 +75,7 @@ function NotificationDropdown({ replies, lastReadAt, onClose, onMarkRead }: {
       {replies.length > 0 && (
         <div className="border-t border-border/40 px-3 py-2">
           <button
-            onClick={() => { onClose(); router.push("/outreach"); }}
+            onClick={() => { onClose(); router.push("/outreach?tab=conversations"); }}
             className="text-[10px] text-primary hover:underline"
           >
             View all in Conversations →
