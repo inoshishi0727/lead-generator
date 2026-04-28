@@ -3952,24 +3952,22 @@ function buildAnalyticsSummaryHtml(stats) {
     <html>
       <head>
         <style>
-          body { font-family: Arial, sans-serif; color: #333; line-height: 1.6; }
+          body { font-family: Arial, sans-serif; color: #111; line-height: 1.6; background: #fff; }
           .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-          .header { text-align: center; margin-bottom: 30px; }
-          .header h1 { color: #1f2937; margin: 0 0 5px 0; font-size: 24px; }
-          .header p { color: #6b7280; margin: 0; font-size: 14px; }
+          .header { text-align: center; margin-bottom: 30px; border-bottom: 2px solid #111; padding-bottom: 16px; }
+          .header h1 { color: #000; margin: 0 0 5px 0; font-size: 22px; letter-spacing: -0.5px; }
+          .header p { color: #555; margin: 0; font-size: 13px; }
           .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 25px; }
-          .stat-card { background: #f3f4f6; border-left: 4px solid #3b82f6; padding: 15px; border-radius: 4px; }
-          .stat-label { color: #6b7280; font-size: 12px; font-weight: 600; text-transform: uppercase; margin-bottom: 5px; }
-          .stat-value { font-size: 28px; font-weight: bold; color: #1f2937; }
+          .stat-card { background: #f3f4f6; border-left: 4px solid #111; padding: 15px; border-radius: 4px; }
+          .stat-label { color: #555; font-size: 11px; font-weight: 600; text-transform: uppercase; margin-bottom: 5px; letter-spacing: 0.5px; }
+          .stat-value { font-size: 28px; font-weight: bold; color: #000; }
           .section { margin-bottom: 25px; }
-          .section-title { font-size: 16px; font-weight: 600; color: #1f2937; margin-bottom: 12px; border-bottom: 2px solid #e5e7eb; padding-bottom: 8px; }
+          .section-title { font-size: 14px; font-weight: 600; color: #000; margin-bottom: 12px; border-bottom: 2px solid #111; padding-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px; }
           table { width: 100%; border-collapse: collapse; font-size: 13px; }
-          th { background: #f9fafb; padding: 8px; text-align: left; font-weight: 600; color: #374151; border-bottom: 1px solid #e5e7eb; }
-          td { padding: 8px; border-bottom: 1px solid #e5e7eb; }
-          tr:hover { background: #f9fafb; }
-          .footer { background: #f3f4f6; padding: 15px; border-radius: 4px; text-align: center; font-size: 12px; color: #6b7280; }
-          .footer a { color: #3b82f6; text-decoration: none; }
-          .footer a:hover { text-decoration: underline; }
+          th { background: #f3f4f6; padding: 8px; text-align: left; font-weight: 600; color: #111; border-bottom: 1px solid #d1d5db; }
+          td { padding: 8px; border-bottom: 1px solid #e5e7eb; color: #111; }
+          .footer { border-top: 2px solid #111; padding: 15px; text-align: center; font-size: 12px; color: #555; margin-top: 25px; }
+          .footer a { color: #000; font-weight: 600; text-decoration: underline; }
         </style>
       </head>
       <body>
@@ -4009,7 +4007,7 @@ function buildAnalyticsSummaryHtml(stats) {
               </thead>
               <tbody>
                 ${stageBreakdown.map(s => `<tr><td>${s.label}</td><td style="text-align: right; font-weight: 600;">${s.count}</td></tr>`).join('')}
-                <tr style="font-weight: 600; background: #f0f4ff;">
+                <tr style="font-weight: 600; background: #f3f4f6;">
                   <td>Total Leads</td>
                   <td style="text-align: right;">${totalLeads}</td>
                 </tr>
@@ -4049,22 +4047,22 @@ function buildAnalyticsSummaryHtml(stats) {
                   <td>Planned Cards Awaiting Draft</td>
                   <td style="text-align: right; font-weight: 600;">${plannedToDraft}</td>
                 </tr>
-                ${escalationDMsPending > 0 ? `<tr><td>Instagram DM Escalations Pending</td><td style="text-align: right; font-weight: 600; color: #ea580c;">${escalationDMsPending}</td></tr>` : ''}
+                ${escalationDMsPending > 0 ? `<tr><td>Instagram DM Escalations Pending</td><td style="text-align: right; font-weight: 600;">${escalationDMsPending}</td></tr>` : ''}
               </tbody>
             </table>
           </div>
 
-          <div class="section" style="background: #fffbeb; border: 1px solid #fde68a; border-radius: 6px; padding: 16px;">
-            <div class="section-title" style="color: #92400e; border-bottom-color: #fde68a;">AI Model Feedback</div>
-            <p style="font-size: 13px; color: #78350f; margin: 0 0 10px 0;">
+          <div class="section" style="background: #f3f4f6; border: 1px solid #d1d5db; border-radius: 4px; padding: 16px;">
+            <div class="section-title">AI Model Feedback</div>
+            <p style="font-size: 13px; color: #111; margin: 0 0 10px 0;">
               ${feedbackCorrectionsLast7Days > 0
                 ? `<strong>${feedbackCorrectionsLast7Days} draft correction${feedbackCorrectionsLast7Days !== 1 ? "s" : ""}</strong> logged this week — great work. Each correction improves future AI drafts.`
                 : `<strong>No draft corrections logged this week.</strong> Editing and correcting AI-generated emails directly trains the model to improve.`
               }
             </p>
-            <p style="font-size: 13px; color: #92400e; margin: 0;">
+            <p style="font-size: 13px; color: #555; margin: 0;">
               Aim for 3–5 corrections per week. Open a draft, click <em>Edit</em>, make your changes, and the system captures the improvement automatically.
-              <a href="https://asterleyleadgen.netlify.app/outreach" style="color: #b45309; font-weight: 600;">Review drafts →</a>
+              <a href="https://asterleyleadgen.netlify.app/outreach" style="color: #000; font-weight: 600;">Review drafts →</a>
             </p>
           </div>
 
