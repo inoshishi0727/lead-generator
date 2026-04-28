@@ -4249,26 +4249,26 @@ function buildDailyReportHtml(stats) {
 
   const cardWrap = (content) =>
     `<table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:24px;">
-      <tr><td style="background:#ffffff;border:1px solid rgba(0,0,0,0.06);border-radius:12px;padding:16px;">
+      <tr><td style="background:#1e293b;border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:16px;">
         ${content}
       </td></tr></table>`;
 
   const sectionTitle = (text) =>
-    `<div style="font-size:14px;font-weight:500;color:#1f2937;margin-bottom:12px;">${text}</div>`;
+    `<div style="font-size:14px;font-weight:500;color:#f1f5f9;margin-bottom:12px;">${text}</div>`;
 
   // Outlook-safe horizontal bar row
   const barRow = (label, value, maxValue, barColor = BLUE) => {
     const pct   = maxValue > 0 ? Math.max(2, Math.round((value / maxValue) * 100)) : 2;
     const empty = 100 - pct;
     return `<tr>
-      <td style="font-size:11px;color:#6b7280;opacity:0.6;padding:5px 10px 5px 0;width:145px;white-space:nowrap;">${label}</td>
+      <td style="font-size:11px;color:#94a3b8;padding:5px 10px 5px 0;width:145px;white-space:nowrap;">${label}</td>
       <td style="padding:5px 0;">
         <table width="100%" cellpadding="0" cellspacing="0"><tr>
           <td bgcolor="${barColor}" width="${pct}%" style="height:20px;font-size:0;line-height:0;border-radius:4px 0 0 4px;opacity:0.85;">&nbsp;</td>
-          ${empty > 0 ? `<td bgcolor="#e5e7eb" width="${empty}%" style="height:20px;font-size:0;line-height:0;border-radius:0 4px 4px 0;">&nbsp;</td>` : ""}
+          ${empty > 0 ? `<td bgcolor="#334155" width="${empty}%" style="height:20px;font-size:0;line-height:0;border-radius:0 4px 4px 0;">&nbsp;</td>` : ""}
         </tr></table>
       </td>
-      <td style="font-size:12px;font-family:monospace;color:#374151;opacity:0.7;padding:5px 0 5px 10px;text-align:right;width:42px;">${value}</td>
+      <td style="font-size:12px;font-family:monospace;color:#cbd5e1;padding:5px 0 5px 10px;text-align:right;width:42px;">${value}</td>
     </tr>`;
   };
 
@@ -4277,7 +4277,7 @@ function buildDailyReportHtml(stats) {
     const w = Math.max(1, Math.round(pct));
     return `<table cellpadding="0" cellspacing="0" style="display:inline-table;vertical-align:middle;width:50px;margin-right:5px;"><tr>
       <td bgcolor="${color}" width="${w}%" style="height:8px;font-size:0;line-height:0;border-radius:2px;">&nbsp;</td>
-      ${100 - w > 0 ? `<td bgcolor="#e5e7eb" width="${100 - w}%" style="height:8px;font-size:0;line-height:0;">&nbsp;</td>` : ""}
+      ${100 - w > 0 ? `<td bgcolor="#334155" width="${100 - w}%" style="height:8px;font-size:0;line-height:0;">&nbsp;</td>` : ""}
     </tr></table>`;
   };
 
@@ -4287,10 +4287,10 @@ function buildDailyReportHtml(stats) {
     for (let i = 0; i < cards.length; i += 2) {
       const [a, b] = [cards[i], cards[i + 1]];
       const cell = c => c
-        ? `<td width="48%" valign="top" style="background:#ffffff;border:1px solid rgba(0,0,0,0.06);border-radius:8px;padding:16px;">
-            <div style="color:#6b7280;font-size:11px;font-weight:500;text-transform:uppercase;margin-bottom:4px;">${c.label}</div>
-            <div style="font-size:20px;font-weight:600;color:${c.valueColor || "#1f2937"};line-height:1.2;">${c.value}</div>
-            ${c.sub ? `<div style="font-size:12px;color:#6b7280;margin-top:3px;">${c.sub}</div>` : ""}
+        ? `<td width="48%" valign="top" style="background:#1e293b;border:1px solid rgba(255,255,255,0.08);border-radius:8px;padding:16px;">
+            <div style="color:#94a3b8;font-size:11px;font-weight:500;text-transform:uppercase;margin-bottom:4px;">${c.label}</div>
+            <div style="font-size:20px;font-weight:600;color:${c.valueColor || "#f1f5f9"};line-height:1.2;">${c.value}</div>
+            ${c.sub ? `<div style="font-size:12px;color:#94a3b8;margin-top:3px;">${c.sub}</div>` : ""}
           </td>`
         : `<td width="48%"></td>`;
       out.push(`<table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:16px;">
@@ -4314,21 +4314,21 @@ function buildDailyReportHtml(stats) {
         })),
       },
       options: {
-        plugins: { legend: { display: true, position: "top", labels: { boxWidth: 12, font: { size: 11 } } } },
+        plugins: { legend: { display: true, position: "top", labels: { boxWidth: 12, color: "#94a3b8", font: { size: 11 } } } },
         scales: {
-          y: { beginAtZero: true, ticks: { font: { size: 10 } }, grid: { color: "#f3f4f6" } },
-          x: { ticks: { font: { size: 10 } }, grid: { color: "#fafafa" } },
+          y: { beginAtZero: true, ticks: { color: "#94a3b8", font: { size: 10 } }, grid: { color: "rgba(255,255,255,0.06)" } },
+          x: { ticks: { color: "#94a3b8", font: { size: 10 } }, grid: { color: "rgba(255,255,255,0.04)" } },
         },
       },
     };
-    return `https://quickchart.io/chart?c=${encodeURIComponent(JSON.stringify(cfg))}&width=560&height=240&backgroundColor=white`;
+    return `https://quickchart.io/chart?c=${encodeURIComponent(JSON.stringify(cfg))}&width=560&height=240&backgroundColor=%231e293b`;
   };
 
   const weekLabels = (weeks || []).map(w => w.label);
   const trendChartUrl = makeLineChartUrl(weekLabels, [
-    { label: "Sent",    data: (weeks || []).map(w => w.sent),    color: GREEN,  fill: "rgba(5,150,105,0.05)" },
-    { label: "Replied", data: (weeks || []).map(w => w.replied), color: BLUE,   fill: "rgba(59,130,246,0.05)" },
-    { label: "Opened",  data: (weeks || []).map(w => w.opened),  color: INDIGO, fill: "rgba(99,102,241,0.05)" },
+    { label: "Sent",    data: (weeks || []).map(w => w.sent),    color: GREEN,  fill: "rgba(5,150,105,0.15)" },
+    { label: "Replied", data: (weeks || []).map(w => w.replied), color: BLUE,   fill: "rgba(59,130,246,0.15)" },
+    { label: "Opened",  data: (weeks || []).map(w => w.opened),  color: INDIGO, fill: "rgba(99,102,241,0.15)" },
   ]);
 
   // Build sections
@@ -4354,44 +4354,44 @@ function buildDailyReportHtml(stats) {
   const categoryBarRows = top5cats.map(c => {
     const pct   = maxCatSent > 0 ? Math.max(2, Math.round((c.sent / maxCatSent) * 100)) : 2;
     const empty = 100 - pct;
-    const rColor = c.replyRate >= 10 ? GREEN : c.replyRate > 0 ? "#f59e0b" : "#d1d5db";
+    const rColor = c.replyRate >= 10 ? GREEN : c.replyRate > 0 ? "#f59e0b" : "#64748b";
     return `<tr>
-      <td style="font-size:12px;color:#374151;padding:5px 10px 5px 0;width:145px;text-transform:capitalize;white-space:nowrap;">${(c.category || "unknown").replace(/_/g, " ")}</td>
+      <td style="font-size:12px;color:#cbd5e1;padding:5px 10px 5px 0;width:145px;text-transform:capitalize;white-space:nowrap;">${(c.category || "unknown").replace(/_/g, " ")}</td>
       <td style="padding:5px 0;">
         <table width="100%" cellpadding="0" cellspacing="0"><tr>
           <td bgcolor="${BLUE}" width="${pct}%" style="height:20px;font-size:0;line-height:0;border-radius:4px 0 0 4px;opacity:0.85;">&nbsp;</td>
-          ${empty > 0 ? `<td bgcolor="#e5e7eb" width="${empty}%" style="height:20px;font-size:0;line-height:0;border-radius:0 4px 4px 0;">&nbsp;</td>` : ""}
+          ${empty > 0 ? `<td bgcolor="#334155" width="${empty}%" style="height:20px;font-size:0;line-height:0;border-radius:0 4px 4px 0;">&nbsp;</td>` : ""}
         </tr></table>
       </td>
-      <td style="font-size:13px;font-weight:600;color:#1f2937;padding:5px 0 5px 10px;text-align:right;width:40px;">${c.sent}</td>
+      <td style="font-size:13px;font-weight:600;color:#f1f5f9;padding:5px 0 5px 10px;text-align:right;width:40px;">${c.sent}</td>
       <td style="font-size:12px;padding:5px 0 5px 8px;width:55px;text-align:right;color:${rColor};font-weight:${c.replyRate > 0 ? "600" : "normal"};">${fp(c.replyRate)}</td>
     </tr>`;
   }).join("");
 
   const subjectTableRows = (topSubjects || []).map(s => `<tr>
-    <td style="padding:8px;border-bottom:1px solid rgba(0,0,0,0.06);font-size:12px;color:#374151;">${s.subject}</td>
-    <td style="padding:8px;border-bottom:1px solid rgba(0,0,0,0.06);text-align:right;font-size:12px;width:40px;">${s.sent}</td>
-    <td style="padding:8px;border-bottom:1px solid rgba(0,0,0,0.06);text-align:right;font-size:12px;width:50px;">${fp(s.openRate)}</td>
-    <td style="padding:8px;border-bottom:1px solid rgba(0,0,0,0.06);white-space:nowrap;width:100px;">
-      ${miniBar(s.replyRate)}<span style="font-size:12px;font-weight:${s.replyRate > 0 ? "600" : "normal"};color:${s.replyRate > 0 ? GREEN : "#9ca3af"};">${fp(s.replyRate)}</span>
+    <td style="padding:8px;border-bottom:1px solid rgba(255,255,255,0.06);font-size:12px;color:#cbd5e1;">${s.subject}</td>
+    <td style="padding:8px;border-bottom:1px solid rgba(255,255,255,0.06);text-align:right;font-size:12px;width:40px;color:#cbd5e1;">${s.sent}</td>
+    <td style="padding:8px;border-bottom:1px solid rgba(255,255,255,0.06);text-align:right;font-size:12px;width:50px;color:#cbd5e1;">${fp(s.openRate)}</td>
+    <td style="padding:8px;border-bottom:1px solid rgba(255,255,255,0.06);white-space:nowrap;width:100px;">
+      ${miniBar(s.replyRate)}<span style="font-size:12px;font-weight:${s.replyRate > 0 ? "600" : "normal"};color:${s.replyRate > 0 ? GREEN : "#64748b"};">${fp(s.replyRate)}</span>
     </td>
   </tr>`).join("");
 
   const memberTableRows = memberBreakdown.length > 0
     ? memberBreakdown.map(m => `<tr>
-        <td style="padding:8px;border-bottom:1px solid rgba(0,0,0,0.06);font-size:13px;">${m.name}</td>
-        <td style="padding:8px;border-bottom:1px solid rgba(0,0,0,0.06);text-align:right;font-size:13px;">${m.assignedLeads}</td>
-        <td style="padding:8px;border-bottom:1px solid rgba(0,0,0,0.06);text-align:right;font-size:13px;font-weight:${m.sentYesterday > 0 ? "600" : "normal"};">${m.sentYesterday}</td>
-        <td style="padding:8px;border-bottom:1px solid rgba(0,0,0,0.06);text-align:right;font-size:13px;color:${m.repliedYesterday > 0 ? GREEN_ACCENT : "inherit"};">${m.repliedYesterday}</td>
+        <td style="padding:8px;border-bottom:1px solid rgba(255,255,255,0.06);font-size:13px;color:#cbd5e1;">${m.name}</td>
+        <td style="padding:8px;border-bottom:1px solid rgba(255,255,255,0.06);text-align:right;font-size:13px;color:#cbd5e1;">${m.assignedLeads}</td>
+        <td style="padding:8px;border-bottom:1px solid rgba(255,255,255,0.06);text-align:right;font-size:13px;font-weight:${m.sentYesterday > 0 ? "600" : "normal"};color:#cbd5e1;">${m.sentYesterday}</td>
+        <td style="padding:8px;border-bottom:1px solid rgba(255,255,255,0.06);text-align:right;font-size:13px;color:${m.repliedYesterday > 0 ? GREEN_ACCENT : "#64748b"};">${m.repliedYesterday}</td>
       </tr>`).join("")
-    : `<tr><td colspan="4" style="padding:12px;text-align:center;color:#9ca3af;font-size:13px;">No activity recorded yesterday</td></tr>`;
+    : `<tr><td colspan="4" style="padding:12px;text-align:center;color:#64748b;font-size:13px;">No activity recorded yesterday</td></tr>`;
 
   return `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Daily Report</title></head>
-<body style="margin:0;padding:0;background:#fafafa;font-family:Arial,sans-serif;color:#333;">
-<table width="100%" cellpadding="0" cellspacing="0" bgcolor="#fafafa" style="padding:24px 0;">
+<body style="margin:0;padding:0;background:#0f172a;font-family:Arial,sans-serif;color:#f1f5f9;">
+<table width="100%" cellpadding="0" cellspacing="0" bgcolor="#0f172a" style="padding:24px 0;">
 <tr><td align="center">
-<table width="620" cellpadding="0" cellspacing="0" bgcolor="#ffffff" style="border-radius:12px;overflow:hidden;border:1px solid rgba(0,0,0,0.06);">
+<table width="620" cellpadding="0" cellspacing="0" bgcolor="#0f172a" style="border-radius:12px;overflow:hidden;border:1px solid rgba(255,255,255,0.08);">
 
   <!-- Header -->
   <tr><td bgcolor="#1e3a5f" style="padding:28px 24px;text-align:center;">
@@ -4408,65 +4408,65 @@ function buildDailyReportHtml(stats) {
     <!-- Action Required -->
     ${(approvedWaiting > 0 || repliesYesterday > 0) ? `
     <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:24px;">
-    <tr><td bgcolor="#fef3c7" style="padding:16px;border-radius:8px;border:1px solid #fde68a;">
-      <div style="font-size:14px;font-weight:600;color:#92400e;margin-bottom:8px;">⚠️ Action Required</div>
-      ${approvedWaiting > 0 ? `<div style="font-size:13px;color:#78350f;margin-bottom:5px;">📤 <strong>${approvedWaiting}</strong> approved email${approvedWaiting !== 1 ? "s" : ""} queued and ready to send</div>` : ""}
-      ${repliesYesterday > 0 ? `<div style="font-size:13px;color:#78350f;margin-bottom:5px;">💬 <strong>${repliesYesterday}</strong> repl${repliesYesterday !== 1 ? "ies" : "y"} received yesterday — check Conversations</div>` : ""}
-      <div style="margin-top:10px;"><a href="https://asterleyleadgen.netlify.app/outreach" style="color:#b45309;font-weight:600;font-size:13px;text-decoration:none;">Go to Outreach →</a></div>
+    <tr><td bgcolor="#422006" style="padding:16px;border-radius:8px;border:1px solid #78350f;">
+      <div style="font-size:14px;font-weight:600;color:#fbbf24;margin-bottom:8px;">⚠️ Action Required</div>
+      ${approvedWaiting > 0 ? `<div style="font-size:13px;color:#fcd34d;margin-bottom:5px;">📤 <strong>${approvedWaiting}</strong> approved email${approvedWaiting !== 1 ? "s" : ""} queued and ready to send</div>` : ""}
+      ${repliesYesterday > 0 ? `<div style="font-size:13px;color:#fcd34d;margin-bottom:5px;">💬 <strong>${repliesYesterday}</strong> repl${repliesYesterday !== 1 ? "ies" : "y"} received yesterday — check Conversations</div>` : ""}
+      <div style="margin-top:10px;"><a href="https://asterleyleadgen.netlify.app/outreach" style="color:#fbbf24;font-weight:600;font-size:13px;text-decoration:none;">Go to Outreach →</a></div>
     </td></tr></table>` : ""}
 
     <!-- Overall Performance -->
     ${cardWrap(sectionTitle("Overall Performance") + performanceCards)}
 
     <!-- Email Engagement (12wk) -->
-    ${cardWrap(sectionTitle("Email Engagement (12wk)") + `<div style="font-size:12px;color:#6b7280;margin-bottom:10px;">${totalSent12wk} sent · ${fp(openRate12wk)} open rate · ${fp(replyRate12wk)} reply rate over 12 weeks</div>` + `<img src="${trendChartUrl}" width="560" alt="12-week send/reply trend" style="display:block;max-width:100%;border-radius:6px;border:1px solid rgba(0,0,0,0.06);margin-bottom:0;" />`)}
+    ${cardWrap(sectionTitle("Email Engagement (12wk)") + `<div style="font-size:12px;color:#94a3b8;margin-bottom:10px;">${totalSent12wk} sent · ${fp(openRate12wk)} open rate · ${fp(replyRate12wk)} reply rate over 12 weeks</div>` + `<img src="${trendChartUrl}" width="560" alt="12-week send/reply trend" style="display:block;max-width:100%;border-radius:6px;border:1px solid rgba(255,255,255,0.08);margin-bottom:0;" />`)}
 
     <!-- Funnel Pipeline -->
     ${cardWrap(sectionTitle("Funnel Pipeline") + `<table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:8px;">
       ${funnelRows}
-      <tr><td colspan="3" style="padding-top:8px;font-size:12px;color:#6b7280;border-top:1px solid rgba(0,0,0,0.06);">Total qualified leads: <strong style="color:#1f2937;">${totalLeads}</strong></td></tr>
+      <tr><td colspan="3" style="padding-top:8px;font-size:12px;color:#94a3b8;border-top:1px solid rgba(255,255,255,0.06);">Total qualified leads: <strong style="color:#f1f5f9;">${totalLeads}</strong></td></tr>
     </table>`)}
 
     <!-- Top Categories -->
     ${categoryBarRows ? cardWrap(sectionTitle("Top Categories") + `<table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:0;">
       <tr>
-        <td style="font-size:11px;font-weight:500;color:#6b7280;padding:0 10px 6px 0;width:145px;text-transform:uppercase;">Category</td>
+        <td style="font-size:11px;font-weight:500;color:#94a3b8;padding:0 10px 6px 0;width:145px;text-transform:uppercase;">Category</td>
         <td></td>
-        <td style="font-size:11px;font-weight:500;color:#6b7280;padding:0 0 6px 10px;text-align:right;width:40px;text-transform:uppercase;">Sent</td>
-        <td style="font-size:11px;font-weight:500;color:#6b7280;padding:0 0 6px 8px;text-align:right;width:55px;text-transform:uppercase;">Reply%</td>
+        <td style="font-size:11px;font-weight:500;color:#94a3b8;padding:0 0 6px 10px;text-align:right;width:40px;text-transform:uppercase;">Sent</td>
+        <td style="font-size:11px;font-weight:500;color:#94a3b8;padding:0 0 6px 8px;text-align:right;width:55px;text-transform:uppercase;">Reply%</td>
       </tr>
       ${categoryBarRows}
     </table>`) : ""}
 
     <!-- Top Subject Lines -->
     ${subjectTableRows ? cardWrap(sectionTitle("Top Subject Lines") + `<table width="100%" cellpadding="0" cellspacing="0" style="font-size:13px;margin-bottom:0;">
-      <tr bgcolor="#f9fafb">
-        <th style="padding:8px;text-align:left;font-weight:600;color:#374151;border-bottom:1px solid rgba(0,0,0,0.06);">Subject</th>
-        <th style="padding:8px;text-align:right;font-weight:600;color:#374151;border-bottom:1px solid rgba(0,0,0,0.06);width:40px;">Sent</th>
-        <th style="padding:8px;text-align:right;font-weight:600;color:#374151;border-bottom:1px solid rgba(0,0,0,0.06);width:50px;">Open%</th>
-        <th style="padding:8px;font-weight:600;color:#374151;border-bottom:1px solid rgba(0,0,0,0.06);width:100px;">Reply%</th>
+      <tr bgcolor="#0f172a">
+        <th style="padding:8px;text-align:left;font-weight:600;color:#94a3b8;border-bottom:1px solid rgba(255,255,255,0.06);">Subject</th>
+        <th style="padding:8px;text-align:right;font-weight:600;color:#94a3b8;border-bottom:1px solid rgba(255,255,255,0.06);width:40px;">Sent</th>
+        <th style="padding:8px;text-align:right;font-weight:600;color:#94a3b8;border-bottom:1px solid rgba(255,255,255,0.06);width:50px;">Open%</th>
+        <th style="padding:8px;font-weight:600;color:#94a3b8;border-bottom:1px solid rgba(255,255,255,0.06);width:100px;">Reply%</th>
       </tr>
       ${subjectTableRows}
     </table>`) : ""}
 
     <!-- Team Activity -->
     ${cardWrap(sectionTitle("Team Activity (Yesterday)") + `<table width="100%" cellpadding="0" cellspacing="0" style="font-size:13px;margin-bottom:0;">
-      <tr bgcolor="#f9fafb">
-        <th style="padding:8px;text-align:left;font-weight:600;color:#374151;border-bottom:1px solid rgba(0,0,0,0.06);">Member</th>
-        <th style="padding:8px;text-align:right;font-weight:600;color:#374151;border-bottom:1px solid rgba(0,0,0,0.06);">Assigned</th>
-        <th style="padding:8px;text-align:right;font-weight:600;color:#374151;border-bottom:1px solid rgba(0,0,0,0.06);">Sent</th>
-        <th style="padding:8px;text-align:right;font-weight:600;color:#374151;border-bottom:1px solid rgba(0,0,0,0.06);">Replies</th>
+      <tr bgcolor="#0f172a">
+        <th style="padding:8px;text-align:left;font-weight:600;color:#94a3b8;border-bottom:1px solid rgba(255,255,255,0.06);">Member</th>
+        <th style="padding:8px;text-align:right;font-weight:600;color:#94a3b8;border-bottom:1px solid rgba(255,255,255,0.06);">Assigned</th>
+        <th style="padding:8px;text-align:right;font-weight:600;color:#94a3b8;border-bottom:1px solid rgba(255,255,255,0.06);">Sent</th>
+        <th style="padding:8px;text-align:right;font-weight:600;color:#94a3b8;border-bottom:1px solid rgba(255,255,255,0.06);">Replies</th>
       </tr>
       ${memberTableRows}
     </table>`)}
 
     <!-- Footer -->
     <table width="100%" cellpadding="0" cellspacing="0" style="margin-top:24px;">
-    <tr><td bgcolor="#f3f4f6" style="padding:16px;border-radius:8px;text-align:center;font-size:12px;color:#6b7280;">
+    <tr><td bgcolor="#0f172a" style="padding:16px;border-radius:8px;text-align:center;font-size:12px;color:#94a3b8;">
       <a href="https://asterleyleadgen.netlify.app/analytics" style="color:${BLUE};text-decoration:none;font-weight:600;">View Full Analytics</a>
       &nbsp;·&nbsp;
       <a href="https://asterleyleadgen.netlify.app/outreach" style="color:${BLUE};text-decoration:none;font-weight:600;">Outreach</a>
-      <div style="margin-top:6px;color:#9ca3af;">Daily report — sent every weekday at 8am London time (admins only).</div>
+      <div style="margin-top:6px;color:#64748b;">Daily report — sent every weekday at 8am London time (admins only).</div>
     </td></tr></table>
 
   </td></tr>
