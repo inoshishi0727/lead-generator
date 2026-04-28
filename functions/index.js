@@ -651,6 +651,7 @@ export const generateDrafts = functions
 
     const callerSnap = await db.collection("users").doc(context.auth.uid).get();
     const callerRole = callerSnap.exists ? callerSnap.data().role : "viewer";
+    const callerName = callerSnap.exists ? (callerSnap.data().display_name || callerSnap.data().email || context.auth.uid) : context.auth.uid;
 
     const provider = data?.provider || "claude";
     if (!["claude", "gemini"].includes(provider)) {
@@ -689,8 +690,22 @@ export const generateDrafts = functions
       docs = docs.filter((d) => d.assigned_to === context.auth.uid);
     }
 
-    // Batch limit to avoid timeout
-    docs = docs.slice(0, 20);
+    // Daily draft cap — max 20 drafts across the whole team per calendar day
+    const DAILY_DRAFT_CAP = 20;
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const todaySnap = await db.collection("outreach_messages")
+      .where("created_at", ">=", todayStart.toISOString())
+      .get();
+    const createdToday = todaySnap.docs.filter(d => d.data().status === "draft").length;
+    const remainingQuota = Math.max(0, DAILY_DRAFT_CAP - createdToday);
+
+    if (remainingQuota === 0) {
+      return { generated: 0, failed: 0, skipped: docs.length, message: `Daily draft cap of ${DAILY_DRAFT_CAP} reached (${createdToday} already created today).` };
+    }
+
+    // Respect daily quota and avoid timeout
+    docs = docs.slice(0, remainingQuota);
 
     let generated = 0;
     let failed = 0;
@@ -747,6 +762,8 @@ export const generateDrafts = functions
           original_subject: subject,
           was_edited: false,
           provider,
+          generated_by: context.auth.uid,
+          generated_by_name: callerName,
         });
 
         await db.collection("leads").doc(leadDoc.id).update({
@@ -4516,7 +4533,7 @@ export const scheduledDailyReport = functions
       ] = await Promise.all([
         db.collection("outreach_messages").where("status", "==", "sent").where("sent_at", ">=", yStart).where("sent_at", "<=", yEnd).get(),
         db.collection("leads").where("scraped_at", ">=", yStart).where("scraped_at", "<=", yEnd).get(),
-        db.collection("outreach_messages").where("status", "==", "draft").where("created_at", ">=", yStart).where("created_at", "<=", yEnd).get(),
+        db.collection("outreach_messages").where("status", "==", "draft").get(),
         db.collection("outreach_messages").where("status", "==", "approved").where("channel", "==", "email").get(),
         db.collection("leads").where("stage", "in", ["sent", "follow_up_1", "follow_up_2"]).get(),
         db.collection("inbound_replies").where("matched", "==", true).where("created_at", ">=", yStart).get(),
@@ -4629,7 +4646,7 @@ export const scheduledDailyReport = functions
         sentYesterday, openedYesterday, openRateYesterday,
         repliedYesterday, replyRateYesterday,
         newLeadsYesterday: newLeadsSnap.size,
-        draftsGeneratedYesterday: draftsYesterdaySnap.size,
+        draftsGeneratedYesterday: draftsYesterdaySnap.docs.filter(d => { const ca = d.data().created_at || ""; return ca >= yStart && ca <= yEnd; }).length,
         approvedWaiting: approvedSnap.size,
         activeInSequence: activeSnap.size,
         repliesYesterday: repliesYesterdaySnap.size,
