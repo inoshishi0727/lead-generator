@@ -4194,6 +4194,480 @@ export const scheduledAnalyticsSummary = functions
     return null;
   });
 
+// ---- Daily Report ----
+
+function buildDailyReportHtml(stats) {
+  const {
+    date,
+    sentYesterday, openedYesterday, openRateYesterday,
+    repliedYesterday, replyRateYesterday,
+    newLeadsYesterday, draftsGeneratedYesterday,
+    approvedWaiting, activeInSequence, repliesYesterday,
+    memberBreakdown,
+    totalLeads, responseRate, conversionRate,
+    replyRate12wk, openRate12wk, deliveryRate12wk, totalSent12wk,
+    stageBreakdown,
+    categoryBreakdown,
+    topSubjects,
+  } = stats;
+
+  const formatPercent = (n) => (isNaN(n) || !isFinite(n) ? "0%" : `${Math.round(n)}%`);
+  const accent = "#3b82f6";
+
+  const memberRows = memberBreakdown.length > 0
+    ? memberBreakdown.map(m => `
+        <tr>
+          <td style="padding:8px;border-bottom:1px solid #e5e7eb;">${m.name}</td>
+          <td style="padding:8px;border-bottom:1px solid #e5e7eb;text-align:right;">${m.assignedLeads}</td>
+          <td style="padding:8px;border-bottom:1px solid #e5e7eb;text-align:right;">${m.sentYesterday}</td>
+          <td style="padding:8px;border-bottom:1px solid #e5e7eb;text-align:right;">${m.repliedYesterday}</td>
+        </tr>`).join("")
+    : `<tr><td colspan="4" style="padding:12px;text-align:center;color:#9ca3af;font-size:13px;">No activity recorded yesterday</td></tr>`;
+
+  const stageRows = stageBreakdown.map(s => `
+    <tr>
+      <td style="padding:8px;border-bottom:1px solid #e5e7eb;">${s.label}</td>
+      <td style="padding:8px;border-bottom:1px solid #e5e7eb;text-align:right;font-weight:600;">${s.count}</td>
+    </tr>`).join("");
+
+  const categoryRows = categoryBreakdown.slice(0, 5).map(c => `
+    <tr>
+      <td style="padding:8px;border-bottom:1px solid #e5e7eb;text-transform:capitalize;">${(c.category || "unknown").replace(/_/g, " ")}</td>
+      <td style="padding:8px;border-bottom:1px solid #e5e7eb;text-align:right;">${c.leads}</td>
+      <td style="padding:8px;border-bottom:1px solid #e5e7eb;text-align:right;">${c.sent}</td>
+      <td style="padding:8px;border-bottom:1px solid #e5e7eb;text-align:right;${c.replyRate > 0 ? "color:#059669;font-weight:600;" : ""}">${formatPercent(c.replyRate)}</td>
+    </tr>`).join("");
+
+  const subjectRows = topSubjects.map(s => `
+    <tr>
+      <td style="padding:8px;border-bottom:1px solid #e5e7eb;font-size:12px;">${s.subject}</td>
+      <td style="padding:8px;border-bottom:1px solid #e5e7eb;text-align:right;">${s.sent}</td>
+      <td style="padding:8px;border-bottom:1px solid #e5e7eb;text-align:right;">${formatPercent(s.openRate)}</td>
+      <td style="padding:8px;border-bottom:1px solid #e5e7eb;text-align:right;${s.replyRate > 0 ? "color:#059669;font-weight:600;" : ""}">${formatPercent(s.replyRate)}</td>
+    </tr>`).join("");
+
+  return `
+    <html>
+      <head>
+        <style>
+          body{font-family:Arial,sans-serif;color:#333;line-height:1.6;margin:0;padding:0;}
+          .container{max-width:620px;margin:0 auto;padding:24px;}
+          .header{text-align:center;margin-bottom:28px;}
+          .header h1{color:#1f2937;margin:0 0 4px;font-size:22px;}
+          .header p{color:#6b7280;margin:0;font-size:13px;}
+          .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:24px;}
+          .grid4{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px;margin-bottom:24px;}
+          .card{background:#f3f4f6;border-left:4px solid ${accent};padding:14px;border-radius:4px;}
+          .card-label{color:#6b7280;font-size:11px;font-weight:600;text-transform:uppercase;margin-bottom:4px;}
+          .card-value{font-size:24px;font-weight:bold;color:#1f2937;}
+          .card-sub{font-size:12px;color:#6b7280;margin-top:2px;}
+          .section{margin-bottom:24px;}
+          .section-title{font-size:15px;font-weight:600;color:#1f2937;margin-bottom:10px;border-bottom:2px solid #e5e7eb;padding-bottom:6px;}
+          table{width:100%;border-collapse:collapse;font-size:13px;}
+          th{background:#f9fafb;padding:8px;text-align:left;font-weight:600;color:#374151;border-bottom:1px solid #e5e7eb;}
+          td{padding:8px;border-bottom:1px solid #e5e7eb;}
+          .action-box{background:#fef3c7;border:1px solid #fde68a;border-radius:6px;padding:16px;margin-bottom:24px;}
+          .action-title{font-size:14px;font-weight:600;color:#92400e;margin-bottom:8px;}
+          .action-item{font-size:13px;color:#78350f;margin-bottom:4px;}
+          .divider{border:none;border-top:1px solid #e5e7eb;margin:24px 0;}
+          .footer{background:#f3f4f6;padding:14px;border-radius:4px;text-align:center;font-size:12px;color:#6b7280;}
+          .footer a{color:${accent};text-decoration:none;}
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>Asterley Bros — Daily Report</h1>
+            <p>${date}</p>
+          </div>
+
+          <!-- Yesterday snapshot -->
+          <div class="grid2">
+            <div class="card">
+              <div class="card-label">Sent Yesterday</div>
+              <div class="card-value">${sentYesterday}</div>
+              <div class="card-sub">${openedYesterday} opened (${formatPercent(openRateYesterday)})</div>
+            </div>
+            <div class="card">
+              <div class="card-label">Replies Yesterday</div>
+              <div class="card-value">${repliedYesterday}</div>
+              <div class="card-sub">${formatPercent(replyRateYesterday)} reply rate</div>
+            </div>
+            <div class="card">
+              <div class="card-label">New Leads</div>
+              <div class="card-value">${newLeadsYesterday}</div>
+              <div class="card-sub">added yesterday</div>
+            </div>
+            <div class="card">
+              <div class="card-label">Drafts Generated</div>
+              <div class="card-value">${draftsGeneratedYesterday}</div>
+              <div class="card-sub">ready for review</div>
+            </div>
+          </div>
+
+          <!-- Action items -->
+          ${(approvedWaiting > 0 || repliesYesterday > 0) ? `
+          <div class="action-box">
+            <div class="action-title">Action Required</div>
+            ${approvedWaiting > 0 ? `<div class="action-item">📤 <strong>${approvedWaiting}</strong> approved email${approvedWaiting !== 1 ? "s" : ""} queued and ready to send</div>` : ""}
+            ${repliesYesterday > 0 ? `<div class="action-item">💬 <strong>${repliesYesterday}</strong> repl${repliesYesterday !== 1 ? "ies" : "y"} received yesterday — check Conversations</div>` : ""}
+            <div style="margin-top:10px;">
+              <a href="https://asterleyleadgen.netlify.app/outreach" style="color:#b45309;font-weight:600;font-size:13px;">Go to Outreach →</a>
+            </div>
+          </div>` : ""}
+
+          <hr class="divider" />
+
+          <!-- Overall headline stats -->
+          <div class="section">
+            <div class="section-title">Overall Performance</div>
+            <div class="grid2">
+              <div class="card" style="border-left-color:#8b5cf6;">
+                <div class="card-label">Qualified Leads</div>
+                <div class="card-value">${totalLeads}</div>
+              </div>
+              <div class="card" style="border-left-color:#059669;">
+                <div class="card-label">Response Rate</div>
+                <div class="card-value">${formatPercent(responseRate)}</div>
+              </div>
+              <div class="card" style="border-left-color:#f59e0b;">
+                <div class="card-label">Conversion Rate</div>
+                <div class="card-value">${formatPercent(conversionRate)}</div>
+              </div>
+              <div class="card" style="border-left-color:#3b82f6;">
+                <div class="card-label">Active in Sequence</div>
+                <div class="card-value">${activeInSequence}</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 12-week engagement -->
+          <div class="section">
+            <div class="section-title">12-Week Engagement</div>
+            <table>
+              <tbody>
+                <tr>
+                  <td>Total Sent</td>
+                  <td style="text-align:right;font-weight:600;">${totalSent12wk}</td>
+                </tr>
+                <tr>
+                  <td>Open Rate</td>
+                  <td style="text-align:right;font-weight:600;">${formatPercent(openRate12wk)}</td>
+                </tr>
+                <tr>
+                  <td>Reply Rate</td>
+                  <td style="text-align:right;font-weight:600;color:#059669;">${formatPercent(replyRate12wk)}</td>
+                </tr>
+                <tr>
+                  <td>Delivery Rate</td>
+                  <td style="text-align:right;font-weight:600;">${formatPercent(deliveryRate12wk)}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- Funnel / stage breakdown -->
+          <div class="section">
+            <div class="section-title">Funnel Pipeline</div>
+            <table>
+              <thead>
+                <tr>
+                  <th>Stage</th>
+                  <th style="text-align:right;">Count</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${stageRows}
+                <tr style="font-weight:600;background:#f0f4ff;">
+                  <td>Total Leads</td>
+                  <td style="text-align:right;">${totalLeads}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- Category breakdown -->
+          ${categoryRows ? `
+          <div class="section">
+            <div class="section-title">Top Categories</div>
+            <table>
+              <thead>
+                <tr>
+                  <th>Category</th>
+                  <th style="text-align:right;">Leads</th>
+                  <th style="text-align:right;">Sent</th>
+                  <th style="text-align:right;">Reply Rate</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${categoryRows}
+              </tbody>
+            </table>
+          </div>` : ""}
+
+          <!-- Subject line performance -->
+          ${subjectRows ? `
+          <div class="section">
+            <div class="section-title">Top Subject Lines</div>
+            <table>
+              <thead>
+                <tr>
+                  <th>Subject</th>
+                  <th style="text-align:right;">Sent</th>
+                  <th style="text-align:right;">Open %</th>
+                  <th style="text-align:right;">Reply %</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${subjectRows}
+              </tbody>
+            </table>
+          </div>` : ""}
+
+          <!-- Team breakdown -->
+          <div class="section">
+            <div class="section-title">Team Activity (Yesterday)</div>
+            <table>
+              <thead>
+                <tr>
+                  <th>Member</th>
+                  <th style="text-align:right;">Assigned Leads</th>
+                  <th style="text-align:right;">Sent</th>
+                  <th style="text-align:right;">Replies</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${memberRows}
+              </tbody>
+            </table>
+          </div>
+
+          <div class="footer">
+            <p><a href="https://asterleyleadgen.netlify.app/analytics">View Full Analytics</a> &nbsp;·&nbsp; <a href="https://asterleyleadgen.netlify.app/outreach">Outreach</a></p>
+            <p style="margin-top:8px;color:#9ca3af;">Daily report — sent every weekday at 8am London time (admins only).</p>
+          </div>
+        </div>
+      </body>
+    </html>
+  `;
+}
+
+/**
+ * Scheduled trigger — runs Mon–Fri at 8am London time.
+ * Sends full daily analytics report to all admin users.
+ */
+export const scheduledDailyReport = functions
+  .runWith({ timeoutSeconds: 180, memory: "512MB", secrets: ["RESEND_API_KEY"] })
+  .pubsub.schedule("0 8 * * 1-5")
+  .timeZone("Europe/London")
+  .onRun(async () => {
+    const apiKey = process.env.RESEND_API_KEY;
+    if (!apiKey) {
+      console.error("[dailyReport] RESEND_API_KEY not configured");
+      return null;
+    }
+
+    const jobRef = db.collection("pipeline_jobs").doc();
+    await jobRef.set({
+      type: "scheduled_daily_report",
+      status: "running",
+      started_at: new Date().toISOString(),
+      completed_at: null,
+      result: null,
+    });
+
+    try {
+      // Recipients: admins only
+      const adminSnap = await db.collection("users").where("role", "==", "admin").get();
+      const adminEmails = adminSnap.docs.map(d => d.data().email).filter(Boolean);
+      const adminUsers = adminSnap.docs.map(d => d.data());
+
+      if (!adminEmails.length) {
+        console.log("[dailyReport] No admin emails found, skipping");
+        await jobRef.update({ status: "skipped", completed_at: new Date().toISOString(), result: { reason: "no admin emails" } });
+        return null;
+      }
+
+      // Time windows
+      const now = new Date();
+      const yesterdayStart = new Date(now);
+      yesterdayStart.setDate(yesterdayStart.getDate() - 1);
+      yesterdayStart.setHours(0, 0, 0, 0);
+      const yesterdayEnd = new Date(yesterdayStart);
+      yesterdayEnd.setHours(23, 59, 59, 999);
+      const yStart = yesterdayStart.toISOString();
+      const yEnd = yesterdayEnd.toISOString();
+      const twelveWeeksAgo = new Date(now.getTime() - 84 * 24 * 60 * 60 * 1000).toISOString();
+
+      const [
+        sentYesterdaySnap,
+        newLeadsSnap,
+        draftsYesterdaySnap,
+        approvedSnap,
+        activeSnap,
+        repliesYesterdaySnap,
+        allLeadsSnap,
+        sent12wkSnap,
+        allMessagesSnap,
+      ] = await Promise.all([
+        db.collection("outreach_messages").where("status", "==", "sent").where("sent_at", ">=", yStart).where("sent_at", "<=", yEnd).get(),
+        db.collection("leads").where("scraped_at", ">=", yStart).where("scraped_at", "<=", yEnd).get(),
+        db.collection("outreach_messages").where("status", "==", "draft").where("created_at", ">=", yStart).where("created_at", "<=", yEnd).get(),
+        db.collection("outreach_messages").where("status", "==", "approved").where("channel", "==", "email").get(),
+        db.collection("leads").where("stage", "in", ["sent", "follow_up_1", "follow_up_2"]).get(),
+        db.collection("inbound_replies").where("matched", "==", true).where("created_at", ">=", yStart).get(),
+        db.collection("leads").get(),
+        db.collection("outreach_messages").where("status", "==", "sent").where("sent_at", ">=", twelveWeeksAgo).get(),
+        db.collection("outreach_messages").where("status", "==", "sent").get(),
+      ]);
+
+      // Yesterday stats
+      const sentDocs = sentYesterdaySnap.docs.map(d => d.data());
+      const sentYesterday = sentDocs.length;
+      const openedYesterday = sentDocs.filter(m => m.opened).length;
+      const openRateYesterday = sentYesterday > 0 ? (openedYesterday / sentYesterday) * 100 : 0;
+      const repliedYesterday = sentDocs.filter(m => m.has_reply).length;
+      const replyRateYesterday = sentYesterday > 0 ? (repliedYesterday / sentYesterday) * 100 : 0;
+
+      // 12-week engagement
+      const docs12wk = sent12wkSnap.docs.map(d => d.data());
+      const totalSent12wk = docs12wk.length;
+      const opened12wk = docs12wk.filter(m => m.opened).length;
+      const replied12wk = docs12wk.filter(m => m.has_reply).length;
+      const delivered12wk = docs12wk.filter(m => m.status === "sent").length;
+      const openRate12wk = totalSent12wk > 0 ? (opened12wk / totalSent12wk) * 100 : 0;
+      const replyRate12wk = totalSent12wk > 0 ? (replied12wk / totalSent12wk) * 100 : 0;
+      const deliveryRate12wk = totalSent12wk > 0 ? (delivered12wk / totalSent12wk) * 100 : 0;
+
+      // All leads — funnel + category
+      const allLeads = allLeadsSnap.docs.map(d => d.data());
+      const qualifiedLeads = allLeads.filter(l => l.email);
+      const totalLeads = qualifiedLeads.length;
+      const responded = allLeads.filter(l => ["responded", "converted"].includes(l.stage)).length;
+      const converted = allLeads.filter(l => l.stage === "converted").length;
+      const responseRate = totalLeads > 0 ? (responded / totalLeads) * 100 : 0;
+      const conversionRate = totalLeads > 0 ? (converted / totalLeads) * 100 : 0;
+
+      const STAGE_ORDER = [
+        { key: "sent", label: "Sent (Active)" },
+        { key: "follow_up_1", label: "Follow-up 1" },
+        { key: "follow_up_2", label: "Follow-up 2" },
+        { key: "responded", label: "Responded" },
+        { key: "converted", label: "Converted" },
+        { key: "no_response", label: "No Response" },
+        { key: "declined", label: "Declined" },
+      ];
+      const stageBreakdown = STAGE_ORDER.map(s => ({
+        label: s.label,
+        count: allLeads.filter(l => l.stage === s.key).length,
+      }));
+
+      // Category breakdown
+      const allSentMsgs = allMessagesSnap.docs.map(d => d.data());
+      const catMap = new Map();
+      allLeads.forEach(l => {
+        const cat = l.enrichment?.venue_category || l.category || "unknown";
+        if (!catMap.has(cat)) catMap.set(cat, { leads: 0, sent: 0, replied: 0 });
+        catMap.get(cat).leads++;
+      });
+      allSentMsgs.forEach(m => {
+        const cat = m.venue_category || "unknown";
+        if (!catMap.has(cat)) catMap.set(cat, { leads: 0, sent: 0, replied: 0 });
+        catMap.get(cat).sent++;
+        if (m.has_reply) catMap.get(cat).replied++;
+      });
+      const categoryBreakdown = Array.from(catMap.entries())
+        .map(([category, d]) => ({ category, ...d, replyRate: d.sent > 0 ? (d.replied / d.sent) * 100 : 0 }))
+        .sort((a, b) => b.sent - a.sent);
+
+      // Subject line top 5 by reply rate (min 5 sent)
+      const subjectMap = new Map();
+      allSentMsgs.forEach(m => {
+        if (!m.subject) return;
+        if (!subjectMap.has(m.subject)) subjectMap.set(m.subject, { sent: 0, opened: 0, replied: 0 });
+        const s = subjectMap.get(m.subject);
+        s.sent++;
+        if (m.opened) s.opened++;
+        if (m.has_reply) s.replied++;
+      });
+      const topSubjects = Array.from(subjectMap.entries())
+        .filter(([, s]) => s.sent >= 5)
+        .map(([subject, s]) => ({ subject, sent: s.sent, openRate: (s.opened / s.sent) * 100, replyRate: (s.replied / s.sent) * 100 }))
+        .sort((a, b) => b.replyRate - a.replyRate)
+        .slice(0, 5);
+
+      // Per-member breakdown (admin users only)
+      const leadsByUid = new Map();
+      allLeadsSnap.docs.forEach(d => {
+        const data = d.data();
+        if (data.assigned_to) {
+          leadsByUid.set(data.assigned_to, (leadsByUid.get(data.assigned_to) || 0) + 1);
+        }
+      });
+      const sentByUid = new Map();
+      const repliesByUid = new Map();
+      sentDocs.forEach(m => {
+        const uid = m.sent_by || "unknown";
+        sentByUid.set(uid, (sentByUid.get(uid) || 0) + 1);
+        if (m.has_reply) repliesByUid.set(uid, (repliesByUid.get(uid) || 0) + 1);
+      });
+      const memberBreakdown = adminUsers.map(u => ({
+        name: u.display_name || u.email,
+        assignedLeads: leadsByUid.get(u.uid) || 0,
+        sentYesterday: sentByUid.get(u.uid) || 0,
+        repliedYesterday: repliesByUid.get(u.uid) || 0,
+      })).sort((a, b) => b.sentYesterday - a.sentYesterday);
+
+      const date = yesterdayStart.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+
+      const stats = {
+        date,
+        sentYesterday, openedYesterday, openRateYesterday,
+        repliedYesterday, replyRateYesterday,
+        newLeadsYesterday: newLeadsSnap.size,
+        draftsGeneratedYesterday: draftsYesterdaySnap.size,
+        approvedWaiting: approvedSnap.size,
+        activeInSequence: activeSnap.size,
+        repliesYesterday: repliesYesterdaySnap.size,
+        memberBreakdown,
+        totalLeads, responseRate, conversionRate,
+        replyRate12wk, openRate12wk, deliveryRate12wk, totalSent12wk,
+        stageBreakdown,
+        categoryBreakdown,
+        topSubjects,
+      };
+
+      const resend = new Resend(apiKey);
+      const subject = `Asterley Bros — Daily Report (${yesterdayStart.toLocaleDateString("en-GB")})`;
+      const html = buildDailyReportHtml(stats);
+
+      for (const email of adminEmails) {
+        try {
+          await resend.emails.send({
+            from: `${SENDER_NAME} <${SENDER_EMAIL}>`,
+            to: email,
+            subject,
+            html,
+          });
+          console.log(`[dailyReport] Sent to ${email}`);
+        } catch (err) {
+          console.error(`[dailyReport] Failed to send to ${email}:`, err.message);
+        }
+      }
+
+      await jobRef.update({
+        status: "completed",
+        completed_at: new Date().toISOString(),
+        result: { recipients: adminEmails.length, sentYesterday, repliedYesterday, totalLeads },
+      });
+    } catch (err) {
+      console.error("[dailyReport] Error:", err.message);
+      await jobRef.update({ status: "error", completed_at: new Date().toISOString(), result: { error: err.message } });
+    }
+
+    return null;
+  });
+
 // ---- Client System Prompt ----
 
 const CLIENT_BASE_IDENTITY = `You are Rob, founder of Asterley Bros, an independent English Vermouth, Amaro, and Aperitivo producer based in SE26, London. You are writing to an existing stockist — a current client who already stocks and sells your products. You have a real relationship with them.
