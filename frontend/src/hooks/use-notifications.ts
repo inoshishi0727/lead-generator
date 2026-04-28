@@ -21,6 +21,7 @@ export interface NotificationState {
   replies: ReplyNotification[];
   lastReadAt: string;
   markAllRead: () => void;
+  markLeadRead: (leadId: string) => void;
 }
 
 export function useReplyNotifications(): NotificationState {
@@ -35,6 +36,21 @@ export function useReplyNotifications(): NotificationState {
     setLastReadAt(now);
     setLastReadAtState(now);
     setUnreadCount(0);
+  }, []);
+
+  const markLeadRead = useCallback((leadId: string) => {
+    setReplies((current) => {
+      const leadReplies = current.filter((r) => r.lead_id === leadId);
+      if (!leadReplies.length) return current;
+      const newest = leadReplies.reduce((a, b) => a.created_at > b.created_at ? a : b);
+      const currentLastRead = getLastReadAt();
+      if (newest.created_at > currentLastRead) {
+        setLastReadAt(newest.created_at);
+        setLastReadAtState(newest.created_at);
+        setUnreadCount((prev) => Math.max(0, prev - leadReplies.filter((r) => r.created_at > currentLastRead).length));
+      }
+      return current;
+    });
   }, []);
 
   useEffect(() => {
@@ -80,5 +96,5 @@ export function useReplyNotifications(): NotificationState {
     return unsub;
   }, []);
 
-  return { unreadCount, replies, lastReadAt, markAllRead };
+  return { unreadCount, replies, lastReadAt, markAllRead, markLeadRead };
 }

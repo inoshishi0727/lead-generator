@@ -20,6 +20,7 @@ interface Props {
   businessName: string;
   messages: OutreachMessage[];
   unreadReplies?: number;
+  onOpen?: () => void;
 }
 
 function timeAgo(dateStr: string): string {
@@ -33,7 +34,7 @@ function timeAgo(dateStr: string): string {
   return new Date(dateStr).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
 }
 
-export function ThreadCard({ leadId, businessName, messages, unreadReplies = 0 }: Props) {
+export function ThreadCard({ leadId, businessName, messages, unreadReplies = 0, onOpen }: Props) {
   const [expanded, setExpanded] = useState(false);
 
   // Sort messages by step_number, then created_at
@@ -66,7 +67,7 @@ export function ThreadCard({ leadId, businessName, messages, unreadReplies = 0 }
     <div className="rounded-lg border border-border/50 bg-card overflow-hidden">
       {/* Thread header — always visible */}
       <button
-        onClick={() => setExpanded(!expanded)}
+        onClick={() => { if (!expanded) onOpen?.(); setExpanded(!expanded); }}
         className="w-full px-4 py-3 flex items-center justify-between text-left hover:bg-accent/30 transition-colors"
       >
         <div className="flex items-center gap-3 min-w-0 flex-1">
