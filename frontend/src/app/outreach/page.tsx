@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useMemo } from "react";
 import { useDebounce } from "@/hooks/use-debounce";
+import { useSearchParams } from "next/navigation";
 import {
   FileText,
   CheckCheck,
@@ -61,7 +62,11 @@ const CATEGORY_OPTIONS = [
 
 export default function OutreachPage() {
   const { isAdmin, isMember, user } = useAuth();
-  const [statusFilter, setStatusFilter] = useState<string>("draft");
+  const searchParams = useSearchParams();
+  const initialTab = searchParams.get("tab");
+  const [statusFilter, setStatusFilter] = useState<string>(
+    STATUS_FILTERS.includes(initialTab as any) ? initialTab! : "draft"
+  );
   const [categoryFilter, setCategoryFilter] = useState<string>("");
   const [stepFilter, setStepFilter] = useState<string>("all");
   const [showSendWarning, setShowSendWarning] = useState(false);
