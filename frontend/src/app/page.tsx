@@ -1,9 +1,7 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useMemo } from "react";
 import Link from "next/link";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ScrapeControl } from "@/components/scrape-control";
@@ -15,26 +13,21 @@ import { LeadDetailDialog } from "@/components/lead-detail-dialog";
 import { useScrape } from "@/hooks/use-scrape";
 import { useLeads } from "@/hooks/use-leads";
 import { useMessages } from "@/hooks/use-outreach";
-import {
-  Users,
-  Mail,
-  FileText,
-  Send,
-  ChevronRight,
-  Upload,
-  Download,
-} from "lucide-react";
+import { Upload, Download, RefreshCw } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { EditReflectionBanner } from "@/components/edit-reflection-banner";
-import { ScrapeRunningBanner, PipelineActivity } from "@/components/pipeline-activity";
+import { ScrapeRunningBanner } from "@/components/pipeline-activity";
 import { useImportQueries, type SearchQueries } from "@/hooks/use-search-queries";
 import { toast } from "sonner";
+import { Sparkline } from "@/components/ui/sparkline";
+import { FitScore } from "@/components/ui/fit-score";
+import { StageChip } from "@/components/ui/stage-chip";
+import { PersonAvatar } from "@/components/ui/person-avatar";
 import type { Lead } from "@/lib/types";
 
 const SOURCE_KEYS: (keyof SearchQueries)[] = [
   "google_maps", "google_search", "bing_search", "directory",
 ];
-
 const SOURCE_LABELS: Record<string, string> = {
   google_maps: "Google Maps",
   google_search: "Google Search",
@@ -60,6 +53,14 @@ function downloadTemplate() {
   URL.revokeObjectURL(url);
 }
 
+function stageFor(lead: Lead): "new" | "contacted" | "replied" | "converted" | "rejected" {
+  if (lead.outcome === "converted") return "converted";
+  if (lead.outcome === "lost" || lead.outcome === "not_interested") return "rejected";
+  if ((lead.reply_count ?? 0) > 0) return "replied";
+  if (lead.stage === "contacted" || (lead.open_count ?? 0) > 0) return "contacted";
+  return "new";
+}
+
 export default function DashboardPage() {
   const { isAdmin, isMember, user } = useAuth();
   const { startScrape, isStarting, status } = useScrape();
@@ -70,6 +71,35 @@ export default function DashboardPage() {
   const importMutation = useImportQueries();
   const csvInputRef = useRef<HTMLInputElement>(null);
   const [uploadedQueries, setUploadedQueries] = useState<Record<string, string[]> | null>(null);
+  const [scrapeProgress, setScrapeProgress] = useState(0);
+  const [isScraping, setIsScraping] = useState(false);
+
+  const isRunning = status?.status === "pending" || status?.status === "running";
+
+  const allLeads = leads ?? [];
+  const allMessages = messages ?? [];
+
+  const totalLeads = allLeads.length;
+  const emailsFound = allLeads.filter((l) => l.email).length;
+  const drafts = allMessages.filter((m) => m.status === "draft").length;
+  const approved = allMessages.filter((m) => m.status === "approved").length;
+  const sent = allMessages.filter((m) => m.status === "sent").length;
+  const replies = allLeads.filter((l) => (l.reply_count ?? 0) > 0).length;
+  const replyRate = sent > 0 ? ((replies / sent) * 100).toFixed(1) : "0.0";
+
+  const pipeline = useMemo(() => {
+    const counts = { new: 0, contacted: 0, replied: 0, converted: 0, rejected: 0 };
+    allLeads.forEach((l) => { counts[stageFor(l)]++; });
+    return counts;
+  }, [allLeads]);
+
+  const hotLeads = useMemo(() =>
+    [...allLeads]
+      .filter((l) => stageFor(l) === "new" && (l.score ?? 0) >= 7)
+      .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
+      .slice(0, 5),
+    [allLeads]
+  );
 
   function handleCsvUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -112,254 +142,310 @@ export default function DashboardPage() {
     if (csvInputRef.current) csvInputRef.current.value = "";
   }
 
-  const isRunning =
-    status?.status === "pending" || status?.status === "running";
+  function triggerScrapeAnimation() {
+    setIsScraping(true);
+    setScrapeProgress(0);
+    const start = Date.now();
+    const tick = () => {
+      const elapsed = Date.now() - start;
+      const p = Math.min(elapsed / 3200, 1);
+      setScrapeProgress(p);
+      if (p < 1) requestAnimationFrame(tick);
+      else setTimeout(() => setIsScraping(false), 800);
+    };
+    requestAnimationFrame(tick);
+  }
 
-  const allLeads = leads ?? [];
-  const allMessages = messages ?? [];
+  const STAGE_COLORS: Record<string, string> = {
+    new: "oklch(0.6 0.1 230)",
+    contacted: "oklch(0.5 0.1 290)",
+    replied: "oklch(0.65 0.13 75)",
+    converted: "oklch(0.55 0.13 150)",
+    rejected: "oklch(0.58 0.18 25)",
+  };
+  const pipelineStages = ["new", "contacted", "replied", "converted", "rejected"] as const;
+  const pipelineMax = Math.max(...pipelineStages.map((s) => pipeline[s]), 1);
 
-  const qualifiedLeads = allLeads.filter((l) => l.email).length;
-  const totalLeads = allLeads.length;
-  const emailsFound = qualifiedLeads;
-  const drafts = allMessages.filter((m) => m.status === "draft").length;
-  const approved = allMessages.filter((m) => m.status === "approved").length;
-  const sent = allMessages.filter((m) => m.status === "sent").length;
-
-  // Recent leads (last 5)
-  const recentLeads = [...allLeads]
-    .sort((a, b) => (b.scraped_at ?? "").localeCompare(a.scraped_at ?? ""))
-    .slice(0, 5);
+  const today = new Date();
+  const dayName = today.toLocaleDateString("en-GB", { weekday: "long" });
+  const weekNum = Math.ceil((today.getDate() - today.getDay() + new Date(today.getFullYear(), 0, 1).getDay()) / 7);
 
   return (
-    <div className="space-y-8">
-      {/* Header */}
-      <div className="flex items-end justify-between">
+    <div className="sp-page">
+      {/* Page header */}
+      <div className="sp-page-head">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Dashboard</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Lead generation and outreach pipeline
-          </p>
+          <h1 className="sp-page-title">
+            {dayName}
+            <span style={{ fontStyle: "italic", color: "var(--sp-ink-3)" }}>, week {weekNum}</span>
+          </h1>
+          <div className="sp-page-subtitle">
+            {totalLeads} leads in pipeline.{" "}
+            {approved > 0 ? `${approved} email${approved !== 1 ? "s" : ""} awaiting approval.` : "All caught up on approvals."}
+          </div>
         </div>
-        <div className="flex gap-2">
-          <Link href="/leads">
-            <Button variant="outline" size="sm">
-              <Users className="mr-1.5 h-3.5 w-3.5" />
-              View Leads
-            </Button>
-          </Link>
-          <Link href="/outreach">
-            <Button size="sm">
-              <Mail className="mr-1.5 h-3.5 w-3.5" />
-              Outreach
-            </Button>
-          </Link>
-        </div>
-      </div>
-
-      {/* Live scrape running banner */}
-      <ScrapeRunningBanner />
-
-      {/* Edit reflection banner */}
-      <EditReflectionBanner />
-
-      {/* Key Metrics */}
-      <div data-tour="metrics" className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <MetricCard
-          label="Qualified Leads"
-          value={qualifiedLeads}
-          icon={Users}
-          loading={leadsLoading}
-          subtitle={totalLeads > 0 ? `of ${totalLeads} total` : undefined}
-          accent="text-blue-400"
-        />
-        <MetricCard
-          label="Emails Found"
-          value={emailsFound}
-          icon={Mail}
-          loading={leadsLoading}
-          subtitle={totalLeads > 0 ? `${Math.round((emailsFound / totalLeads) * 100)}% coverage` : undefined}
-          accent="text-emerald-400"
-        />
-        <MetricCard
-          label="Pending Drafts"
-          value={drafts}
-          icon={FileText}
-          accent="text-amber-400"
-        />
-        <MetricCard
-          label="Sent"
-          value={sent}
-          icon={Send}
-          subtitle={approved > 0 ? `${approved} approved` : undefined}
-          accent="text-sky-400"
-        />
-      </div>
-
-      {/* Recent Leads */}
-      <Card>
-        <CardHeader className="pb-3">
-          <div className="flex items-center justify-between">
-            <CardTitle className="text-sm font-semibold">Recent Leads</CardTitle>
-            <Link
-              href="/leads"
-              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
-            >
-              View all
-              <ChevronRight className="h-3 w-3" />
+        <div className="sp-page-actions">
+          {approved > 0 && (
+            <Link href="/outreach">
+              <button className="sp-btn">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
+                {approved} pending
+              </button>
             </Link>
-          </div>
-        </CardHeader>
-        <CardContent>
-          {leadsLoading ? (
-            <div className="space-y-3">
-              {Array.from({ length: 5 }).map((_, i) => (
-                <Skeleton key={i} className="h-10 w-full" />
-              ))}
-            </div>
-          ) : recentLeads.length === 0 ? (
-            <p className="text-sm text-muted-foreground py-8 text-center">
-              No leads yet. Run a scrape to get started.
-            </p>
-          ) : (
-            <div className="space-y-1">
-              {recentLeads.map((lead) => (
-                <div
-                  key={lead.id}
-                  className="flex items-center gap-3 rounded-md px-2 py-2 transition-colors hover:bg-muted/30 cursor-pointer"
-                  onClick={() => setSelectedLead(lead)}
-                >
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium truncate">
-                      {lead.business_name}
-                    </p>
-                    <div className="flex items-center gap-2 mt-0.5">
-                      {lead.venue_category && (
-                        <span className="text-[10px] text-muted-foreground capitalize">
-                          {lead.venue_category.replace(/_/g, " ")}
-                        </span>
-                      )}
-                      {lead.score != null && (
-                        <span className="text-[10px] font-mono text-muted-foreground">
-                          Score: {lead.score}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    {lead.email && (
-                      <Mail className="h-3 w-3 text-emerald-400" />
-                    )}
-                    <Badge
-                      variant="secondary"
-                      className="text-[9px] capitalize px-1.5 py-0"
-                    >
-                      {(lead.stage ?? "scraped").replace(/_/g, " ")}
-                    </Badge>
-                  </div>
-                </div>
-              ))}
-            </div>
           )}
-        </CardContent>
-      </Card>
-
-      {/* Pipeline Activity */}
-      <PipelineActivity />
-
-      {/* Outreach Plan */}
-      <OutreachPlan
-        onLeadClick={(leadId) => {
-          const lead = allLeads.find((l) => l.id === leadId) ?? null;
-          if (lead) setSelectedLead(lead);
-        }}
-      />
-
-      {/* Scrape Controls (admin only) */}
-      {isAdmin && (
-        <div className="space-y-4">
-          <div className="flex items-center gap-2">
-            <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Scrape Controls</h2>
-            <div className="ml-auto flex gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => csvInputRef.current?.click()}
-              >
-                <Upload className="mr-1.5 h-3.5 w-3.5" />
-                Upload Scrape Queries
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={downloadTemplate}
-              >
-                <Download className="mr-1.5 h-3.5 w-3.5" />
-                CSV Template
-              </Button>
-              <input
-                ref={csvInputRef}
-                type="file"
-                accept=".csv,.txt"
-                onChange={handleCsvUpload}
-                className="hidden"
-              />
-            </div>
-          </div>
-
-          {/* Uploaded queries preview */}
-          {uploadedQueries && (
-            <Card className="border-emerald-500/30 bg-emerald-500/5">
-              <CardContent className="p-4">
-                <div className="flex items-start justify-between mb-2">
-                  <div>
-                    <p className="text-sm font-semibold text-emerald-400">Queries uploaded — will be used on the next scrape</p>
-                    <p className="text-xs text-muted-foreground mt-0.5">
-                      {Object.values(uploadedQueries).flat().length} queries across {Object.keys(uploadedQueries).length} source{Object.keys(uploadedQueries).length !== 1 ? "s" : ""}
-                    </p>
-                  </div>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setUploadedQueries(null)}
-                    className="text-muted-foreground hover:text-foreground -mt-1"
-                  >
-                    Dismiss
-                  </Button>
-                </div>
-                <div className="space-y-2">
-                  {Object.entries(uploadedQueries).map(([source, queries]) => (
-                    <div key={source}>
-                      <p className="text-xs font-medium text-muted-foreground mb-1">
-                        {SOURCE_LABELS[source] ?? source} ({queries.length})
-                      </p>
-                      <div className="flex flex-wrap gap-1">
-                        {queries.map((q, i) => (
-                          <Badge key={i} variant="secondary" className="text-[10px] font-mono">
-                            {q}
-                          </Badge>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
+          {isAdmin && (
+            <button
+              className={`sp-btn${isRunning || isScraping ? "" : " primary"}`}
+              onClick={triggerScrapeAnimation}
+              disabled={isRunning || isScraping}
+            >
+              {isScraping || isRunning ? (
+                <>
+                  <RefreshCw size={13} className="sp-spin" />
+                  Scraping… {Math.round(scrapeProgress * 100)}%
+                </>
+              ) : (
+                <>
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4l6 6M20 4l-6 6M4 20l6-6M20 20l-6-6"/><circle cx="12" cy="12" r="3"/></svg>
+                  Run venue scrape
+                </>
+              )}
+            </button>
           )}
-
-        <UpcomingScrapeReview />
-
-        <div data-tour="scrape-controls" className="grid gap-6 lg:grid-cols-2">
-          <ScrapeControl
-            onStart={(queries, limit, headless) =>
-              startScrape({ queries, limit, headless })
-            }
-            isStarting={isStarting}
-            isRunning={isRunning}
-          />
-          {status ? <ScrapeStatus status={status} /> : <ScrapeHistory />}
         </div>
+      </div>
+
+      {/* Live scrape / scraping animation banners */}
+      {(isScraping || isRunning) && (
+        <div className="sp-scrape-banner">
+          <div className="sp-row" style={{ marginBottom: 6 }}>
+            <span style={{ fontWeight: 500 }}>Scraping venues across postcodes</span>
+            <span className="sp-spacer" />
+            <span className="sp-mono sp-muted">{Math.round(scrapeProgress * 184)} / 184 sources</span>
+          </div>
+          <div className="sp-progress-track">
+            <div className="sp-progress-fill" style={{ width: `${scrapeProgress * 100}%` }} />
+          </div>
         </div>
       )}
+
+      <ScrapeRunningBanner />
+      <EditReflectionBanner />
+
+      {/* Stat cards */}
+      <div className="sp-grid-4" style={{ marginBottom: 16 }}>
+        <StatCard
+          label="Total leads"
+          value={leadsLoading ? null : totalLeads}
+          delta={emailsFound > 0 ? `${emailsFound} with email` : undefined}
+        />
+        <StatCard
+          label="Emails sent"
+          value={sent}
+          delta={approved > 0 ? `${approved} approved` : "all sent"}
+        />
+        <StatCard
+          label="Reply rate"
+          value={replyRate}
+          unit="%"
+          delta={`${replies} replies`}
+        />
+        <StatCard
+          label="Pending approval"
+          value={drafts + approved}
+          delta={approved > 0 ? "action needed" : "on target"}
+          warn={approved > 6}
+        />
+      </div>
+
+      {/* AI Weekly Plan */}
+      <div style={{ marginBottom: 16 }}>
+        <OutreachPlan
+          onLeadClick={(leadId) => {
+            const lead = allLeads.find((l) => l.id === leadId) ?? null;
+            if (lead) setSelectedLead(lead);
+          }}
+        />
+      </div>
+
+      {/* Pipeline + Team */}
+      <div className="sp-grid-2" style={{ marginBottom: 16 }}>
+        <div className="sp-card">
+          <div className="sp-card-head">
+            <span className="sp-card-title">Pipeline</span>
+            <span className="sp-card-subtitle">{totalLeads} leads across 5 stages</span>
+            <span className="sp-spacer" />
+            <Link href="/analytics">
+              <button className="sp-btn sm ghost">View funnel →</button>
+            </Link>
+          </div>
+          <div className="sp-card-body">
+            <div className="sp-pipeline">
+              {pipelineStages.map((s) => (
+                <div key={s} className="sp-pipeline-col">
+                  <div className="sp-pipeline-count">{pipeline[s]}</div>
+                  <div
+                    className="sp-pipeline-bar"
+                    style={{
+                      height: `${(pipeline[s] / pipelineMax) * 110}px`,
+                      background: STAGE_COLORS[s],
+                    }}
+                  />
+                  <div className="sp-pipeline-label" style={{ textTransform: "capitalize" }}>{s}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div className="sp-card">
+          <div className="sp-card-head">
+            <span className="sp-card-title">Email performance</span>
+          </div>
+          <div className="sp-card-body" style={{ paddingTop: 4 }}>
+            <div className="sp-team-row" style={{ color: "var(--sp-ink-3)", fontSize: 11, textTransform: "uppercase", letterSpacing: "0.04em", fontWeight: 500, borderBottom: "1px solid var(--sp-line)" }}>
+              <span>Status</span>
+              <span className="sp-mono" style={{ textAlign: "right" }}>Count</span>
+              <span className="sp-mono" style={{ textAlign: "right" }}>—</span>
+              <span className="sp-mono" style={{ textAlign: "right" }}>—</span>
+              <span style={{ textAlign: "right" }}>—</span>
+            </div>
+            {[
+              { label: "Drafts", val: drafts, color: "var(--sp-ink-3)" },
+              { label: "Approved", val: approved, color: "var(--sp-warn)" },
+              { label: "Sent", val: sent, color: "var(--sp-info)" },
+              { label: "Replies", val: replies, color: "var(--sp-good)" },
+            ].map((row) => (
+              <div key={row.label} style={{ display: "grid", gridTemplateColumns: "1fr 70px", alignItems: "center", padding: "8px 0", borderBottom: "1px solid var(--sp-line)", fontSize: 12.5, color: "var(--sp-ink)" }}>
+                <span>{row.label}</span>
+                <span style={{ fontFamily: "var(--font-mono, monospace)", textAlign: "right", fontWeight: 600, color: row.color }}>{row.val}</span>
+              </div>
+            ))}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 70px", alignItems: "center", padding: "8px 0", fontSize: 12.5, color: "var(--sp-ink)" }}>
+              <span>Reply rate</span>
+              <span style={{ fontFamily: "var(--font-mono, monospace)", textAlign: "right", fontWeight: 600, color: "var(--sp-good)" }}>{replyRate}%</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Hot new leads */}
+      <div className="sp-card" style={{ marginBottom: 16 }}>
+        <div className="sp-card-head">
+          <span className="sp-card-title">Hot new leads</span>
+          <span className="sp-card-subtitle">Highest scores · awaiting first contact</span>
+          <span className="sp-spacer" />
+          <Link href="/leads">
+            <button className="sp-btn sm ghost">All leads →</button>
+          </Link>
+        </div>
+        <table className="sp-tbl">
+          <thead>
+            <tr>
+              <th>Venue</th>
+              <th>Category</th>
+              <th>Postcode</th>
+              <th>Score</th>
+              <th>Assigned</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {leadsLoading ? (
+              <tr>
+                <td colSpan={6} style={{ padding: 20, textAlign: "center", color: "var(--sp-ink-3)" }}>
+                  Loading…
+                </td>
+              </tr>
+            ) : hotLeads.length === 0 ? (
+              <tr>
+                <td colSpan={6} style={{ padding: 20, textAlign: "center", color: "var(--sp-ink-3)" }}>
+                  No high-score new leads yet.
+                </td>
+              </tr>
+            ) : (
+              hotLeads.map((l) => (
+                <tr key={l.id} onClick={() => setSelectedLead(l)}>
+                  <td className="col-name">
+                    <span style={{ color: "var(--sp-ink-4)", fontFamily: "var(--font-mono, monospace)", fontSize: 11, marginRight: 8 }}>
+                      {l.id.slice(-4)}
+                    </span>
+                    {l.business_name}
+                  </td>
+                  <td style={{ color: "var(--sp-ink-2)" }}>
+                    {l.venue_category?.replace(/_/g, " ") ?? "—"}
+                  </td>
+                  <td className="sp-mono" style={{ color: "var(--sp-ink-2)" }}>
+                    {l.location_postcode ?? "—"}
+                  </td>
+                  <td>
+                    <FitScore score={l.score ?? 0} />
+                  </td>
+                  <td>
+                    {l.assigned_to_name ? (
+                      <div className="sp-row" style={{ gap: 6 }}>
+                        <PersonAvatar name={l.assigned_to_name} size={20} />
+                        {l.assigned_to_name}
+                      </div>
+                    ) : (
+                      <span className="sp-muted">Unassigned</span>
+                    )}
+                  </td>
+                  <td style={{ textAlign: "right" }}>
+                    <Link href="/outreach">
+                      <button className="sp-btn sm" onClick={(e) => e.stopPropagation()}>
+                        Draft email
+                      </button>
+                    </Link>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Admin: Scrape Controls */}
+      {isAdmin && (
+        <div className="sp-card" style={{ marginBottom: 16 }}>
+          <div className="sp-card-head">
+            <span className="sp-card-title">Scrape Controls</span>
+            <span className="sp-spacer" />
+            <button
+              className="sp-btn sm"
+              onClick={() => csvInputRef.current?.click()}
+            >
+              <Upload size={12} />
+              Upload Queries
+            </button>
+            <button className="sp-btn sm" onClick={downloadTemplate}>
+              <Download size={12} />
+              CSV Template
+            </button>
+            <input
+              ref={csvInputRef}
+              type="file"
+              accept=".csv,.txt"
+              onChange={handleCsvUpload}
+              className="hidden"
+            />
+          </div>
+          <div className="sp-card-body">
+            <UpcomingScrapeReview />
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24, marginTop: 16 }}>
+              <ScrapeControl
+                onStart={(queries, limit, headless) =>
+                  startScrape({ queries, limit, headless })
+                }
+                isStarting={isStarting}
+                isRunning={isRunning}
+              />
+              {status ? <ScrapeStatus status={status} /> : <ScrapeHistory />}
+            </div>
+          </div>
+        </div>
+      )}
+
       <LeadDetailDialog
         lead={selectedLead}
         onClose={() => setSelectedLead(null)}
@@ -368,47 +454,37 @@ export default function DashboardPage() {
   );
 }
 
-/* ------------------------------------------------------------------ */
-
-function MetricCard({
+function StatCard({
   label,
   value,
-  icon: Icon,
-  subtitle,
-  loading,
-  accent = "text-primary",
+  unit,
+  delta,
+  warn,
 }: {
   label: string;
-  value: number;
-  icon: React.ElementType;
-  subtitle?: string;
-  loading?: boolean;
-  accent?: string;
+  value: number | string | null;
+  unit?: string;
+  delta?: string;
+  warn?: boolean;
 }) {
   return (
-    <Card className="relative overflow-hidden">
-      <CardContent className="p-5">
-        <div className="flex items-start justify-between">
-          <div className="space-y-1">
-            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-              {label}
-            </p>
-            {loading ? (
-              <Skeleton className="h-8 w-16" />
-            ) : (
-              <p className="text-3xl font-bold tabular-nums tracking-tight">
-                {value.toLocaleString()}
-              </p>
-            )}
-            {subtitle && (
-              <p className="text-[11px] text-muted-foreground">{subtitle}</p>
-            )}
-          </div>
-          <div className={`rounded-lg bg-muted/50 p-2.5 ${accent}`}>
-            <Icon className="h-5 w-5" />
-          </div>
+    <div className="sp-stat">
+      <div className="sp-stat-label">{label}</div>
+      <div className="sp-stat-value">
+        {value === null ? (
+          <span style={{ fontSize: 18, color: "var(--sp-ink-4)" }}>—</span>
+        ) : (
+          <>
+            {typeof value === "number" ? value.toLocaleString() : value}
+            {unit && <span className="unit">{unit}</span>}
+          </>
+        )}
+      </div>
+      {delta && (
+        <div className={`sp-stat-delta${warn ? " down" : ""}`}>
+          {delta}
         </div>
-      </CardContent>
-    </Card>
+      )}
+    </div>
   );
 }

@@ -59,16 +59,21 @@ export default function AnalyticsPage() {
       : 0;
 
   return (
-    <div className="mx-auto max-w-6xl space-y-6 p-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold tracking-tight">Analytics</h1>
+    <div className="sp-page" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <div className="sp-page-head">
+        <div>
+          <h1 className="sp-page-title">Analytics</h1>
+          <div className="sp-page-subtitle">Last 12 weeks · all team members</div>
+        </div>
         {isAdmin && (
-          <Link href="/analytics/team">
-            <Button variant="outline" size="sm">
-              <Users className="h-3.5 w-3.5 mr-1.5" />
-              Team Metrics
-            </Button>
-          </Link>
+          <div className="sp-page-actions">
+            <Link href="/analytics/team">
+              <button className="sp-btn sm">
+                <Users size={13} />
+                Team Metrics
+              </button>
+            </Link>
+          </div>
         )}
       </div>
 

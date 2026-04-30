@@ -3,7 +3,7 @@
 import { usePathname } from "next/navigation";
 import { Loader2 } from "lucide-react";
 import { AuthProvider, useAuth } from "@/lib/auth-context";
-import { Navbar } from "@/components/navbar";
+import { AppShell } from "@/components/app-shell";
 import { TourProvider } from "@/components/tour-provider";
 import { AppTour } from "@/components/app-tour";
 import { GettingStarted } from "@/components/getting-started";
@@ -42,13 +42,14 @@ function AuthGate({ children }: { children: React.ReactNode }) {
     );
   }
 
-  // Logged in — show navbar + onboarding + tour + content
+  // Logged in — sidebar layout + onboarding + tour + content
   return (
     <TourProvider>
-      <Navbar />
-      <GettingStarted />
-      <AppTour />
-      {children}
+      <AppShell>
+        <GettingStarted />
+        <AppTour />
+        {children}
+      </AppShell>
     </TourProvider>
   );
 }
