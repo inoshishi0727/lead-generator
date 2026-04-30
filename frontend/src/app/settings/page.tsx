@@ -64,7 +64,7 @@ export default function SettingsPage() {
 
   if (loading || isLoading) {
     return (
-      <div className="space-y-4">
+      <div className="sp-page space-y-4">
         <Skeleton className="h-8 w-48" />
         <Skeleton className="h-64 w-full" />
       </div>
@@ -72,8 +72,12 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="space-y-6">
-      <h1 className="text-2xl font-bold tracking-tight">Settings</h1>
+    <div className="sp-page space-y-6">
+      <div className="sp-page-head">
+        <div>
+          <h1 className="sp-page-title">Settings</h1>
+        </div>
+      </div>
 
       {/* Team Management (admin only) */}
       {isAdmin && <TeamManager />}

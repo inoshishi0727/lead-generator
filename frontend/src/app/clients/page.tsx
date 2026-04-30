@@ -126,12 +126,12 @@ export default function ClientsPage() {
         : <ArrowDown className="h-3 w-3 ml-1 inline" />;
 
   return (
-    <div className="space-y-6">
+    <div className="sp-page space-y-6">
       {/* Header */}
-      <div className="flex items-end justify-between gap-4">
+      <div className="sp-page-head">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Clients</h1>
-          <p className="text-sm text-muted-foreground">
+          <h1 className="sp-page-title">Clients</h1>
+          <div className="sp-page-subtitle">
             {isLoading
               ? "Loading…"
               : `${clients.length} active client${clients.length !== 1 ? "s" : ""}${filtered.length !== clients.length ? ` · ${filtered.length} shown` : ""}`}
