@@ -260,15 +260,15 @@ export default function LeadsPage() {
           </div>
         </div>
       )}
-      <div className="flex items-end justify-between">
+      <div className="sp-page-head">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Leads</h1>
-          <p className="text-sm text-muted-foreground">
+          <h1 className="sp-page-title">Leads</h1>
+          <div className="sp-page-subtitle">
             {total} lead{total !== 1 ? "s" : ""}
-          </p>
+          </div>
         </div>
         {isAdmin && (
-          <div className="flex gap-2">
+          <div className="sp-page-actions">
             <Button
               variant="outline"
               size="sm"
