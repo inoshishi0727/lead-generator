@@ -118,6 +118,7 @@ function rejectionLabel(reason: string): string {
 export function MessageCard({ message, inConversation, emailCapReached, isDuplicate }: Props) {
   const [showTimeline, setShowTimeline] = useState(false);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
+  const [rejectOpen, setRejectOpen] = useState(false);
   const [threadOpen, setThreadOpen] = useState(inConversation && !!message.has_reply);
   const [menuOpen, setMenuOpen] = useState(false);
   const [activeAction, setActiveAction] = useState<string | null>(null);
@@ -195,11 +196,13 @@ export function MessageCard({ message, inConversation, emailCapReached, isDuplic
     );
   }
 
-  function handleReject() {
+  function handleReject(reason: string) {
+    setRejectOpen(false);
     setActiveAction("reject");
     updateMutation.mutate({
       id: message.id,
       status: "rejected",
+      rejection_reason: reason,
     }, {
       onSettled: () => setActiveAction(null),
     });
@@ -756,7 +759,7 @@ export function MessageCard({ message, inConversation, emailCapReached, isDuplic
                 <Button
                   size="sm"
                   variant="destructive"
-                  onClick={handleReject}
+                  onClick={() => setRejectOpen((v) => !v)}
                   disabled={isPending}
                 >
                   {activeAction === "reject" ? (
@@ -793,7 +796,7 @@ export function MessageCard({ message, inConversation, emailCapReached, isDuplic
               <Button
                 size="sm"
                 variant="destructive"
-                onClick={handleReject}
+                onClick={() => setRejectOpen((v) => !v)}
                 disabled={isPending}
               >
                 {activeAction === "reject" ? (
@@ -1057,6 +1060,34 @@ export function MessageCard({ message, inConversation, emailCapReached, isDuplic
                 {generateFollowupMutation.isPending ? "Generating..." : "Generate Follow-up"}
               </Button>
             )}
+          </div>
+        )}
+        {rejectOpen && (
+          <div className="mt-3 border-t border-red-500/20 pt-3">
+            <p className="text-xs text-red-400 mb-2">Why are you rejecting this draft?</p>
+            <div className="flex flex-wrap gap-1.5 mb-2">
+              {[
+                { value: "wrong_tone",    label: "Wrong tone" },
+                { value: "wrong_product", label: "Wrong product" },
+                { value: "not_suitable",  label: "Not suitable" },
+                { value: "needs_edit",    label: "Needs editing" },
+                { value: "other",         label: "Other" },
+              ].map(({ value, label }) => (
+                <button
+                  key={value}
+                  onClick={() => handleReject(value)}
+                  className="rounded-full border border-red-500/30 px-2.5 py-0.5 text-xs text-red-400 hover:bg-red-500/10 transition-colors"
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={() => setRejectOpen(false)}
+              className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+            >
+              Cancel
+            </button>
           </div>
         )}
       </CardContent>

@@ -1,8 +1,10 @@
 "use client";
 
 import { useState, useMemo, useCallback } from "react";
+import { useDebounce } from "@/hooks/use-debounce";
 import { useQuery } from "@tanstack/react-query";
 import { getClients } from "@/lib/firestore-api";
+import { CampaignEditDialog } from "@/components/campaign-edit-dialog";
 import {
   useCampaigns,
   useCreateCampaign,
@@ -29,6 +31,7 @@ import {
   Square,
   ExternalLink,
   ChevronLeft,
+  ChevronRight,
   Sparkles,
   Star,
   MessageSquare,
@@ -44,7 +47,18 @@ import {
   Search,
   SlidersHorizontal,
   CalendarClock,
+  ArrowUpDown,
+  ArrowUp,
+  ArrowDown,
 } from "lucide-react";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { toast } from "sonner";
 import type { Lead, Campaign, OutreachMessage } from "@/lib/types";
 
@@ -57,16 +71,63 @@ const CAMPAIGN_TYPES = [
 ];
 
 type SendMode = "recommended" | "all" | "custom";
+type SortKey = "name" | "type" | "product" | "clients" | "status" | "created_at";
+type SortDir = "asc" | "desc";
+
+const TYPE_COLORS: Record<string, string> = {
+  seasonal:    "border-amber-500/30 text-amber-400 bg-amber-500/10",
+  reorder:     "border-sky-500/30 text-sky-400 bg-sky-500/10",
+  new_product: "border-emerald-500/30 text-emerald-400 bg-emerald-500/10",
+  new_menu:    "border-purple-500/30 text-purple-400 bg-purple-500/10",
+  event:       "border-rose-500/30 text-rose-400 bg-rose-500/10",
+};
+
+const STATUS_COLORS: Record<string, string> = {
+  draft:     "border-amber-500/30 text-amber-400 bg-amber-500/10",
+  active:    "border-emerald-500/30 text-emerald-400 bg-emerald-500/10",
+  completed: "border-blue-500/30 text-blue-400 bg-blue-500/10",
+  archived:  "border-zinc-500/30 text-zinc-400 bg-zinc-500/10",
+};
+
+const LIST_SORT_COLS: { key: SortKey; label: string; className: string }[] = [
+  { key: "name",       label: "Campaign",  className: "w-[32%]" },
+  { key: "product",    label: "Product",   className: "w-[14%]" },
+  { key: "clients",    label: "Clients",   className: "w-[8%]" },
+  { key: "status",     label: "Status",    className: "w-[12%]" },
+  { key: "created_at", label: "Created",   className: "w-[14%]" },
+];
+
+function sortCampaigns(campaigns: Campaign[], key: SortKey, dir: SortDir): Campaign[] {
+  return [...campaigns].sort((a, b) => {
+    if (key === "clients") {
+      const diff = a.recommended_lead_ids.length - b.recommended_lead_ids.length;
+      return dir === "asc" ? diff : -diff;
+    }
+    let av = "";
+    let bv = "";
+    if (key === "name")       { av = a.name || a.lead_product; bv = b.name || b.lead_product; }
+    if (key === "type")       { av = a.campaign_type; bv = b.campaign_type; }
+    if (key === "product")    { av = a.lead_product; bv = b.lead_product; }
+    if (key === "status")     { av = a.status; bv = b.status; }
+    if (key === "created_at") { av = a.created_at; bv = b.created_at; }
+    const cmp = av.localeCompare(bv);
+    return dir === "asc" ? cmp : -cmp;
+  });
+}
 
 export default function CampaignsPage() {
   const [activeCampaign, setActiveCampaign] = useState<Campaign | null>(null);
+  const [editingCampaign, setEditingCampaign] = useState<Campaign | null>(null);
   const [showNewCampaign, setShowNewCampaign] = useState(false);
   const [filter, setFilter] = useState<"all" | "active" | "draft" | "completed">("all");
   const [search, setSearch] = useState("");
+  const debouncedSearch = useDebounce(search, 200);
   const [showFilters, setShowFilters] = useState(false);
   const [typeFilter, setTypeFilter] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  const [sortKey, setSortKey] = useState<SortKey>("created_at");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
 
   const { data: clients = [] } = useQuery({ queryKey: ["clients"], queryFn: getClients });
   const { data: campaigns = [], isLoading } = useCampaigns();
@@ -97,8 +158,8 @@ export default function CampaignsPage() {
     drafts;
 
   const filtered = byStatus.filter((c) => {
-    if (search) {
-      const q = search.toLowerCase();
+    if (debouncedSearch) {
+      const q = debouncedSearch.toLowerCase();
       const match =
         c.campaign_type.toLowerCase().includes(q) ||
         c.lead_product.toLowerCase().includes(q) ||
@@ -114,6 +175,20 @@ export default function CampaignsPage() {
   });
 
   const hasActiveFilters = !!(typeFilter || dateFrom || dateTo);
+
+  const handleSort = (key: SortKey) => {
+    if (key === sortKey) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    else { setSortKey(key); setSortDir("asc"); }
+  };
+
+  const SortIcon = ({ k }: { k: SortKey }) =>
+    k !== sortKey
+      ? <ArrowUpDown className="h-3 w-3 opacity-30 ml-1 inline" />
+      : sortDir === "asc"
+        ? <ArrowUp className="h-3 w-3 ml-1 inline" />
+        : <ArrowDown className="h-3 w-3 ml-1 inline" />;
+
+  const sortedFiltered = sortCampaigns(filtered, sortKey, sortDir);
 
   return (
     <div className="space-y-6">
@@ -236,8 +311,8 @@ export default function CampaignsPage() {
       </div>
 
       {isLoading ? (
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-36 w-full" />)}
+        <div className="space-y-2">
+          {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-14 w-full" />)}
         </div>
       ) : filtered.length === 0 ? (
         <Card className="py-12 text-center text-muted-foreground">
@@ -248,11 +323,116 @@ export default function CampaignsPage() {
           )}
         </Card>
       ) : (
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {filtered.map((c) => (
-            <CampaignCard key={c.id} campaign={c} onClick={() => setActiveCampaign(c)} />
-          ))}
-        </div>
+        <Card className="shadow-md">
+          <div className="max-h-[70vh] overflow-auto">
+            <Table className="w-full table-fixed">
+              <TableHeader>
+                <TableRow>
+                  {LIST_SORT_COLS.map(({ key, label, className }) => (
+                    <TableHead
+                      key={key}
+                      className={`${className} cursor-pointer select-none`}
+                      onClick={() => handleSort(key)}
+                    >
+                      {label}
+                      <SortIcon k={key} />
+                    </TableHead>
+                  ))}
+                  <TableHead className="w-8" />
+                  <TableHead className="w-8" />
+                </TableRow>
+              </TableHeader>
+
+              <TableBody>
+                {sortedFiltered.map((c, index) => {
+                  const typeLabel = CAMPAIGN_TYPES.find((t) => t.value === c.campaign_type)?.label ?? c.campaign_type;
+                  const typeColor = TYPE_COLORS[c.campaign_type] ?? "border-zinc-500/30 text-zinc-400 bg-zinc-500/10";
+                  const statusColor = STATUS_COLORS[c.status] ?? "border-zinc-500/30 text-zinc-400 bg-zinc-500/10";
+                  return (
+                    <TableRow
+                      key={c.id}
+                      className={`transition-colors hover:bg-accent/50 cursor-pointer ${index % 2 === 1 ? "bg-muted/30" : ""}`}
+                      onClick={() => setActiveCampaign(c)}
+                    >
+                      {/* Campaign name + type */}
+                      <TableCell className="font-medium text-primary truncate py-3">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="truncate">{c.name || c.lead_product}</span>
+                          {c.status === "draft" && (
+                            <Badge variant="outline" className="shrink-0 text-[9px] border-amber-500/30 text-amber-400 bg-amber-500/10">
+                              draft
+                            </Badge>
+                          )}
+                        </div>
+                        <div className="mt-0.5">
+                          <Badge variant="outline" className={`text-[10px] capitalize ${typeColor}`}>
+                            {typeLabel}
+                          </Badge>
+                        </div>
+                      </TableCell>
+
+                      {/* Product */}
+                      <TableCell className="py-3 text-xs text-muted-foreground truncate">
+                        {c.lead_product}
+                        {c.season && (
+                          <div className="text-[11px] opacity-70 truncate">{c.season}</div>
+                        )}
+                      </TableCell>
+
+                      {/* Clients count */}
+                      <TableCell className="py-3 text-xs text-muted-foreground">
+                        {c.recommended_lead_ids.length}
+                      </TableCell>
+
+                      {/* Status */}
+                      <TableCell className="py-3">
+                        <Badge variant="outline" className={`text-[9px] capitalize ${statusColor}`}>
+                          {c.status}
+                        </Badge>
+                      </TableCell>
+
+                      {/* Created */}
+                      <TableCell className="py-3 text-xs text-muted-foreground">
+                        {c.created_at
+                          ? new Date(c.created_at).toLocaleDateString("en-GB", {
+                              day: "numeric", month: "short", year: "numeric",
+                            })
+                          : "—"}
+                      </TableCell>
+
+                      {/* Edit button */}
+                      <TableCell className="py-3 text-right">
+                        <button
+                          className="text-muted-foreground hover:text-foreground transition-colors"
+                          onClick={(e) => { e.stopPropagation(); setEditingCampaign(c); }}
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                        </button>
+                      </TableCell>
+
+                      {/* Open button */}
+                      <TableCell className="py-3 text-right">
+                        <button
+                          className="text-muted-foreground hover:text-foreground transition-colors"
+                          onClick={(e) => { e.stopPropagation(); setActiveCampaign(c); }}
+                        >
+                          <ChevronRight className="h-3.5 w-3.5" />
+                        </button>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          </div>
+        </Card>
+      )}
+
+      {editingCampaign && (
+        <CampaignEditDialog
+          campaign={editingCampaign}
+          onClose={() => setEditingCampaign(null)}
+        />
       )}
 
       {showNewCampaign && (
@@ -265,43 +445,6 @@ export default function CampaignsPage() {
         />
       )}
     </div>
-  );
-}
-
-// ---- Campaign card ----
-
-function CampaignCard({ campaign, onClick }: { campaign: Campaign; onClick: () => void }) {
-  const typeLabel = CAMPAIGN_TYPES.find((t) => t.value === campaign.campaign_type)?.label ?? campaign.campaign_type;
-  return (
-    <button
-      onClick={onClick}
-      className={`rounded-lg border bg-card p-4 text-left hover:bg-accent/30 transition-colors ${
-        campaign.status === "draft"
-          ? "border-amber-500/30 hover:border-amber-500/50"
-          : "border-border/60 hover:border-primary/40"
-      }`}
-    >
-      <div className="flex items-start justify-between gap-2 mb-2">
-        <div className="flex items-center gap-1.5 flex-wrap">
-          <Badge variant="secondary" className="text-[10px]">{typeLabel}</Badge>
-          {campaign.status === "draft" && (
-            <Badge variant="outline" className="text-[9px] border-amber-500/30 text-amber-400">Draft</Badge>
-          )}
-          {campaign.status === "completed" && (
-            <Badge variant="outline" className="text-[9px] border-emerald-500/30 text-emerald-400">Completed</Badge>
-          )}
-        </div>
-        <span className="text-[10px] text-muted-foreground shrink-0">{campaign.season}</span>
-      </div>
-      <p className="text-sm font-semibold mb-1">{campaign.name || campaign.lead_product}</p>
-      {campaign.timeframe && (
-        <p className="text-[11px] text-muted-foreground mb-1">{campaign.timeframe}</p>
-      )}
-      <p className="text-[11px] text-muted-foreground line-clamp-2 leading-relaxed">{campaign.brief}</p>
-      <p className="text-[11px] text-muted-foreground mt-3 pt-3 border-t border-border/40">
-        {campaign.recommended_lead_ids.length} recommended client{campaign.recommended_lead_ids.length !== 1 ? "s" : ""}
-      </p>
-    </button>
   );
 }
 
@@ -946,8 +1089,8 @@ function CampaignDetailView({
                   onApprove={() =>
                     updateMessageMutation.mutate({ id: msg.id, status: "approved", lead_id: msg.lead_id })
                   }
-                  onReject={() =>
-                    updateMessageMutation.mutate({ id: msg.id, status: "rejected", lead_id: msg.lead_id })
+                  onReject={(reason) =>
+                    updateMessageMutation.mutate({ id: msg.id, status: "rejected", lead_id: msg.lead_id, rejection_reason: reason })
                   }
                 />
               ))}
@@ -1347,6 +1490,14 @@ function CampaignTimeline({ drafts, campaign }: { drafts: OutreachMessage[]; cam
   );
 }
 
+const REJECT_REASONS = [
+  { value: "wrong_tone",    label: "Wrong tone" },
+  { value: "wrong_product", label: "Wrong product" },
+  { value: "not_suitable",  label: "Not suitable" },
+  { value: "needs_edit",    label: "Needs editing" },
+  { value: "other",         label: "Other" },
+];
+
 function DraftCard({
   message,
   onApprove,
@@ -1354,10 +1505,11 @@ function DraftCard({
 }: {
   message: OutreachMessage;
   onApprove: () => void;
-  onReject: () => void;
+  onReject: (reason: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [rejectOpen, setRejectOpen] = useState(false);
   const [editSubject, setEditSubject] = useState(message.subject ?? "");
   const [editContent, setEditContent] = useState(message.content);
   const regenerateMutation = useRegenerateMessage();
@@ -1375,7 +1527,7 @@ function DraftCard({
     toast.promise(
       regenerateMutation.mutateAsync({ id: message.id }),
       {
-        loading: `Regenerating draft for ${message.business_name}…`,
+        loading: "Regenerating draft…",
         success: "Draft regenerated",
         error: "Failed to regenerate draft",
       }
@@ -1449,7 +1601,7 @@ function DraftCard({
               <Pencil className="h-3.5 w-3.5" />
             </button>
           )}
-          {!editing && message.status === "draft" && (
+          {!editing && message.status === "draft" && !rejectOpen && (
             <>
               <button
                 onClick={onApprove}
@@ -1459,7 +1611,7 @@ function DraftCard({
                 <ThumbsUp className="h-3.5 w-3.5" />
               </button>
               <button
-                onClick={onReject}
+                onClick={() => setRejectOpen(true)}
                 title="Reject"
                 className="rounded p-1.5 text-muted-foreground hover:text-red-400 hover:bg-red-500/10 transition-colors"
               >
@@ -1497,6 +1649,29 @@ function DraftCard({
           )}
         </div>
       </div>
+
+      {rejectOpen && (
+        <div className="mt-3 border-t border-red-500/20 pt-3">
+          <p className="text-xs text-red-400 mb-2">Why are you rejecting this draft?</p>
+          <div className="flex flex-wrap gap-1.5 mb-2">
+            {REJECT_REASONS.map(({ value, label }) => (
+              <button
+                key={value}
+                onClick={() => { onReject(value); setRejectOpen(false); }}
+                className="rounded-full border border-red-500/30 px-2.5 py-0.5 text-xs text-red-400 hover:bg-red-500/10 transition-colors"
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <button
+            onClick={() => setRejectOpen(false)}
+            className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
 
       {editing && (
         <div className="mt-3 border-t border-border/40 pt-3 space-y-2">
