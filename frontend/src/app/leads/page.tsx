@@ -194,6 +194,12 @@ export default function LeadsPage() {
     }
   }, [emailBannerDismissed]);
 
+  // Auto-toggle emailOnly: email ingestion leads don't have venue emails yet,
+  // so uncheck when viewing them; restore when switching to any other source.
+  useEffect(() => {
+    setEmailOnly(source !== "email_ingestion");
+  }, [source]);
+
   const allNewLeads = [...newEmailLeads, ...newScrapedLeads];
   const showEmailBanner = allNewLeads.length > 0 && !emailBannerDismissed;
 
