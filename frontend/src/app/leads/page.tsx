@@ -204,7 +204,7 @@ export default function LeadsPage() {
   const showEmailBanner = allNewLeads.length > 0 && !emailBannerDismissed;
 
   return (
-    <div className="space-y-6">
+    <div className="sp-page space-y-6">
       {showEmailBanner && (
         <div className="rounded-lg border border-sky-500/30 bg-sky-500/10 px-4 py-3 text-sm space-y-2">
           <div className="flex items-center justify-between gap-3">
@@ -358,7 +358,7 @@ export default function LeadsPage() {
 
       {showQueries && <SearchQueryManager />}
 
-      <div data-tour="leads-filters" className="sticky top-0 z-30 bg-background pt-2 pb-3 -mx-4 px-4 border-b border-border/30 space-y-2">
+      <div data-tour="leads-filters" className="sticky top-0 z-30 bg-background pt-2 pb-3 -mx-7 px-7 border-b border-border/30 space-y-2">
         {/* Row 1: dropdowns — fixed widths so they never resize when options change */}
         <div className="flex flex-wrap gap-2">
           <select

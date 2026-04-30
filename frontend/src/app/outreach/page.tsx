@@ -273,11 +273,11 @@ export default function OutreachPage() {
   }
 
   return (
-    <div className="sp-page" style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+    <div className="sp-page space-y-5">
       <div className="sp-page-head">
         <div>
           <h1 className="sp-page-title">Outreach</h1>
-          <div className="sp-page-subtitle">{allMessages.length} message{allMessages.length !== 1 ? "s" : ""}</div>
+          <div className="sp-page-subtitle">{messages?.length ?? 0} message{(messages?.length ?? 0) !== 1 ? "s" : ""}</div>
         </div>
         <div data-tour="outreach-actions" className="sp-page-actions">
           <Button
