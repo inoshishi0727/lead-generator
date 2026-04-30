@@ -102,6 +102,9 @@ export async function getLeads(filters?: {
       rejection_reason: data.rejection_reason || null,
       rejection_notes: data.rejection_notes || null,
       batch_id: data.batch_id || null,
+      added_by_name: data.added_by_name || null,
+      added_by_email: data.added_by_email || null,
+      created_at: data.created_at || data.scraped_at || null,
       assigned_to: data.assigned_to || null,
       assigned_to_name: data.assigned_to_name || null,
       assigned_at: data.assigned_at || null,
@@ -184,6 +187,9 @@ export async function getLeadById(id: string): Promise<Lead | null> {
     rejection_reason: data.rejection_reason || null,
     rejection_notes: data.rejection_notes || null,
     batch_id: data.batch_id || null,
+    added_by_name: data.added_by_name || null,
+    added_by_email: data.added_by_email || null,
+    created_at: data.created_at || data.scraped_at || null,
     assigned_to: data.assigned_to || null,
     assigned_to_name: data.assigned_to_name || null,
     assigned_at: data.assigned_at || null,
@@ -687,6 +693,75 @@ export async function restoreOriginalEmail(messageId: string): Promise<void> {
     if (leadSnap.exists() && leadSnap.data()._original_email) {
       await updateDoc(leadRef, { email: leadSnap.data()._original_email });
     }
+  }
+}
+
+// --- Campaign Edit History ---
+
+export interface CampaignEdit {
+  id: string;
+  edited_by: string;
+  edited_by_name: string;
+  edited_at: string;
+  changes: Record<string, { before: unknown; after: unknown }>;
+}
+
+export async function getCampaignEditHistory(campaignId: string): Promise<CampaignEdit[]> {
+  const ref = collection(db, "campaigns", campaignId, "campaign_edits");
+  const q = query(ref, orderBy("edited_at", "desc"), fbLimit(50));
+  const snap = await getDocs(q);
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() } as CampaignEdit));
+}
+
+export async function addCampaignEditHistory(
+  campaignId: string,
+  changes: Record<string, { before: unknown; after: unknown }>,
+  editedBy: string,
+  editedByName: string
+): Promise<void> {
+  if (Object.keys(changes).length === 0) return;
+  const histRef = collection(db, "campaigns", campaignId, "campaign_edits");
+  await addDoc(histRef, {
+    edited_by: editedBy,
+    edited_by_name: editedByName,
+    edited_at: new Date().toISOString(),
+    changes,
+  });
+}
+
+// --- Client Edit History ---
+
+export interface ClientEdit {
+  id: string;
+  edited_by: string;
+  edited_by_name: string;
+  edited_at: string;
+  changes: Record<string, { before: unknown; after: unknown }>;
+}
+
+export async function getClientEditHistory(leadId: string): Promise<ClientEdit[]> {
+  const ref = collection(db, "leads", leadId, "client_edits");
+  const q = query(ref, orderBy("edited_at", "desc"), fbLimit(50));
+  const snap = await getDocs(q);
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() } as ClientEdit));
+}
+
+export async function saveClientEdit(
+  leadId: string,
+  firestoreUpdates: Record<string, unknown>,
+  changes: Record<string, { before: unknown; after: unknown }>,
+  editedBy: string,
+  editedByName: string
+): Promise<void> {
+  await updateLeadFields(leadId, firestoreUpdates);
+  if (Object.keys(changes).length > 0) {
+    const histRef = collection(db, "leads", leadId, "client_edits");
+    await addDoc(histRef, {
+      edited_by: editedBy,
+      edited_by_name: editedByName,
+      edited_at: new Date().toISOString(),
+      changes,
+    });
   }
 }
 

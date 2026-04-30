@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import React, { useState } from "react";
 import {
   Table,
   TableBody,
@@ -16,7 +16,6 @@ import {
   Download,
   Check,
   X,
-  ChevronDown,
   AlarmClock,
   Building2,
   MessageSquareMore,
@@ -26,7 +25,6 @@ import {
   Eye,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { Menu, MenuTrigger, MenuContent, MenuItem } from "@/components/ui/menu";
 import { LeadDetailDialog } from "@/components/lead-detail-dialog";
 import { updateLeadFields } from "@/lib/firestore-api";
 import { useQueryClient } from "@tanstack/react-query";
@@ -40,13 +38,26 @@ interface Props {
   selectable?: boolean;
   selectedIds?: string[];
   onSelectionChange?: (ids: string[]) => void;
+  openLeadId?: string | null;
+  onLeadOpened?: () => void;
 }
 
 const REJECTION_LABELS: Record<string, string> = {
-  snoozed: "Snoozed",
+  snoozed:         "Snoozed",
   current_account: "Current Account",
-  in_discussion: "In Discussion",
+  in_discussion:   "In Discussion",
+  not_fit:         "Not a fit",
+  no_response:     "No response",
+  other:           "Other",
 };
+
+const LEAD_REJECT_REASONS = [
+  { value: "snoozed",       label: "Snooze (next Mon)" },
+  { value: "in_discussion", label: "In discussion" },
+  { value: "not_fit",       label: "Not a fit" },
+  { value: "no_response",   label: "No response" },
+  { value: "other",         label: "Other" },
+];
 
 const rejectionColors: Record<string, string> = {
   snoozed: "border-amber-500/30 text-amber-400 bg-amber-500/10",
@@ -54,9 +65,17 @@ const rejectionColors: Record<string, string> = {
   in_discussion: "border-sky-500/30 text-sky-400 bg-sky-500/10",
 };
 
-export function LeadsTable({ leads, isLoading, selectable, selectedIds = [], onSelectionChange }: Props) {
+export function LeadsTable({ leads, isLoading, selectable, selectedIds = [], onSelectionChange, openLeadId, onLeadOpened }: Props) {
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
+
+  React.useEffect(() => {
+    if (openLeadId && leads.length > 0) {
+      const lead = leads.find((l) => l.id === openLeadId);
+      if (lead) { setSelectedLead(lead); onLeadOpened?.(); }
+    }
+  }, [openLeadId, leads]);
   const [pendingLeads, setPendingLeads] = useState<Set<string>>(new Set());
+  const [rejectingLeadId, setRejectingLeadId] = useState<string | null>(null);
   const [rejectDialog, setRejectDialog] = useState<{ leadId: string; reason: string } | null>(null);
   const [rejectionNotes, setRejectionNotes] = useState("");
   const qc = useQueryClient();
@@ -108,7 +127,7 @@ export function LeadsTable({ leads, isLoading, selectable, selectedIds = [], onS
       });
       qc.invalidateQueries({ queryKey: ["leads"] });
 
-      if (lead.email && lead.enrichment_status === "success") {
+      if (lead.email) {
         toast.promise(
           new Promise((resolve, reject) => {
             generateDrafts.mutate([lead.id], {
@@ -117,7 +136,7 @@ export function LeadsTable({ leads, isLoading, selectable, selectedIds = [], onS
             });
           }),
           {
-            loading: `Generating draft for ${lead.business_name}...`,
+            loading: "Generating draft…",
             success: "Draft generated",
             error: "Draft generation failed",
           }
@@ -125,7 +144,6 @@ export function LeadsTable({ leads, isLoading, selectable, selectedIds = [], onS
       } else {
         toast.success(`${lead.business_name} approved`);
         if (!lead.email) toast.warning("No email — draft skipped");
-        else if (lead.enrichment_status !== "success") toast.warning("Not enriched — draft skipped");
       }
     } catch (err) {
       console.error("Approve failed:", err);
@@ -271,8 +289,8 @@ export function LeadsTable({ leads, isLoading, selectable, selectedIds = [], onS
             </TableHeader>
             <TableBody>
               {leads.map((lead, index) => (
+                <React.Fragment key={lead.id}>
                 <TableRow
-                  key={lead.id}
                   className={`cursor-pointer transition-colors hover:bg-accent/50 ${
                     lead.client_status === "rejected" && lead.rejection_reason !== "current_account" ? "opacity-60" : ""
                   } ${index % 2 === 1 ? "bg-muted/30" : ""}`}
@@ -424,37 +442,57 @@ export function LeadsTable({ leads, isLoading, selectable, selectedIds = [], onS
                           >
                             <Building2 className="h-3.5 w-3.5" />
                           </button>
-                          <Menu>
-                            <MenuTrigger
-                              render={
-                                <button
-                                  className={`rounded p-1.5 transition-colors ${
-                                    lead.client_status === "rejected" && lead.rejection_reason !== "current_account"
-                                      ? "bg-red-500/20 text-red-400"
-                                      : "text-muted-foreground hover:text-red-400 hover:bg-red-500/10"
-                                  }`}
-                                  title="Reject lead"
-                                >
-                                  <ThumbsDown className="h-3.5 w-3.5" />
-                                </button>
-                              }
-                            />
-                            <MenuContent side="bottom" align="end" sideOffset={4}>
-                              <MenuItem onClick={(e) => { e.stopPropagation(); setRejectDialog({ leadId: lead.id, reason: "snoozed" }); setRejectionNotes(""); }}>
-                                <AlarmClock className="h-3.5 w-3.5" />
-                                Snooze until next week
-                              </MenuItem>
-                              <MenuItem onClick={(e) => { e.stopPropagation(); setRejectDialog({ leadId: lead.id, reason: "in_discussion" }); setRejectionNotes(""); }}>
-                                <MessageSquareMore className="h-3.5 w-3.5" />
-                                In discussion (60 days)
-                              </MenuItem>
-                            </MenuContent>
-                          </Menu>
+                          <button
+                            className={`rounded p-1.5 transition-colors ${
+                              lead.client_status === "rejected" && lead.rejection_reason !== "current_account"
+                                ? "bg-red-500/20 text-red-400"
+                                : rejectingLeadId === lead.id
+                                ? "bg-red-500/10 text-red-400"
+                                : "text-muted-foreground hover:text-red-400 hover:bg-red-500/10"
+                            }`}
+                            title="Reject lead"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setRejectingLeadId((id) => id === lead.id ? null : lead.id);
+                            }}
+                          >
+                            <ThumbsDown className="h-3.5 w-3.5" />
+                          </button>
                         </>
                       )}
                     </div>
                   </TableCell>
                 </TableRow>
+                {rejectingLeadId === lead.id && (
+                  <TableRow className="bg-red-500/5 hover:bg-red-500/5">
+                    <TableCell colSpan={9} className="py-2 px-4">
+                      <div className="flex items-center gap-2 flex-wrap" onClick={(e) => e.stopPropagation()}>
+                        <span className="text-xs text-red-400 shrink-0">Reason:</span>
+                        {LEAD_REJECT_REASONS.map(({ value, label }) => (
+                          <button
+                            key={value}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setRejectingLeadId(null);
+                              setRejectDialog({ leadId: lead.id, reason: value });
+                              setRejectionNotes("");
+                            }}
+                            className="rounded-full border border-red-500/30 px-2.5 py-0.5 text-xs text-red-400 hover:bg-red-500/10 transition-colors"
+                          >
+                            {label}
+                          </button>
+                        ))}
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setRejectingLeadId(null); }}
+                          className="text-xs text-muted-foreground hover:text-foreground transition-colors ml-1"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                )}
+                </React.Fragment>
               ))}
             </TableBody>
           </Table>

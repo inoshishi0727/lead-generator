@@ -55,6 +55,30 @@ function parseSubjectContent(text) {
   return { subject, content };
 }
 
+/**
+ * Validates a generated draft for safety issues.
+ * Returns null if OK, or an error string describing the problem.
+ */
+function validateDraftContent(content, leadWebsite) {
+  if (!content || content.trim().length < 40) {
+    return "Draft is empty or too short.";
+  }
+  // Strip the venue's own website before URL scanning (it's allowed in context notes)
+  let checkText = content;
+  if (leadWebsite) {
+    try {
+      const domain = new URL(leadWebsite.startsWith("http") ? leadWebsite : `https://${leadWebsite}`).hostname.replace(/^www\./, "");
+      checkText = checkText.replace(new RegExp(domain.replace(/\./g, "\\."), "gi"), "");
+    } catch {}
+  }
+  // Reject any external URLs — model is hallucinating a link
+  const urlPattern = /https?:\/\/\S+|www\.\S+\.\S+/i;
+  if (urlPattern.test(checkText)) {
+    return "Draft contains a hallucinated URL.";
+  }
+  return null;
+}
+
 // ---- Gemini sentiment analysis for inbound replies ----
 
 async function analyzeSentiment(body) {
@@ -265,14 +289,10 @@ Prefer the seasonal angle when the hook is strong and timely.
 Do NOT re-introduce who we are. The reader should already know from the initial email.
 Restate CTA briefly: "Happy to send samples. Let me know."`,
 
-  3: `STEP 3 — 2nd Follow Up (The Content Share). Under 80 words. Same thread. Subject: "Re: {previous_subject}"
-Angle: Give, don't ask. Share something genuinely useful — NOT an Asterley sales doc.
-Options:
-- A piece about aperitivo trends in the UK
-- A cocktail recipe featuring English vermouth
-- An article about vermouth's role in modern menus
-The message is 2 lines max: "Thought you might find this interesting. No ask — just sharing."
-Do NOT re-introduce who we are. Do NOT pitch product.`,
+  3: `STEP 3 — 2nd Follow Up (The Value Touch). Under 80 words. Same thread. Subject: "Re: {previous_subject}"
+Angle: Give, don't ask. Share something genuinely useful in your own words — a trend observation, a serve idea, or a seasonal insight relevant to this venue. Write it conversationally, as if you're passing on a thought. Do NOT include any URLs, links, or article references of any kind.
+The message is 2-3 sentences max. "Thought this might be relevant for you — [your genuine observation]. No ask, just sharing."
+Do NOT re-introduce who we are. Do NOT pitch product. Do NOT include any hyperlinks or URLs.`,
 
   4: `STEP 4 — 3rd Follow Up (The Soft Close). Under 80 words. Subject: "Re: {previous_subject}"
 This is the LAST email in the sequence. Keep it very short and respectful.
@@ -403,6 +423,8 @@ DO NOT:
 - Add filler sentences just to hit the word count. Every sentence must carry genuine information or a clear purpose. If the email is complete at 110 words, that is better than padding to 120 with a forced sentence.
 - Use "Martini Vermouth" in subject lines or body (Martini is a competing brand). Say "English Vermouth for Your Martinis" or "English Dry Vermouth."
 - Say "The Martini" — use "Your Martinis" (possessive, plural) when referring to the drink a venue makes.
+- Include URLs, hyperlinks, or links of any kind. Never write "http", "https", "www.", or any web address. If you want to reference an article or resource, describe it in your own words — never link to it.
+- Generate an empty email. Every draft must contain a complete, sendable message. If you cannot write a good email, write the best short version you can.
 
 EMAIL STRUCTURE (follow this order exactly):
 
@@ -734,6 +756,13 @@ export const generateDrafts = functions
         const rawText = await callDraftLLM(provider, systemPrompt, prompt);
         const { subject, content } = parseSubjectContent(rawText);
 
+        const validationError = validateDraftContent(content, leadDoc.website);
+        if (validationError) {
+          console.error(`Draft rejected for ${leadDoc.business_name}: ${validationError}`);
+          failed++;
+          continue;
+        }
+
         const contact = enrichment.contact || {};
         const msgId = crypto.randomUUID();
         await db.collection("outreach_messages").doc(msgId).set({
@@ -821,6 +850,11 @@ export const regenerateDraft = functions
     const rawText = await callDraftLLM(prov, systemPrompt, prompt);
     const { subject, content } = parseSubjectContent(rawText);
 
+    const validationError = validateDraftContent(content, leadDoc.website);
+    if (validationError) {
+      throw new HttpsError("internal", `Draft failed safety check: ${validationError}`);
+    }
+
     await db.collection("outreach_messages").doc(message_id).update({
       subject,
       content,
@@ -888,6 +922,13 @@ export const regenerateAllDrafts = functions
 
         const rawText = await callDraftLLM(provider, systemPrompt, prompt);
         const { subject, content } = parseSubjectContent(rawText);
+
+        const validationError = validateDraftContent(content, leadDoc.website);
+        if (validationError) {
+          console.error(`Follow-up draft rejected for ${leadDoc.business_name}: ${validationError}`);
+          failed++;
+          continue;
+        }
 
         const contact = enrichment.contact || {};
         const msgId = crypto.randomUUID();
