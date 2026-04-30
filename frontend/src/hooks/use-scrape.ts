@@ -15,8 +15,15 @@ export function useScrape() {
   const activeRunId = activeScrapeJob?.id ?? null;
 
   const mutation = useMutation({
-    mutationFn: (req: ScrapeRequest) =>
-      vpsApi.post<ScrapeStatus>("/api/scrape", req),
+    mutationFn: async (req: ScrapeRequest) => {
+      const res = await fetch("/api/scrape", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(req),
+      });
+      if (!res.ok) throw new Error(await res.text().catch(() => res.statusText));
+      return res.json() as Promise<ScrapeStatus>;
+    },
     onSuccess: (data) => {
       addJob("scrape", data.run_id);
     },
@@ -26,7 +33,9 @@ export function useScrape() {
     queryKey: ["scrape-status", activeRunId],
     queryFn: async () => {
       try {
-        return await vpsApi.get<ScrapeStatus>(`/api/scrape-status/${activeRunId}`);
+        const res = await fetch(`/api/scrape-status?run_id=${activeRunId}`);
+        if (!res.ok) return null;
+        return res.json() as Promise<ScrapeStatus>;
       } catch {
         return null;
       }

@@ -48,10 +48,17 @@ export function useEnrichLeads() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (opts?: { force?: boolean; lead_ids?: string[] }) => {
-      return vpsApi.post<{ status: string; enriched: number; failed: number }>(
-        "/api/enrich",
-        { force: opts?.force ?? false, lead_ids: opts?.lead_ids },
-      );
+      // Always route through the Next.js proxy — avoids mixed-content block in production (HTTPS page → HTTP VPS)
+      const res = await fetch("/api/enrich", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ force: opts?.force ?? false, lead_ids: opts?.lead_ids ?? null }),
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => res.statusText);
+        throw new Error(text);
+      }
+      return res.json() as Promise<{ status: string; enriched: number; failed: number }>;
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["leads"] });

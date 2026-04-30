@@ -488,6 +488,25 @@ export function LeadDetailDialog({ lead, onClose }: Props) {
 
         <div className="border-t" />
 
+        {/* Provenance */}
+        <div className="px-5 pb-4 space-y-1">
+          <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-1.5">Added via</p>
+          <p className="text-xs text-muted-foreground">
+            {lead.source === "email_ingestion"
+              ? <>Email ingestion{lead.added_by_name ? <> by <span className="text-foreground">{lead.added_by_name}</span></> : lead.added_by_email ? <> by <span className="text-foreground">{lead.added_by_email}</span></> : ""}</>
+              : lead.source === "manual"
+              ? "Added manually"
+              : lead.source === "google_maps"
+              ? "Google Maps scrape"
+              : lead.source ?? "Unknown"}
+            {(lead.scraped_at || lead.created_at) && (
+              <> · {new Date(lead.scraped_at ?? lead.created_at!).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}</>
+            )}
+          </p>
+        </div>
+
+        <div className="border-t" />
+
         {/* Re-enrich footer */}
         <div className="flex items-center justify-between p-4">
           <p className="text-xs text-muted-foreground">

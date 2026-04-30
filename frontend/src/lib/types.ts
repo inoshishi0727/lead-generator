@@ -78,6 +78,10 @@ export interface Lead {
   rejection_reason: string | null;
   rejection_notes: string | null;
   batch_id: string | null;
+  // How the lead was added
+  added_by_name: string | null;
+  added_by_email: string | null;
+  created_at: string | null;
   // Assignment
   assigned_to: string | null;
   assigned_to_name: string | null;

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
+import { useDebounce } from "@/hooks/use-debounce";
 import { useSearchParams } from "next/navigation";
 import {
   FileText,
@@ -70,6 +71,7 @@ export default function OutreachPage() {
   const [stepFilter, setStepFilter] = useState<string>("all");
   const [showSendWarning, setShowSendWarning] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const debouncedSearchQuery = useDebounce(searchQuery, 200);
 
   // Member auto-scopes to own messages
   const assignedTo = isMember ? user?.uid : undefined;
@@ -163,8 +165,8 @@ export default function OutreachPage() {
   }, [filteredByCategory, stepFilter]);
 
   const allMessages = useMemo(() => {
-    if (!searchQuery.trim()) return filteredByStep;
-    const q = searchQuery.toLowerCase();
+    if (!debouncedSearchQuery.trim()) return filteredByStep;
+    const q = debouncedSearchQuery.toLowerCase();
     return filteredByStep.filter(
       (m) =>
         m.business_name?.toLowerCase().includes(q) ||
@@ -173,9 +175,24 @@ export default function OutreachPage() {
         m.subject?.toLowerCase().includes(q) ||
         m.content?.toLowerCase().includes(q)
     );
-  }, [filteredByStep, searchQuery]);
+  }, [filteredByStep, debouncedSearchQuery]);
   const { data: approvedEmailCount = 0 } = useApprovedEmailCount();
   const emailCapReached = approvedEmailCount >= 20;
+
+  const dynamicCategoryOptions = useMemo(() => {
+    const counts = new Map<string, number>();
+    filteredByStatus.forEach((m) => {
+      if (m.venue_category) counts.set(m.venue_category, (counts.get(m.venue_category) ?? 0) + 1);
+    });
+    return Array.from(counts.entries())
+      .sort(([, a], [, b]) => b - a)
+      .map(([value, count]) => ({
+        value,
+        count,
+        label: CATEGORY_OPTIONS.find((o) => o.value === value)?.label
+          ?? value.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
+      }));
+  }, [filteredByStatus]);
 
   // A lead/step should have at most one live email (draft or approved). When
   // two or more appear in the current view, mark every offending row so the
@@ -451,9 +468,10 @@ export default function OutreachPage() {
             onChange={(e) => setCategoryFilter(e.target.value)}
             className="rounded-md border border-input bg-background px-3 h-10 text-sm w-[20%]"
           >
-            {CATEGORY_OPTIONS.map((opt) => (
-              <option key={opt.value} value={opt.value}>
-                {opt.label}
+            <option value="">All Categories ({filteredByStatus.length})</option>
+            {dynamicCategoryOptions.map(({ value, label, count }) => (
+              <option key={value} value={value}>
+                {label} ({count})
               </option>
             ))}
           </select>
