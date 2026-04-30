@@ -205,6 +205,7 @@ export async function POST(req: NextRequest) {
     const body = await req.json().catch(() => ({}));
     const force = body?.force === true;
     const limit = body?.limit || 50;
+    const lead_ids = body?.lead_ids ?? null;
 
     // Proxy to VPS if configured (server-side, avoids mixed content)
     const vpsUrl = process.env.NEXT_PUBLIC_VPS_URL;
@@ -212,9 +213,11 @@ export async function POST(req: NextRequest) {
       const vpsRes = await fetch(`${vpsUrl}/api/enrich`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ force, limit }),
+        body: JSON.stringify({ force, limit, lead_ids }),
       });
-      const vpsData = await vpsRes.json();
+      const text = await vpsRes.text();
+      let vpsData: unknown;
+      try { vpsData = JSON.parse(text); } catch { vpsData = { error: text || vpsRes.statusText }; }
       return NextResponse.json(vpsData, { status: vpsRes.status });
     }
 
