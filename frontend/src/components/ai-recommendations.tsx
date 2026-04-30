@@ -53,6 +53,24 @@ export function AIRecommendations() {
   const ratioAdjustments = data?.ratio_adjustments ?? [];
   const querySuggestions = data?.query_suggestions ?? [];
 
+  if (!data || (insights.length === 0 && ratioAdjustments.length === 0 && querySuggestions.length === 0)) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Sparkles className="h-5 w-5 text-purple-500" />
+            AI Recommendations
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm text-muted-foreground">
+            No recommendations yet. Send more outreach and check back — AI analysis requires at least a few weeks of data.
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
+
   return (
     <Card>
       <CardHeader>

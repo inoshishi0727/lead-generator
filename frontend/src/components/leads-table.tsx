@@ -260,7 +260,7 @@ export function LeadsTable({ leads, isLoading, selectable, selectedIds = [], onS
         <Card className="shadow-md">
           <div className="max-h-[70vh] overflow-auto">
           <Table className="w-full table-fixed">
-            <TableHeader>
+            <TableHeader className="sticky top-0 z-10 bg-card shadow-[0_1px_0_var(--border)]">
               <TableRow>
                 {selectable && (
                   <TableHead className="w-10 px-2">

@@ -273,10 +273,13 @@ export default function OutreachPage() {
   }
 
   return (
-    <div className="mx-auto max-w-4xl space-y-6 p-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold tracking-tight">Outreach</h1>
-        <div data-tour="outreach-actions" className="flex gap-2">
+    <div className="sp-page" style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+      <div className="sp-page-head">
+        <div>
+          <h1 className="sp-page-title">Outreach</h1>
+          <div className="sp-page-subtitle">{allMessages.length} message{allMessages.length !== 1 ? "s" : ""}</div>
+        </div>
+        <div data-tour="outreach-actions" className="sp-page-actions">
           <Button
             onClick={handleGenerate}
             disabled={generateMutation.isPending}

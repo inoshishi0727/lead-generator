@@ -56,10 +56,10 @@ const CATEGORY_COLORS: Record<string, string> = {
 };
 
 const SORT_COLS: { key: SortKey; label: string; className: string }[] = [
-  { key: "name",        label: "Business",  className: "w-[28%]" },
-  { key: "location",    label: "Location",  className: "w-[22%]" },
+  { key: "name",        label: "Business",  className: "w-[30%]" },
+  { key: "location",    label: "Location",  className: "w-[26%]" },
   { key: "category",    label: "Category",  className: "w-[16%]" },
-  { key: "assigned_to", label: "Owner",     className: "w-[16%]" },
+  { key: "assigned_to", label: "Owner",     className: "w-[12%]" },
 ];
 
 function sortClients(clients: Lead[], key: SortKey, dir: SortDir): Lead[] {

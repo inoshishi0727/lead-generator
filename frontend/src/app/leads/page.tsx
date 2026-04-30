@@ -209,8 +209,8 @@ export default function LeadsPage() {
         <div className="rounded-lg border border-sky-500/30 bg-sky-500/10 px-4 py-3 text-sm space-y-2">
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-2">
-              <Mail className="h-4 w-4 shrink-0 text-sky-400" />
-              <span className="font-semibold text-sky-200">
+              <Mail className="h-4 w-4 shrink-0 text-sky-600" />
+              <span className="font-semibold text-sky-700">
                 {allNewLeads.length} new lead{allNewLeads.length !== 1 ? "s" : ""} added
                 {newEmailLeads.length > 0 && newScrapedLeads.length > 0
                   ? ` (${newEmailLeads.length} via email, ${newScrapedLeads.length} scraped)`
@@ -221,7 +221,7 @@ export default function LeadsPage() {
               <Button
                 size="sm"
                 variant="outline"
-                className="border-sky-500/40 text-sky-300 hover:bg-sky-500/10 hover:text-sky-100 h-7 text-xs"
+                className="border-sky-500/40 text-sky-700 hover:bg-sky-500/10 hover:text-sky-800 h-7 text-xs"
                 onClick={() => {
                   setNewLeadIds(new Set(allNewLeads.map((l) => l.id)));
                   setSource(""); setStage(""); setEmailOnly(false);
@@ -232,7 +232,7 @@ export default function LeadsPage() {
               </Button>
               <button
                 onClick={() => setEmailBannerDismissed(true)}
-                className="text-sky-400 hover:text-sky-200 transition-colors"
+                className="text-sky-600 hover:text-sky-800 transition-colors"
                 aria-label="Dismiss"
               >
                 <X className="h-4 w-4" />
@@ -249,13 +249,13 @@ export default function LeadsPage() {
                   setEmailBannerDismissed(true);
                   setOpenLeadId(l.id);
                 }}
-                className="rounded-full border border-sky-500/30 bg-sky-500/10 px-2.5 py-0.5 text-xs text-sky-300 hover:bg-sky-500/20 hover:text-sky-100 transition-colors"
+                className="rounded-full border border-sky-500/40 bg-sky-500/10 px-2.5 py-0.5 text-xs text-sky-700 hover:bg-sky-500/20 hover:text-sky-800 transition-colors"
               >
                 {l.source === "email_ingestion" ? "✉ " : "🔍 "}{l.business_name}
               </button>
             ))}
             {allNewLeads.length > 8 && (
-              <span className="text-xs text-sky-400/70 self-center">+{allNewLeads.length - 8} more</span>
+              <span className="text-xs text-sky-600/70 self-center">+{allNewLeads.length - 8} more</span>
             )}
           </div>
         </div>
@@ -358,7 +358,7 @@ export default function LeadsPage() {
 
       {showQueries && <SearchQueryManager />}
 
-      <div data-tour="leads-filters" className="sticky top-12 z-30 bg-background pt-2 pb-3 -mx-4 px-4 border-b border-border/30 space-y-2">
+      <div data-tour="leads-filters" className="sticky top-0 z-30 bg-background pt-2 pb-3 -mx-4 px-4 border-b border-border/30 space-y-2">
         {/* Row 1: dropdowns — fixed widths so they never resize when options change */}
         <div className="flex flex-wrap gap-2">
           <select
