@@ -516,18 +516,20 @@ export function watchRecentReplies(
   const q = query(ref, where("matched", "==", true), orderBy("created_at", "desc"), fbLimit(limit));
   return onSnapshot(q, (snap) => {
     callback(
-      snap.docs.map((d) => {
-        const data = d.data();
-        return {
-          id: d.id,
-          lead_id: data.lead_id ?? null,
-          from_name: data.from_name ?? null,
-          from_email: data.from_email ?? "",
-          business_name: data.business_name ?? data.from_name ?? null,
-          created_at: data.created_at ?? "",
-          matched: data.matched ?? false,
-        };
-      })
+      snap.docs
+        .filter((d) => d.data().direction !== "outbound")
+        .map((d) => {
+          const data = d.data();
+          return {
+            id: d.id,
+            lead_id: data.lead_id ?? null,
+            from_name: data.from_name ?? null,
+            from_email: data.from_email ?? "",
+            business_name: data.business_name ?? data.from_name ?? null,
+            created_at: data.created_at ?? "",
+            matched: data.matched ?? false,
+          };
+        })
     );
   });
 }
