@@ -318,11 +318,34 @@ export interface RatioAdjustment {
   reason: string;
 }
 
+export interface EditPatternStat {
+  category: string;
+  count: number;
+  pct: number;
+  example_note: string | null;
+}
+
 export interface StrategyResponse {
   insights: StrategyInsight[];
   ratio_adjustments: RatioAdjustment[];
   query_suggestions: string[];
   generated_at: string | null;
+  // raw signal data (computed server-side, no AI needed)
+  total_sent?: number;
+  overall_reply_rate?: string;
+  overall_open_rate?: string;
+  edit_patterns?: EditPatternStat[];
+  content_signals?: {
+    great: number;
+    good: number;
+    not_interested: number;
+    great_subjects: string[];
+  };
+  reply_sentiment?: {
+    positive: number;
+    negative: number;
+    neutral: number;
+  };
 }
 
 export interface SubjectLineStat {

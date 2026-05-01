@@ -22,7 +22,7 @@ import {
   CalendarClock,
 } from "lucide-react";
 import { EditMessageDialog } from "@/components/edit-message-dialog";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import { OutreachTimeline } from "@/components/outreach-timeline";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -72,6 +72,7 @@ interface Props {
   inConversation?: boolean;
   emailCapReached?: boolean;
   isDuplicate?: boolean;
+  defaultExpanded?: boolean;
 }
 
 const statusColors: Record<string, string> = {
@@ -115,15 +116,18 @@ function rejectionLabel(reason: string): string {
   return REJECTION_LABELS[reason] ?? "rejected";
 }
 
-export function MessageCard({ message, inConversation, emailCapReached, isDuplicate }: Props) {
+export function MessageCard({ message, inConversation, emailCapReached, isDuplicate, defaultExpanded }: Props) {
   const [showTimeline, setShowTimeline] = useState(false);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editContent, setEditContent] = useState("");
+  const [editSubject, setEditSubject] = useState("");
   const [rejectOpen, setRejectOpen] = useState(false);
   const [threadOpen, setThreadOpen] = useState(inConversation && !!message.has_reply);
   const [menuOpen, setMenuOpen] = useState(false);
   const [activeAction, setActiveAction] = useState<string | null>(null);
   const [replyContent, setReplyContent] = useState("");
-  const [originalExpanded, setOriginalExpanded] = useState(false);
+  const [originalExpanded, setOriginalExpanded] = useState(defaultExpanded ?? false);
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [scheduleDay, setScheduleDay] = useState(() => message.scheduled_send_date?.slice(0, 10) ?? "");
   const [scheduleHour, setScheduleHour] = useState(() => {
@@ -275,12 +279,30 @@ export function MessageCard({ message, inConversation, emailCapReached, isDuplic
     setEditDialogOpen(false);
   }
 
+  function startEditing() {
+    setEditContent(message.content);
+    setEditSubject(message.subject ?? "");
+    setIsEditing(true);
+  }
+
+  function handleInlineSave() {
+    handleDialogSave(
+      editContent,
+      message.channel === "email" ? editSubject : undefined
+    );
+    setIsEditing(false);
+  }
+
   const isPending =
     updateMutation.isPending || regenerateMutation.isPending;
 
   return (
-    <Card className={`overflow-hidden transition-opacity ${isRegenerating ? "opacity-50" : ""}`}>
-      <CardContent className="space-y-3 p-4">
+    <Card className={`transition-opacity ${isRegenerating ? "opacity-50" : ""}`} style={{ overflow: "visible" }}>
+      {/* Sticky header — sticks to top of sp-email-detail scroll container */}
+      <div
+        className="sticky top-0 z-10 bg-card border-b flex flex-col"
+        style={{ gap: 10, padding: "14px 16px 12px" }}
+      >
         {/* Header row */}
         <div className="flex flex-wrap items-center gap-2">
           <span className="font-semibold text-sm">
@@ -546,11 +568,45 @@ export function MessageCard({ message, inConversation, emailCapReached, isDuplic
             </p>
           </div>
         )}
+      </div>
+
+      {/* Scrollable body — message content + action buttons */}
+      <div className="space-y-3 p-4">
+
+        {/* Subject input when editing */}
+        {isEditing && message.channel === "email" && (
+          <div>
+            <p className="text-xs text-muted-foreground mb-1">Subject</p>
+            <input
+              className="w-full rounded-md border border-border bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+              value={editSubject}
+              onChange={(e) => setEditSubject(e.target.value)}
+            />
+          </div>
+        )}
 
         {/* Message content */}
         <div>
-          <p className="text-xs text-muted-foreground mb-0.5">Message</p>
-          {isRegenerating ? (
+          <div className="flex items-center justify-between mb-0.5">
+            <p className="text-xs text-muted-foreground">Message</p>
+            {isEditing && (
+              <span className={`text-xs tabular-nums ${
+                editContent.trim().split(/\s+/).length >= 60 && editContent.trim().split(/\s+/).length <= 160
+                  ? "text-emerald-600 dark:text-emerald-400"
+                  : "text-amber-600 dark:text-amber-400"
+              }`}>
+                {editContent.trim().split(/\s+/).filter(Boolean).length} words (target: 60–160)
+              </span>
+            )}
+          </div>
+          {isEditing ? (
+            <textarea
+              className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm leading-relaxed resize-y focus:outline-none focus:ring-2 focus:ring-ring"
+              rows={14}
+              value={editContent}
+              onChange={(e) => setEditContent(e.target.value)}
+            />
+          ) : isRegenerating ? (
             <div className="flex items-center justify-center rounded bg-muted/30 p-8">
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
               <span className="ml-2 text-sm text-muted-foreground">Regenerating draft...</span>
@@ -561,6 +617,19 @@ export function MessageCard({ message, inConversation, emailCapReached, isDuplic
             </div>
           )}
         </div>
+
+        {/* Inline edit save/cancel */}
+        {isEditing && (
+          <div className="flex gap-2 pt-1">
+            <Button size="sm" onClick={handleInlineSave} disabled={isPending}>
+              {isPending ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : null}
+              Save Edit
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => setIsEditing(false)} disabled={isPending}>
+              Cancel
+            </Button>
+          </div>
+        )}
 
         {/* Email thread */}
         {threadOpen && (
@@ -695,7 +764,7 @@ export function MessageCard({ message, inConversation, emailCapReached, isDuplic
         )}
 
         {/* Action buttons */}
-        {message.status === "planned" && canAct && (
+        {!isEditing && message.status === "planned" && canAct && (
           <div className="flex items-center gap-2 pt-1">
             <Button
               size="sm"
@@ -773,7 +842,7 @@ export function MessageCard({ message, inConversation, emailCapReached, isDuplic
             )}
           </div>
         )}
-        {message.status === "draft" && (
+        {!isEditing && message.status === "draft" && (
           <div className="flex items-center gap-2 pt-1">
             {canAct && (
               <Button
@@ -836,7 +905,7 @@ export function MessageCard({ message, inConversation, emailCapReached, isDuplic
             <Button
               size="sm"
               variant="ghost"
-              onClick={() => setEditDialogOpen(true)}
+              onClick={startEditing}
               disabled={isPending}
             >
               <Pencil className="mr-1 h-3.5 w-3.5" />
@@ -861,13 +930,13 @@ export function MessageCard({ message, inConversation, emailCapReached, isDuplic
           </div>
         )}
         {/* Edit + Send + Schedule + Unapprove buttons for approved messages */}
-        {message.status === "approved" && canAct && (
+        {!isEditing && message.status === "approved" && canAct && (
           <div className="space-y-2 pt-1">
             <div className="flex items-center gap-2 flex-wrap">
               <Button
                 size="sm"
                 variant="outline"
-                onClick={() => setEditDialogOpen(true)}
+                onClick={startEditing}
                 disabled={sendMutation.isPending || updateMutation.isPending}
               >
                 <Pencil className="mr-1 h-3.5 w-3.5" />
@@ -1090,7 +1159,7 @@ export function MessageCard({ message, inConversation, emailCapReached, isDuplic
             </button>
           </div>
         )}
-      </CardContent>
+      </div>
 
       {editDialogOpen && (
         <EditMessageDialog

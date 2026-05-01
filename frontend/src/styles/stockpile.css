@@ -34,6 +34,32 @@
   --sp-topbar-h: 52px;
 }
 
+/* ---------- Dark mode tokens ---------- */
+.dark {
+  --sp-bg: oklch(0.10 0.005 260);
+  --sp-bg-paper: oklch(0.13 0.008 260);
+  --sp-bg-sunken: oklch(0.08 0.004 260);
+  --sp-bg-hover: oklch(0.17 0.008 260);
+  --sp-line: oklch(1 0 0 / 8%);
+  --sp-line-strong: oklch(1 0 0 / 14%);
+  --sp-ink: oklch(0.92 0.008 260);
+  --sp-ink-2: oklch(0.70 0.015 260);
+  --sp-ink-3: oklch(0.52 0.015 260);
+  --sp-ink-4: oklch(0.40 0.01 260);
+  --sp-accent: oklch(0.70 0.15 265);
+  --sp-accent-soft: oklch(0.20 0.06 265);
+  --sp-accent-ink: oklch(0.85 0.08 265);
+  --sp-good: oklch(0.60 0.13 150);
+  --sp-good-soft: oklch(0.18 0.05 150);
+  --sp-warn: oklch(0.72 0.14 75);
+  --sp-warn-soft: oklch(0.18 0.06 80);
+  --sp-bad: oklch(0.65 0.18 25);
+  --sp-bad-soft: oklch(0.18 0.06 25);
+  --sp-shadow-sm: 0 1px 0 oklch(0 0 0 / 0.4);
+  --sp-shadow-md: 0 1px 2px oklch(0 0 0 / 0.6), 0 8px 24px oklch(0 0 0 / 0.3);
+  --sp-shadow-lg: 0 1px 2px oklch(0 0 0 / 0.6), 0 24px 48px oklch(0 0 0 / 0.45);
+}
+
 /* ---------- App shell ---------- */
 .sp-app {
   display: grid;
@@ -251,6 +277,7 @@
   flex: 1;
   overflow: auto;
   background: var(--sp-bg);
+  min-height: 0;
 }
 
 /* ---------- Page wrapper ---------- */
@@ -1048,23 +1075,131 @@ table.sp-tbl {
   background: var(--sp-ink);
 }
 
+/* ---------- Outreach email filter header ---------- */
+.sp-email-filter-head {
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--sp-line);
+  padding: 10px 12px 8px;
+  background: var(--sp-bg-paper);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sp-email-filter-tabs {
+  display: flex;
+  gap: 3px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding-bottom: 2px;
+}
+.sp-email-filter-tabs::-webkit-scrollbar { display: none; }
+
+.sp-email-filter-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px dashed var(--sp-line-strong);
+  background: transparent;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--sp-ink-3);
+  white-space: nowrap;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
+}
+.sp-email-filter-tab:hover { background: var(--sp-bg-hover); color: var(--sp-ink); }
+.sp-email-filter-tab.active {
+  border-style: solid;
+  background: var(--sp-accent-soft);
+  color: var(--sp-accent-ink);
+  border-color: var(--sp-accent);
+}
+
+.sp-email-filter-steps {
+  display: flex;
+  gap: 3px;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.sp-email-filter-steps::-webkit-scrollbar { display: none; }
+
+.sp-email-filter-step {
+  display: inline-flex;
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--sp-ink-3);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
+}
+.sp-email-filter-step:hover { background: var(--sp-bg-hover); color: var(--sp-ink); border-color: var(--sp-line-strong); }
+.sp-email-filter-step.active { background: var(--sp-accent-soft); color: var(--sp-accent-ink); border-color: var(--sp-accent); }
+
+.sp-email-filter-search-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.sp-email-filter-search-row select {
+  flex: 0 0 auto;
+  min-width: 0;
+  max-width: 100px;
+  border: 1px solid var(--sp-line-strong);
+  background: var(--sp-bg-sunken);
+  color: var(--sp-ink);
+  border-radius: var(--sp-radius);
+  padding: 4px 6px;
+  font-size: 11.5px;
+  outline: none;
+}
+
+.sp-email-filter-search {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--sp-bg-sunken);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-radius);
+  padding: 4px 8px;
+  color: var(--sp-ink-3);
+}
+.sp-email-filter-search input {
+  flex: 1;
+  border: none;
+  background: transparent;
+  outline: none;
+  color: var(--sp-ink);
+  font-size: 11.5px;
+}
+.sp-email-filter-search input::placeholder { color: var(--sp-ink-4); }
+
 /* ---------- Outreach email list ---------- */
 .sp-email-list {
   display: grid;
   grid-template-columns: 380px 1fr;
+  grid-template-rows: 1fr;
   border: 1px solid var(--sp-line);
   border-radius: var(--sp-radius-lg);
   overflow: hidden;
   background: var(--sp-bg-paper);
-  height: calc(100vh - var(--sp-topbar-h) - 180px);
-  min-height: 540px;
 }
 
 .sp-email-items {
   border-right: 1px solid var(--sp-line);
-  overflow-y: auto;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
+  min-height: 0;
 }
 
 .sp-email-item {
@@ -1126,9 +1261,45 @@ table.sp-tbl {
 }
 
 .sp-email-detail {
+  overflow-x: hidden;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+/* Full-width status tab bar sitting above the split pane */
+.sp-email-status-bar {
+  flex-shrink: 0;
   display: flex;
-  flex-direction: column;
-  overflow: hidden;
+  align-items: center;
+  gap: 2px;
+  padding: 0 28px;
+  border-bottom: 1px solid var(--sp-line);
+  background: var(--sp-bg-paper);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.sp-email-status-bar::-webkit-scrollbar { display: none; }
+.sp-email-status-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 8px 14px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--sp-ink-3);
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.1s, border-color 0.1s;
+  position: relative;
+  flex-shrink: 0;
+}
+.sp-email-status-tab:hover { color: var(--sp-ink); }
+.sp-email-status-tab.active {
+  color: var(--sp-accent);
+  border-bottom-color: var(--sp-accent);
+  font-weight: 600;
 }
 
 .sp-email-detail-head {
