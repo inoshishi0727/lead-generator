@@ -205,61 +205,6 @@ export default function LeadsPage() {
 
   return (
     <div className="sp-page space-y-6">
-      {showEmailBanner && (
-        <div className="rounded-lg border border-sky-500/30 bg-sky-500/10 px-4 py-3 text-sm space-y-2">
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2">
-              <Mail className="h-4 w-4 shrink-0 text-sky-600" />
-              <span className="font-semibold text-sky-700">
-                {allNewLeads.length} new lead{allNewLeads.length !== 1 ? "s" : ""} added
-                {newEmailLeads.length > 0 && newScrapedLeads.length > 0
-                  ? ` (${newEmailLeads.length} via email, ${newScrapedLeads.length} scraped)`
-                  : newEmailLeads.length > 0 ? " via email" : " via scrape"}
-              </span>
-            </div>
-            <div className="flex items-center gap-2 shrink-0">
-              <Button
-                size="sm"
-                variant="outline"
-                className="border-sky-500/40 text-sky-700 hover:bg-sky-500/10 hover:text-sky-800 h-7 text-xs"
-                onClick={() => {
-                  setNewLeadIds(new Set(allNewLeads.map((l) => l.id)));
-                  setSource(""); setStage(""); setEmailOnly(false);
-                  setEmailBannerDismissed(true);
-                }}
-              >
-                Show all {allNewLeads.length}
-              </Button>
-              <button
-                onClick={() => setEmailBannerDismissed(true)}
-                className="text-sky-600 hover:text-sky-800 transition-colors"
-                aria-label="Dismiss"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-          </div>
-          <div className="flex flex-wrap gap-1.5 pl-6">
-            {allNewLeads.slice(0, 8).map((l) => (
-              <button
-                key={l.id}
-                onClick={() => {
-                  setNewLeadIds(new Set(allNewLeads.map((ll) => ll.id)));
-                  setSource(""); setStage(""); setEmailOnly(false);
-                  setEmailBannerDismissed(true);
-                  setOpenLeadId(l.id);
-                }}
-                className="rounded-full border border-sky-500/40 bg-sky-500/10 px-2.5 py-0.5 text-xs text-sky-700 hover:bg-sky-500/20 hover:text-sky-800 transition-colors"
-              >
-                {l.source === "email_ingestion" ? "✉ " : "🔍 "}{l.business_name}
-              </button>
-            ))}
-            {allNewLeads.length > 8 && (
-              <span className="text-xs text-sky-600/70 self-center">+{allNewLeads.length - 8} more</span>
-            )}
-          </div>
-        </div>
-      )}
       <div className="sp-page-head">
         <div>
           <h1 className="sp-page-title">Leads</h1>
@@ -511,6 +456,60 @@ export default function LeadsPage() {
           >
             Clear
           </button>
+        </div>
+      )}
+
+      {showEmailBanner && (
+        <div className="rounded-lg border border-sky-500/30 bg-sky-500/10 px-4 py-2.5 text-sm">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2 flex-wrap min-w-0">
+              <Mail className="h-4 w-4 shrink-0 text-sky-600" />
+              <span className="font-semibold text-sky-700 shrink-0">
+                {allNewLeads.length} new lead{allNewLeads.length !== 1 ? "s" : ""}
+                {newEmailLeads.length > 0 ? " via email" : " via scrape"}
+              </span>
+              <div className="flex flex-wrap gap-1 min-w-0">
+                {allNewLeads.slice(0, 6).map((l) => (
+                  <button
+                    key={l.id}
+                    onClick={() => {
+                      setNewLeadIds(new Set(allNewLeads.map((ll) => ll.id)));
+                      setSource(""); setStage(""); setEmailOnly(false);
+                      setEmailBannerDismissed(true);
+                      setOpenLeadId(l.id);
+                    }}
+                    className="rounded-full border border-sky-500/40 bg-sky-500/10 px-2.5 py-0.5 text-xs text-sky-700 hover:bg-sky-500/20 transition-colors"
+                  >
+                    {l.business_name}
+                  </button>
+                ))}
+                {allNewLeads.length > 6 && (
+                  <span className="text-xs text-sky-600/70 self-center">+{allNewLeads.length - 6} more</span>
+                )}
+              </div>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <Button
+                size="sm"
+                variant="outline"
+                className="border-sky-500/40 text-sky-700 hover:bg-sky-500/10 h-6 text-xs px-2"
+                onClick={() => {
+                  setNewLeadIds(new Set(allNewLeads.map((l) => l.id)));
+                  setSource(""); setStage(""); setEmailOnly(false);
+                  setEmailBannerDismissed(true);
+                }}
+              >
+                Show all {allNewLeads.length}
+              </Button>
+              <button
+                onClick={() => setEmailBannerDismissed(true)}
+                className="text-sky-600 hover:text-sky-800 transition-colors"
+                aria-label="Dismiss"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

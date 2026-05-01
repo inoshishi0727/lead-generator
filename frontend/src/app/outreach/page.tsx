@@ -10,13 +10,11 @@ import {
   Send,
   RefreshCw,
   AlertTriangle,
-  Reply,
   Search,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { StatCard } from "@/components/stat-card";
 import { MessageCard } from "@/components/message-card";
 import { useAuth } from "@/lib/auth-context";
 import {
@@ -72,6 +70,7 @@ export default function OutreachPage() {
   const [showSendWarning, setShowSendWarning] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const debouncedSearchQuery = useDebounce(searchQuery, 200);
+  const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
 
   // Member auto-scopes to own messages
   const assignedTo = isMember ? user?.uid : undefined;
@@ -237,6 +236,32 @@ export default function OutreachPage() {
     .filter((m) => m.status === "draft")
     .map((m) => m.id);
 
+  const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null);
+
+  const conversationThreads = useMemo(() => {
+    if (statusFilter !== "conversations") return null;
+    const threads = new Map<string, { leadId: string; businessName: string; messages: typeof allMessages }>();
+    for (const msg of allMessages) {
+      if (!threads.has(msg.lead_id)) {
+        threads.set(msg.lead_id, { leadId: msg.lead_id, businessName: msg.business_name, messages: [] });
+      }
+      threads.get(msg.lead_id)!.messages.push(msg);
+    }
+    return Array.from(threads.values()).sort((a, b) => {
+      const latest = (msgs: typeof allMessages) =>
+        msgs.reduce((m, x) => { const t = x.sent_at || x.created_at || ""; return t > m ? t : m; }, "");
+      return latest(b.messages).localeCompare(latest(a.messages));
+    });
+  }, [allMessages, statusFilter]);
+
+  const selectedMessage = allMessages.find((m) => m.id === selectedMessageId) ?? allMessages[0] ?? null;
+  const selectedThread = conversationThreads?.find((t) => t.leadId === selectedLeadId) ?? conversationThreads?.[0] ?? null;
+
+  useEffect(() => {
+    setSelectedMessageId(allMessages[0]?.id ?? null);
+    setSelectedLeadId(conversationThreads?.[0]?.leadId ?? null);
+  }, [statusFilter, categoryFilter, stepFilter, debouncedSearchQuery]);
+
   function handleGenerate() {
     generateMutation.mutate(undefined);
   }
@@ -272,35 +297,45 @@ export default function OutreachPage() {
     followupsMutation.mutate();
   }
 
+  const STATUS_FILTER_LABELS: Record<string, string> = {
+    draft: "Draft", approved: "Approved", scheduled: "Scheduled",
+    sent: "Sent", conversations: "Inbox", rejected: "Rejected",
+    "follow-ups": "Follow-ups", clients: "Clients", all: "All",
+  };
+
   return (
-    <div className="sp-page space-y-5">
-      <div className="sp-page-head">
+    <div
+      style={{
+        position: "fixed",
+        top: "var(--sp-topbar-h)",
+        left: "var(--sp-sidebar-w)",
+        right: 0,
+        bottom: 0,
+        display: "flex",
+        flexDirection: "column",
+        overflow: "hidden",
+        background: "var(--sp-bg)",
+      }}
+    >
+      {/* Page head */}
+      <div className="sp-page-head" style={{ margin: 0, padding: "16px 28px 12px" }}>
         <div>
           <h1 className="sp-page-title">Outreach</h1>
-          <div className="sp-page-subtitle">{messages?.length ?? 0} message{(messages?.length ?? 0) !== 1 ? "s" : ""}</div>
+          <div className="sp-page-subtitle">
+            {draftCount} drafts · {approvedCount} approved · {sentCount} sent · {repliedCount} replied
+          </div>
         </div>
         <div data-tour="outreach-actions" className="sp-page-actions">
-          <Button
-            onClick={handleGenerate}
-            disabled={generateMutation.isPending}
-          >
-            {generateMutation.isPending ? (
-              <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-            ) : (
-              <FileText className="mr-1.5 h-4 w-4" />
-            )}
+          <Button onClick={handleGenerate} disabled={generateMutation.isPending}>
+            {generateMutation.isPending
+              ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+              : <FileText className="mr-1.5 h-4 w-4" />}
             Generate Drafts
           </Button>
-          <Button
-            variant="outline"
-            onClick={() => regenerateAllMutation.mutate()}
-            disabled={regenerateAllMutation.isPending}
-          >
-            {regenerateAllMutation.isPending ? (
-              <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-            ) : (
-              <RefreshCw className="mr-1.5 h-4 w-4" />
-            )}
+          <Button variant="outline" onClick={() => regenerateAllMutation.mutate()} disabled={regenerateAllMutation.isPending}>
+            {regenerateAllMutation.isPending
+              ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+              : <RefreshCw className="mr-1.5 h-4 w-4" />}
             Regenerate All
           </Button>
           {draftCount > 0 && (
@@ -321,265 +356,245 @@ export default function OutreachPage() {
               onClick={() => handleSend(false)}
               disabled={sendMutation.isPending}
             >
-              {sendMutation.isPending ? (
-                <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-              ) : (
-                <Send className="mr-1.5 h-4 w-4" />
-              )}
+              {sendMutation.isPending
+                ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                : <Send className="mr-1.5 h-4 w-4" />}
               Send Approved ({approvedCount})
             </Button>
           )}
         </div>
       </div>
 
-      {/* Approved email cap warning */}
+      {/* Compact alerts */}
       {emailCapReached && statusFilter !== "sent" && (
-        <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/20 dark:text-amber-400">
-          <AlertTriangle className="h-4 w-4 shrink-0" />
-          <span>
-            20 emails are already approved and queued. Unapprove or reject some before approving more.
-          </span>
+        <div className="flex items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-700 dark:text-amber-400" style={{ flexShrink: 0, margin: "0 28px 4px" }}>
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+          20 emails queued — unapprove or reject some before approving more.
         </div>
       )}
-
-      {/* Send window warning */}
       {showSendWarning && (
-        <div className="flex items-center justify-between rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/20 dark:text-amber-400">
+        <div className="flex items-center justify-between rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-700 dark:text-amber-400" style={{ flexShrink: 0, margin: "0 28px 4px" }}>
           <div className="flex items-center gap-2">
-            <AlertTriangle className="h-4 w-4" />
-            <span>
-              Outside optimal send window (Tue-Thu, 10am-1pm). Send anyway?
-            </span>
+            <AlertTriangle className="h-3.5 w-3.5" />
+            Outside optimal send window (Tue–Thu, 10am–1pm). Send anyway?
           </div>
-          <div className="flex gap-2">
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => setShowSendWarning(false)}
-            >
-              Cancel
-            </Button>
-            <Button
-              size="sm"
-              onClick={() => {
-                setShowSendWarning(false);
-                handleSend(true);
-              }}
-            >
-              Send Anyway
-            </Button>
+          <div className="flex gap-2 ml-4">
+            <Button size="sm" variant="outline" className="h-6 text-xs px-2" onClick={() => setShowSendWarning(false)}>Cancel</Button>
+            <Button size="sm" className="h-6 text-xs px-2" onClick={() => { setShowSendWarning(false); handleSend(true); }}>Send Anyway</Button>
           </div>
         </div>
       )}
+      {(generateMutation.isSuccess || (sendMutation.isSuccess && sendMutation.data) || (followupsMutation.isSuccess && followupsMutation.data)) && (
+        <div className="flex items-center gap-3 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-xs text-emerald-700 dark:text-emerald-400" style={{ flexShrink: 0, margin: "0 28px 4px" }}>
+          {generateMutation.isSuccess && <span>Draft generation started.</span>}
+          {sendMutation.isSuccess && sendMutation.data?.status === "completed" && (
+            <span>Sent {sendMutation.data.sent}, failed {sendMutation.data.failed}{sendMutation.data.skipped_scheduled ? `, skipped ${sendMutation.data.skipped_scheduled}` : ""}.</span>
+          )}
+          {sendMutation.isSuccess && sendMutation.data?.status === "pending" && <span>Sending emails…</span>}
+          {followupsMutation.isSuccess && followupsMutation.data && (
+            <span>Follow-ups: {followupsMutation.data.generated} drafted.</span>
+          )}
+        </div>
+      )}
 
-      {/* Edit reflection banner */}
       <EditReflectionBanner />
 
-      {/* Stats */}
-      <div className="space-y-3">
-        <div className="grid grid-cols-5 gap-4">
-          <StatCard
-            icon={FileText}
-            label="Total Messages"
-            value={universalMessages.length}
-          />
-          <StatCard
-            icon={FileText}
-            label="Pending Drafts"
-            value={draftCount}
-          />
-          <StatCard
-            icon={CheckCheck}
-            label="Approved"
-            value={approvedCount}
-          />
-          <StatCard
-            icon={Send}
-            label="Sent"
-            value={sentCount}
-          />
-          <StatCard
-            icon={Reply}
-            label="Replied"
-            value={repliedCount}
-          />
-        </div>
-        <div className="flex items-center gap-2 px-1">
-          <span className="text-xs text-muted-foreground font-medium whitespace-nowrap">Drafts by type:</span>
-          {[
-            { label: "Initial", value: draftsByStep.initial },
-            { label: "Follow-up 1", value: draftsByStep.followUp1 },
-            { label: "Follow-up 2", value: draftsByStep.followUp2 },
-            { label: "Follow-up 3+", value: draftsByStep.followUp3Plus },
-          ].map(({ label, value }) => (
-            <div key={label} className="flex items-center gap-1.5 rounded-md border border-border/50 bg-muted/40 px-2.5 py-1">
-              <span className="text-xs text-muted-foreground">{label}</span>
-              <span className="text-sm font-semibold tabular-nums">{value}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Filters */}
-      <div className="flex flex-col gap-3">
-        <div className="flex items-center overflow-x-auto pb-1">
-          <div className="inline-flex rounded-lg bg-muted p-1 gap-1 whitespace-nowrap">
-            {STATUS_FILTERS.map((s) => (
-              <button
-                key={s}
-                onClick={() => { setStatusFilter(s); setSearchQuery(""); }}
-                className={`relative rounded-md px-3 py-1.5 text-sm font-medium capitalize transition-colors ${
-                  statusFilter === s
-                    ? "bg-primary text-primary-foreground shadow-sm"
-                    : "text-muted-foreground hover:text-foreground hover:bg-muted-foreground/10"
-                }`}
-              >
-                {s}
-                {s === "conversations" && unreadConversations > 0 && (
-                  <span className="absolute -top-1 -right-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-red-500 text-[8px] font-bold text-white leading-none">
-                    {unreadConversations > 9 ? "9+" : unreadConversations}
-                  </span>
-                )}
-              </button>
-            ))}
-          </div>
-        </div>
-        <div className="flex items-center gap-1">
-          {[
-            { value: "all", label: "All Steps" },
-            { value: "initial", label: "Initial" },
-            { value: "followup1", label: "Follow-up 1" },
-            { value: "followup2", label: "Follow-up 2" },
-            { value: "followup3", label: "Follow-up 3" },
-          ].map(({ value, label }) => (
-            <button
-              key={value}
-              onClick={() => setStepFilter(value)}
-              className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
-                stepFilter === value
-                  ? "bg-primary/15 text-primary border border-primary/30"
-                  : "text-muted-foreground hover:text-foreground border border-transparent hover:border-border/50"
-              }`}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-        <div className="flex items-center gap-3 w-full">
-          <select
-            value={categoryFilter}
-            onChange={(e) => setCategoryFilter(e.target.value)}
-            className="rounded-md border border-input bg-background px-3 h-10 text-sm w-[20%]"
+      {/* Gmail-style split pane */}
+      {/* Full-width status tabs — above split pane, like Gmail's category tabs */}
+      <div className="sp-email-status-bar">
+        {STATUS_FILTERS.map((s) => (
+          <button
+            key={s}
+            className={`sp-email-status-tab${statusFilter === s ? " active" : ""}`}
+            onClick={() => { setStatusFilter(s); setSearchQuery(""); }}
           >
-            <option value="">All Categories ({filteredByStatus.length})</option>
-            {dynamicCategoryOptions.map(({ value, label, count }) => (
-              <option key={value} value={value}>
-                {label} ({count})
-              </option>
-            ))}
-          </select>
-          <div className="relative w-[80%]">
-            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-            <input
-              type="text"
-              placeholder="Search messages..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="h-10 w-full rounded-md border border-input bg-background pl-9 pr-4 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            />
-          </div>
-        </div>
+            {STATUS_FILTER_LABELS[s] ?? s}
+            {s === "conversations" && unreadConversations > 0 && (
+              <span style={{
+                display: "inline-flex", alignItems: "center", justifyContent: "center",
+                width: 16, height: 16, borderRadius: "50%",
+                background: "#ef4444", color: "#fff", fontSize: 9, fontWeight: 700,
+              }}>
+                {unreadConversations > 9 ? "9+" : unreadConversations}
+              </span>
+            )}
+          </button>
+        ))}
       </div>
 
-      {/* Generation status */}
-      {generateMutation.isSuccess && (
-        <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/20 dark:text-emerald-400">
-          Draft generation started. Refresh in a moment to see new drafts.
-        </div>
-      )}
+      {/* Split pane — flex row, fills remaining height */}
+      <div
+        data-tour="outreach-messages"
+        style={{
+          flex: "1 1 0px",
+          minHeight: 0,
+          display: "flex",
+          flexDirection: "row",
+          border: "1px solid var(--sp-line)",
+          borderRadius: "var(--sp-radius-lg)",
+          overflow: "hidden",
+          background: "var(--sp-bg-paper)",
+          margin: "0 28px 0",
+        }}
+      >
+        {/* LEFT: filter header + scrollable list */}
+        <div style={{
+          width: 340,
+          flexShrink: 0,
+          display: "flex",
+          flexDirection: "column",
+          borderRight: "1px solid var(--sp-line)",
+          overflow: "hidden",
+        }}>
 
-      {/* Send status */}
-      {sendMutation.isSuccess && sendMutation.data?.status === "pending" && (
-        <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800 dark:border-blue-800 dark:bg-blue-950/20 dark:text-blue-400">
-          Sending emails. This may take a few minutes due to rate limiting.
-        </div>
-      )}
-      {sendMutation.isSuccess && sendMutation.data?.status === "completed" && (
-        <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800 dark:border-blue-800 dark:bg-blue-950/20 dark:text-blue-400">
-          Sent {sendMutation.data.sent}, failed {sendMutation.data.failed}
-          {sendMutation.data.skipped_scheduled
-            ? `, skipped by schedule ${sendMutation.data.skipped_scheduled}`
-            : ""}.
-        </div>
-      )}
-
-      {/* Followup status */}
-      {followupsMutation.isSuccess && followupsMutation.data && (
-        <div className="rounded-lg border border-purple-200 bg-purple-50 p-3 text-sm text-purple-800 dark:border-purple-800 dark:bg-purple-950/20 dark:text-purple-400">
-          Follow-ups: {followupsMutation.data.generated} drafted, {followupsMutation.data.skipped} skipped, {followupsMutation.data.failed} failed.
-        </div>
-      )}
-
-      {/* Messages list */}
-      <div data-tour="outreach-messages">
-        {isLoading ? (
-          <div className="space-y-4">
-            <Skeleton className="h-48 w-full" />
-            <Skeleton className="h-48 w-full" />
-            <Skeleton className="h-48 w-full" />
+          {/* Filter header — step chips + category + search */}
+          <div style={{
+            flexShrink: 0,
+            padding: "8px 10px",
+            borderBottom: "1px solid var(--sp-line)",
+            background: "var(--sp-bg-paper)",
+            display: "flex",
+            flexDirection: "column",
+            gap: 5,
+          }}>
+            <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+              {[
+                { value: "all", label: "All" },
+                { value: "initial", label: "Init" },
+                { value: "followup1", label: "FF1" },
+                { value: "followup2", label: "FF2" },
+                { value: "followup3", label: "FF3" },
+              ].map(({ value, label }) => (
+                <button
+                  key={value}
+                  className={`sp-email-filter-step${stepFilter === value ? " active" : ""}`}
+                  onClick={() => setStepFilter(value)}
+                >
+                  {label}
+                </button>
+              ))}
+              <select
+                value={categoryFilter}
+                onChange={(e) => setCategoryFilter(e.target.value)}
+                style={{ marginLeft: "auto", fontSize: 11, border: "1px solid var(--sp-line-strong)", background: "var(--sp-bg-sunken)", color: "var(--sp-ink)", borderRadius: 4, padding: "2px 4px", outline: "none", maxWidth: 80 }}
+              >
+                <option value="">All cat.</option>
+                {dynamicCategoryOptions.map(({ value, label, count }) => (
+                  <option key={value} value={value}>{label} ({count})</option>
+                ))}
+              </select>
+            </div>
+            <div className="sp-email-filter-search">
+              <Search style={{ width: 12, height: 12, flexShrink: 0 }} />
+              <input
+                placeholder="Search…"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+              />
+            </div>
           </div>
-        ) : allMessages.length === 0 ? (
-          <div className="rounded-xl border-2 border-dashed border-muted-foreground/20 p-12 text-center">
-            <FileText className="mx-auto mb-3 h-10 w-10 text-muted-foreground/40" />
-            <p className="text-sm text-muted-foreground">
-              No messages yet. Generate drafts for your scored leads to get started.
-            </p>
-          </div>
-        ) : statusFilter === "conversations" ? (
-          <div className="space-y-3">
-            {(() => {
-              // Group replied messages by lead_id to show full conversation threads
-              const threads = new Map<string, { businessName: string; messages: typeof allMessages }>();
-              for (const msg of allMessages) {
-                const existing = threads.get(msg.lead_id);
-                if (existing) {
-                  existing.messages.push(msg);
-                } else {
-                  threads.set(msg.lead_id, { businessName: msg.business_name, messages: [msg] });
-                }
-              }
-              // Sort by latest reply activity
-              const sorted = [...threads.entries()].sort((a, b) => {
-                const latestA = a[1].messages.reduce((max, m) => {
-                  const t = m.sent_at || m.created_at || "";
-                  return t > max ? t : max;
-                }, "");
-                const latestB = b[1].messages.reduce((max, m) => {
-                  const t = m.sent_at || m.created_at || "";
-                  return t > max ? t : max;
-                }, "");
-                return latestB.localeCompare(latestA);
-              });
-              return sorted.map(([leadId, { businessName, messages: msgs }]) => (
-                <ThreadCard
+
+          {/* Scrollable email list */}
+          <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
+            {isLoading ? (
+              <div className="p-3 space-y-2">
+                <Skeleton className="h-14 w-full" />
+                <Skeleton className="h-14 w-full" />
+                <Skeleton className="h-14 w-full" />
+              </div>
+            ) : allMessages.length === 0 && (statusFilter !== "conversations" || !conversationThreads?.length) ? (
+              <div className="p-8 text-center" style={{ color: "var(--sp-ink-3)" }}>
+                <FileText style={{ width: 28, height: 28, margin: "0 auto 8px", opacity: 0.3 }} />
+                <p style={{ fontSize: 12 }}>No messages in this view.</p>
+              </div>
+            ) : statusFilter === "conversations" ? (
+              (conversationThreads ?? []).map(({ leadId, businessName, messages: msgs }) => (
+                <div
                   key={leadId}
-                  leadId={leadId}
-                  businessName={businessName}
-                  messages={msgs}
-                  unreadReplies={unreadByLead.get(leadId) ?? 0}
-                  onOpen={() => markLeadRead(leadId)}
-                />
-              ));
-            })()}
-          </div>
-        ) : (
-          <div className="space-y-4">
-            {allMessages.map((msg) => (
-              <MessageCard key={msg.id} message={msg} emailCapReached={emailCapReached} isDuplicate={duplicateIds.has(msg.id)} />
-            ))}
-          </div>
-        )}
-      </div>
+                  className={`sp-email-item${selectedLeadId === leadId || (!selectedLeadId && conversationThreads?.[0]?.leadId === leadId) ? " selected" : ""}`}
+                  onClick={() => { setSelectedLeadId(leadId); markLeadRead(leadId); }}
+                >
+                  <div className="sp-email-item-top">
+                    <span className="sp-email-item-recip">{businessName}</span>
+                    {unreadByLead.get(leadId) ? (
+                      <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 16, height: 16, borderRadius: "50%", background: "#ef4444", color: "#fff", fontSize: 9, fontWeight: 700, flexShrink: 0 }}>
+                        {unreadByLead.get(leadId)}
+                      </span>
+                    ) : (
+                      <span className="sp-email-item-time">{msgs.length} msg</span>
+                    )}
+                  </div>
+                  <div className="sp-email-item-prev">
+                    {msgs[0]?.subject || msgs[0]?.content?.split("\n").filter(Boolean)[0]}
+                  </div>
+                </div>
+              ))
+            ) : (
+              allMessages.map((msg) => {
+                const isSelected = msg.id === (selectedMessage?.id ?? allMessages[0]?.id);
+                return (
+                  <div
+                    key={msg.id}
+                    className={`sp-email-item${isSelected ? " selected" : ""}`}
+                    onClick={() => setSelectedMessageId(msg.id)}
+                  >
+                    <div className="sp-email-item-top">
+                      <span className="sp-email-item-recip">{msg.business_name}</span>
+                      <span
+                        className="sp-email-item-time"
+                        style={{
+                          color: msg.status === "approved" ? "var(--sp-good)"
+                            : msg.status === "sent" ? "var(--sp-accent)"
+                            : msg.status === "rejected" ? "var(--sp-bad)"
+                            : "var(--sp-warn)",
+                        }}
+                      >
+                        {msg.status}
+                      </span>
+                    </div>
+                    {msg.subject && <div className="sp-email-item-subj">{msg.subject}</div>}
+                    <div className="sp-email-item-prev">
+                      {msg.content?.split("\n").filter(Boolean)[0]}
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>{/* end scrollable list */}
+        </div>{/* end left panel */}
+
+        {/* RIGHT: email detail — scrolls independently */}
+        <div style={{ flex: 1, minWidth: 0, overflowY: "auto" }}>
+          {statusFilter === "conversations" ? (
+            selectedThread ? (
+              <ThreadCard
+                leadId={selectedThread.leadId}
+                businessName={selectedThread.businessName}
+                messages={selectedThread.messages}
+                unreadReplies={unreadByLead.get(selectedThread.leadId) ?? 0}
+                onOpen={() => markLeadRead(selectedThread.leadId)}
+              />
+            ) : (
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "var(--sp-ink-4)", fontSize: 13 }}>
+                Select a conversation
+              </div>
+            )
+          ) : selectedMessage ? (
+            <MessageCard
+              key={selectedMessage.id}
+              message={selectedMessage}
+              emailCapReached={emailCapReached}
+              isDuplicate={duplicateIds.has(selectedMessage.id)}
+              defaultExpanded
+            />
+          ) : (
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "var(--sp-ink-4)", fontSize: 13 }}>
+              Select a message
+            </div>
+          )}
+        </div>{/* end right panel */}
+
+      </div>{/* end split pane */}
     </div>
   );
 }

@@ -191,18 +191,20 @@ export default function CampaignsPage() {
   const sortedFiltered = sortCampaigns(filtered, sortKey, sortDir);
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-end justify-between">
+    <div className="sp-page space-y-6">
+      <div className="sp-page-head">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Campaigns</h1>
-          <p className="text-sm text-muted-foreground">
+          <h1 className="sp-page-title">Campaigns</h1>
+          <div className="sp-page-subtitle">
             {isLoading ? "Loading…" : `${campaigns.length} campaign${campaigns.length !== 1 ? "s" : ""}`}
-          </p>
+          </div>
         </div>
-        <Button onClick={() => setShowNewCampaign(true)} size="sm">
-          <Plus className="mr-1.5 h-3.5 w-3.5" />
-          New Campaign
-        </Button>
+        <div className="sp-page-actions">
+          <Button onClick={() => setShowNewCampaign(true)} size="sm">
+            <Plus className="mr-1.5 h-3.5 w-3.5" />
+            New Campaign
+          </Button>
+        </div>
       </div>
 
       {/* Search + filter bar */}
@@ -323,9 +325,8 @@ export default function CampaignsPage() {
           )}
         </Card>
       ) : (
-        <Card className="shadow-md">
-          <div className="max-h-[70vh] overflow-auto">
-            <Table className="w-full table-fixed">
+        <Card className="shadow-md" style={{ overflow: "visible" }}>
+          <Table className="w-full table-fixed">
               <TableHeader>
                 <TableRow>
                   {LIST_SORT_COLS.map(({ key, label, className }) => (
@@ -424,7 +425,6 @@ export default function CampaignsPage() {
                 })}
               </TableBody>
             </Table>
-          </div>
         </Card>
       )}
 
@@ -619,7 +619,7 @@ function CampaignDetailView({
   }
 
   return (
-    <div className="space-y-5">
+    <div className="sp-page space-y-5">
       {/* Header */}
       <div className="flex items-start gap-3">
         <button onClick={onBack} className="mt-1 text-muted-foreground hover:text-foreground transition-colors">

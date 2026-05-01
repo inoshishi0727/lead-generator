@@ -162,9 +162,8 @@ export default function ClientsPage() {
           <p className="mt-1 text-xs">Mark a lead as converted in the Leads table.</p>
         </Card>
       ) : (
-        <Card className="shadow-md">
-          <div className="max-h-[70vh] overflow-auto">
-            <Table className="w-full table-fixed">
+        <Card className="shadow-md" style={{ overflow: "visible" }}>
+          <Table className="w-full table-fixed">
               <TableHeader>
                 <TableRow>
                   {SORT_COLS.map(({ key, label, className }) => (
@@ -294,7 +293,6 @@ export default function ClientsPage() {
                 )}
               </TableBody>
             </Table>
-          </div>
         </Card>
       )}
 

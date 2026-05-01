@@ -168,7 +168,14 @@ export default function DashboardPage() {
 
   const today = new Date();
   const dayName = today.toLocaleDateString("en-GB", { weekday: "long" });
-  const weekNum = Math.ceil((today.getDate() - today.getDay() + new Date(today.getFullYear(), 0, 1).getDay()) / 7);
+  const firstSentAt = allMessages
+    .filter((m) => m.sent_at)
+    .map((m) => new Date(m.sent_at as string).getTime())
+    .reduce((min, t) => (t < min ? t : min), Infinity);
+  const opsStart = isFinite(firstSentAt) ? new Date(firstSentAt) : null;
+  const weekNum = opsStart
+    ? Math.max(1, Math.ceil((today.getTime() - opsStart.getTime()) / (7 * 24 * 60 * 60 * 1000)))
+    : 1;
 
   return (
     <div className="sp-page">

@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Inter, JetBrains_Mono, Instrument_Serif } from "next/font/google";
 import { QueryProvider } from "@/components/query-provider";
 import { JobsProvider } from "@/components/jobs-provider";
+import { ThemeProvider } from "@/components/theme-provider";
 import { ActiveJobsBar } from "@/components/active-jobs-bar";
 import { LiveUpdates } from "@/components/live-updates";
 import { Toaster } from "sonner";
@@ -39,10 +40,12 @@ export default function RootLayout({
   return (
     <html
       lang="en"
+      suppressHydrationWarning
       className={`${inter.variable} ${mono.variable} ${instrumentSerif.variable} h-full antialiased`}
     >
       <body className="min-h-full" suppressHydrationWarning>
         <QueryProvider>
+          <ThemeProvider>
           <AuthShell>
             <JobsProvider>
               <LiveUpdates />
@@ -50,6 +53,7 @@ export default function RootLayout({
               {children}
             </JobsProvider>
           </AuthShell>
+          </ThemeProvider>
           <Toaster />
         </QueryProvider>
       </body>

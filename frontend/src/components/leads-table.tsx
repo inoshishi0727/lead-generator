@@ -257,8 +257,7 @@ export function LeadsTable({ leads, isLoading, selectable, selectedIds = [], onS
           No leads yet. Run a scrape from the Dashboard.
         </p>
       ) : (
-        <Card className="shadow-md">
-          <div className="max-h-[70vh] overflow-auto">
+        <Card className="shadow-md" style={{ overflow: "visible" }}>
           <Table className="w-full table-fixed">
             <TableHeader className="sticky top-0 z-10 bg-card shadow-[0_1px_0_var(--border)]">
               <TableRow>
@@ -496,7 +495,6 @@ export function LeadsTable({ leads, isLoading, selectable, selectedIds = [], onS
               ))}
             </TableBody>
           </Table>
-          </div>
         </Card>
       )}
 
