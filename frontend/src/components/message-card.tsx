@@ -298,9 +298,9 @@ export function MessageCard({ message, inConversation, emailCapReached, isDuplic
 
   return (
     <Card className={`transition-opacity ${isRegenerating ? "opacity-50" : ""}`} style={{ overflow: "visible" }}>
-      {/* Sticky header — sticks to top of sp-email-detail scroll container */}
+      {/* Card head — flows with scroll so action buttons remain reachable below */}
       <div
-        className="sticky top-0 z-10 bg-card border-b flex flex-col"
+        className="bg-card border-b flex flex-col"
         style={{ gap: 10, padding: "14px 16px 12px" }}
       >
         {/* Header row */}
