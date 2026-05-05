@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   ChevronDown,
   ChevronUp,
@@ -35,7 +35,11 @@ function timeAgo(dateStr: string): string {
 }
 
 export function ThreadCard({ leadId, businessName, messages, unreadReplies = 0, onOpen }: Props) {
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(true);
+
+  useEffect(() => {
+    setExpanded(true);
+  }, [leadId]);
 
   // Sort messages by step_number, then created_at
   const sorted = [...messages].sort((a, b) => {
