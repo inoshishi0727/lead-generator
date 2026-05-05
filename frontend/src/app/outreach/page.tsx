@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useDebounce } from "@/hooks/use-debounce";
 import { useSearchParams } from "next/navigation";
 import {
@@ -83,28 +84,20 @@ export default function OutreachPage() {
   // Universal fetch for stat cards — always all messages regardless of current tab
   const { data: universalApiMessages } = useMessages({ assignedTo } as any, 1000);
 
-  // Use API-backed messages by default, but when viewing Follow-ups or Clients, fetch directly
-  // from Firestore client to avoid server-side cache delays (live functions write directly to Firestore).
+  // Use API-backed messages by default, but when viewing Follow-ups, Clients, or Scheduled,
+  // fetch directly from Firestore client to avoid server-side cache delays (live functions write
+  // directly to Firestore). Wrapped in useQuery so mutations can invalidate ["outreach"] and trigger
+  // refetch — otherwise edits (e.g. subject changes) wouldn't appear until tab switch.
   const { data: apiMessages, isLoading: apiLoading } = useMessages(firestoreFilter);
-  const [clientSideMessages, setClientSideMessages] = useState<any[] | null>(null);
-  const [clientSideLoading, setClientSideLoading] = useState(false);
+  const useClientSide = statusFilter === "follow-ups" || statusFilter === "clients" || statusFilter === "scheduled";
+  const { data: clientSideMessages, isLoading: clientSideLoading } = useQuery({
+    queryKey: ["outreach", "messages", "clientSide", statusFilter, assignedTo],
+    queryFn: () => getOutreachMessages({ limit: 500, assignedTo }),
+    enabled: useClientSide,
+  });
 
-  useEffect(() => {
-    let mounted = true;
-    if (statusFilter === "follow-ups" || statusFilter === "clients" || statusFilter === "scheduled") {
-      setClientSideLoading(true);
-      getOutreachMessages({ limit: 500, assignedTo })
-        .then((res) => { if (mounted) setClientSideMessages(res); })
-        .catch((err) => { console.error("Failed to load messages from client Firestore", err); if (mounted) setClientSideMessages([]); })
-        .finally(() => { if (mounted) setClientSideLoading(false); });
-    } else {
-      setClientSideMessages(null);
-    }
-    return () => { mounted = false; };
-  }, [statusFilter]);
-
-  const messages = (statusFilter === "follow-ups" || statusFilter === "clients" || statusFilter === "scheduled") ? (clientSideMessages ?? []) : (apiMessages ?? []);
-  const isLoading = (statusFilter === "follow-ups" || statusFilter === "clients" || statusFilter === "scheduled") ? clientSideLoading : apiLoading;
+  const messages = useClientSide ? (clientSideMessages ?? []) : (apiMessages ?? []);
+  const isLoading = useClientSide ? clientSideLoading : apiLoading;
 
   const { replies: inboundReplies, lastReadAt, markLeadRead } = useReplyNotifications();
 
