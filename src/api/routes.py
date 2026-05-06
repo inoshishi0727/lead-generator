@@ -388,6 +388,39 @@ async def scrape_status(run_id: str) -> ScrapeStatusResponse:
     return ScrapeStatusResponse(run_id=run_id, **run)
 
 
+def _send_linkedin_alert(subject: str, body: str) -> None:
+    """Fire-and-forget Resend email to all admin users."""
+    api_key = os.environ.get("RESEND_API_KEY")
+    if not api_key:
+        return
+    try:
+        import httpx
+        from src.db.client import get_firestore_client
+        db = get_firestore_client()
+        if not db:
+            return
+        admin_snap = db.collection("users").where("role", "==", "admin").stream()
+        admin_emails = [d.to_dict().get("email") for d in admin_snap]
+        admin_emails = [e for e in admin_emails if e]
+        if not admin_emails:
+            return
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        for email in admin_emails:
+            httpx.post(
+                "https://api.resend.com/emails",
+                headers=headers,
+                json={
+                    "from": "Asterley Bros Alerts <alerts@asterleybros.com>",
+                    "to": email,
+                    "subject": subject,
+                    "text": body,
+                },
+                timeout=10,
+            )
+    except Exception as exc:
+        log.warning("linkedin_alert_send_failed", error=str(exc))
+
+
 def _run_linkedin_scrape(
     run_id: str, lead_ids: list[str] | None, auto_select_count: int
 ) -> None:
@@ -400,6 +433,22 @@ def _run_linkedin_scrape(
         LinkedInSessionExpired,
     )
 
+    from src.db.client import get_firestore_client
+    db = get_firestore_client()
+    now_iso = datetime.utcnow().isoformat() + "Z"
+
+    job_ref = None
+    if db:
+        job_ref = db.collection("pipeline_jobs").document(run_id)
+        job_ref.set({
+            "type": "linkedin_scrape",
+            "status": "running",
+            "started_at": now_iso,
+            "completed_at": None,
+            "lead_ids": lead_ids,
+            "result": None,
+        })
+
     try:
         _linkedin_runs[run_id]["status"] = "running"
         scraper = LinkedInCompanyScraper(
@@ -407,39 +456,87 @@ def _run_linkedin_scrape(
             auto_select_count=auto_select_count,
         )
         asyncio.run(scraper.run())
+
+        leads_processed = len(scraper.collected_leads)
+        employees_found = scraper.employee_count_total
+
         _linkedin_runs[run_id].update(
             status="completed",
             completed_at=datetime.now(),
-            leads_processed=len(scraper.collected_leads),
-            employees_found=scraper.employee_count_total,
+            leads_processed=leads_processed,
+            employees_found=employees_found,
         )
         log.info(
             "linkedin_run_done",
             run_id=run_id,
-            leads=len(scraper.collected_leads),
-            employees=scraper.employee_count_total,
+            leads=leads_processed,
+            employees=employees_found,
         )
+
+        completed_iso = datetime.utcnow().isoformat() + "Z"
+        result_payload = {"leads_processed": leads_processed, "employees_found": employees_found}
+
+        # Empty-result alarm: flag leads that have a LinkedIn URL but yielded zero employees
+        if db and employees_found == 0 and leads_processed > 0:
+            log.warning("linkedin_empty_result", run_id=run_id, leads=leads_processed)
+            db.collection("pipeline_jobs").document(run_id + "_alarm").set({
+                "type": "linkedin_empty_result_alarm",
+                "run_id": run_id,
+                "lead_ids": lead_ids,
+                "leads_processed": leads_processed,
+                "created_at": completed_iso,
+                "resolved": False,
+            })
+
+        if job_ref:
+            job_ref.update({
+                "status": "completed",
+                "completed_at": completed_iso,
+                "result": result_payload,
+            })
+
     except LinkedInSessionExpired as exc:
+        error_msg = f"Session expired: {exc}"
+        completed_iso = datetime.utcnow().isoformat() + "Z"
         _linkedin_runs[run_id].update(
             status="failed",
-            error=f"Session expired: {exc}",
+            error=error_msg,
             completed_at=datetime.now(),
         )
         log.error("linkedin_session_expired", run_id=run_id)
+        if job_ref:
+            job_ref.update({"status": "failed", "completed_at": completed_iso, "result": {"error": error_msg}})
+        _send_linkedin_alert(
+            subject="[Asterley Bros] LinkedIn session expired — re-auth required",
+            body=(
+                f"The LinkedIn scraper session has expired and all subsequent runs will fail "
+                f"until someone VNCs into the VPS and re-runs:\n\n"
+                f"  python -m src.scrapers.linkedin --save-session\n\n"
+                f"Run ID: {run_id}\nTime: {completed_iso}"
+            ),
+        )
     except LinkedInBlocked as exc:
+        error_msg = f"LinkedIn blocked: {exc}"
+        completed_iso = datetime.utcnow().isoformat() + "Z"
         _linkedin_runs[run_id].update(
             status="failed",
-            error=f"LinkedIn blocked: {exc}",
+            error=error_msg,
             completed_at=datetime.now(),
         )
         log.error("linkedin_blocked", run_id=run_id, error=str(exc))
+        if job_ref:
+            job_ref.update({"status": "failed", "completed_at": completed_iso, "result": {"error": error_msg}})
     except Exception as exc:
+        error_msg = str(exc)
+        completed_iso = datetime.utcnow().isoformat() + "Z"
         _linkedin_runs[run_id].update(
             status="failed",
-            error=str(exc),
+            error=error_msg,
             completed_at=datetime.now(),
         )
         log.exception("linkedin_thread_failed", run_id=run_id)
+        if job_ref:
+            job_ref.update({"status": "failed", "completed_at": completed_iso, "result": {"error": error_msg}})
     finally:
         with _linkedin_lock:
             _linkedin_running = False
