@@ -486,6 +486,12 @@ class LinkedInCompanyScraper(BaseScraper):
         except Exception:
             pass
 
+        current_url = page.url
+        if "/login" in current_url or "authwall" in current_url:
+            raise LinkedInSessionExpired("Redirected to login during All-tab search")
+        if "checkpoint/challenge" in current_url or "captcha" in current_url:
+            raise LinkedInBlocked("Checkpoint/captcha detected during All-tab search")
+
         candidates = await self._collect_all_tab_candidates(page)
 
         if not candidates:
@@ -1041,22 +1047,13 @@ Rules:
         try:
             return json.loads(raw_text)
         except json.JSONDecodeError:
-            # Try brace-matching fallback
             start = raw_text.find("{")
             if start == -1:
+                log.warning("linkedin_gemini_parse_failed", raw=raw_text[:200])
                 return None
-            depth = 0
-            end = start
-            for i in range(start, len(raw_text)):
-                if raw_text[i] == "{":
-                    depth += 1
-                elif raw_text[i] == "}":
-                    depth -= 1
-                    if depth == 0:
-                        end = i + 1
-                        break
             try:
-                return json.loads(raw_text[start:end])
+                obj, _ = json.JSONDecoder().raw_decode(raw_text, idx=start)
+                return obj
             except json.JSONDecodeError:
                 log.warning("linkedin_gemini_parse_failed", raw=raw_text[:200])
                 return None
@@ -1396,6 +1393,8 @@ Rules:
 
                     if isinstance(results[0], LinkedInBlocked):
                         raise results[0]
+                    if isinstance(results[1], LinkedInBlocked):
+                        raise results[1]
                     if isinstance(results[0], ScraperError):
                         log.error("linkedin_scrape_error", lead_id=lead_id, error=str(results[0]))
 
