@@ -1,6 +1,8 @@
 "use client";
 
+import { useEffect } from "react";
 import { X, MessageCircle, ExternalLink } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { useSommelierConversation } from "@/hooks/use-sommelier-conversations";
 import type { SommelierMessage } from "@/lib/types";
 
@@ -41,8 +43,8 @@ function MessageBubble({ msg }: { msg: SommelierMessage }) {
   if (msg.role === "user") {
     return (
       <div className="flex justify-end">
-        <div className="max-w-[75%] rounded-2xl bg-blue-500/15 border border-blue-500/20 px-4 py-2.5 text-sm text-foreground">
-          {msg.content}
+        <div className="max-w-[75%] rounded-2xl border border-primary/30 bg-primary/10 px-4 py-2.5 text-sm text-foreground">
+          <div className="whitespace-pre-wrap">{msg.content}</div>
           <div className="mt-1 text-[10px] text-muted-foreground">
             {formatDateTime(msg.createdAt)}
           </div>
@@ -54,23 +56,31 @@ function MessageBubble({ msg }: { msg: SommelierMessage }) {
   const { message, productNames, recipeNames } = parseAssistantMessage(msg.content);
   return (
     <div className="flex justify-start">
-      <div className="max-w-[75%] rounded-2xl bg-zinc-800/40 border border-zinc-700/50 px-4 py-2.5 text-sm text-foreground">
+      <div className="max-w-[75%] rounded-2xl border border-border/60 bg-muted/40 px-4 py-2.5 text-sm text-foreground">
         <div className="whitespace-pre-wrap">{message}</div>
         {productNames.length > 0 && (
           <div className="mt-2 flex flex-wrap gap-1">
             {productNames.map((p, i) => (
-              <span key={i} className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/20">
+              <Badge
+                key={i}
+                variant="outline"
+                className="text-[10px] gap-1 border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400"
+              >
                 Product · {p}
-              </span>
+              </Badge>
             ))}
           </div>
         )}
         {recipeNames.length > 0 && (
           <div className="mt-2 flex flex-wrap gap-1">
             {recipeNames.map((r, i) => (
-              <span key={i} className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/20">
+              <Badge
+                key={i}
+                variant="outline"
+                className="text-[10px] gap-1 border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
+              >
                 Recipe · {r}
-              </span>
+              </Badge>
             ))}
           </div>
         )}
@@ -85,18 +95,27 @@ function MessageBubble({ msg }: { msg: SommelierMessage }) {
 export function ConversationDetailDialog({ sessionId, onClose }: Props) {
   const { data, isLoading } = useSommelierConversation(sessionId);
 
+  useEffect(() => {
+    if (!sessionId) return;
+    function handleKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    document.addEventListener("keydown", handleKey);
+    return () => document.removeEventListener("keydown", handleKey);
+  }, [sessionId, onClose]);
+
   if (!sessionId) return null;
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
-      onClick={onClose}
+      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/50 p-4 pt-[6vh] backdrop-blur-sm"
+      onClick={(e) => e.target === e.currentTarget && onClose()}
     >
       <div
-        className="relative w-full max-w-3xl max-h-[85vh] flex flex-col rounded-lg border border-zinc-700 bg-background shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
+        className="relative w-full max-w-3xl max-h-[88vh] flex flex-col rounded-lg border border-border/50 bg-card shadow-2xl"
       >
-        <div className="flex items-center justify-between p-4 border-b border-zinc-800">
+        {/* Header */}
+        <div className="flex items-center justify-between border-b border-border/50 px-5 py-3">
           <div className="flex items-center gap-2">
             <MessageCircle className="h-4 w-4 text-amber-500" />
             <h2 className="text-sm font-semibold">Sommelier Conversation</h2>
@@ -108,30 +127,31 @@ export function ConversationDetailDialog({ sessionId, onClose }: Props) {
           </div>
           <button
             onClick={onClose}
-            className="rounded p-1 hover:bg-zinc-800 transition-colors"
+            className="rounded p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
           >
             <X className="h-4 w-4" />
           </button>
         </div>
 
+        {/* Meta */}
         {data?.conversation && (
-          <div className="px-4 py-2 border-b border-zinc-800 text-[11px] text-muted-foreground space-y-0.5">
+          <div className="space-y-0.5 border-b border-border/50 bg-muted/30 px-5 py-2.5 text-[11px] text-muted-foreground">
             <div>
-              <span className="font-medium">Started:</span>{" "}
+              <span className="font-medium text-foreground/80">Started:</span>{" "}
               {formatDateTime(data.conversation.createdAt)}
             </div>
             <div>
-              <span className="font-medium">Last active:</span>{" "}
+              <span className="font-medium text-foreground/80">Last active:</span>{" "}
               {formatDateTime(data.conversation.lastActive)}
             </div>
             {data.conversation.pageUrl && (
               <div className="flex items-center gap-1">
-                <span className="font-medium">Page:</span>
+                <span className="font-medium text-foreground/80">Page:</span>
                 <a
                   href={data.conversation.pageUrl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="inline-flex items-center gap-0.5 text-blue-400 hover:underline truncate max-w-md"
+                  className="inline-flex items-center gap-0.5 truncate max-w-md text-primary hover:underline"
                 >
                   {data.conversation.pageUrl}
                   <ExternalLink className="h-2.5 w-2.5" />
@@ -142,14 +162,15 @@ export function ConversationDetailDialog({ sessionId, onClose }: Props) {
           </div>
         )}
 
-        <div className="flex-1 overflow-y-auto p-4 space-y-3">
+        {/* Messages */}
+        <div className="flex-1 space-y-3 overflow-y-auto bg-background/50 p-5">
           {isLoading && (
-            <div className="text-center text-sm text-muted-foreground py-8">
+            <div className="py-8 text-center text-sm text-muted-foreground">
               Loading conversation…
             </div>
           )}
           {data && data.messages.length === 0 && (
-            <div className="text-center text-sm text-muted-foreground py-8">
+            <div className="py-8 text-center text-sm text-muted-foreground">
               No messages in this session.
             </div>
           )}
