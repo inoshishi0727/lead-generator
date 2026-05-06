@@ -6,6 +6,7 @@ import { GoogleGenAI } from "@google/genai";
 import Anthropic from "@anthropic-ai/sdk";
 import { Resend } from "resend";
 import { FOLLOW_UP_LABELS, FOLLOW_UP_GAP_DAYS, shouldSkipLead, determineFollowUpAction, shouldGenerateEscalationDm } from "./followup-logic.js";
+import { extractSubjectFeatures, extractContentFeatures, buildSegmentKey, buildBroadSegmentKey } from "./feature-extractor.js";
 
 const HttpsError = functions.https.HttpsError;
 
@@ -621,6 +622,53 @@ async function getEditFeedback(venueCat, toneTier, limit = 3) {
   }
 }
 
+// Pull the top reply-getting drafts from the same segment so Claude can mimic
+// what already worked. Falls back to broader cohort if the narrow one is thin.
+async function getWinningExamples(segmentKey, broadKey, limit = 3) {
+  try {
+    const trySegment = async (key) => {
+      if (!key) return [];
+      const snap = await db.collection("outreach_messages")
+        .where("segment_key", "==", key)
+        .where("has_reply", "==", true)
+        .limit(20)
+        .get();
+      return snap.docs.map((d) => d.data());
+    };
+
+    let docs = await trySegment(segmentKey);
+    if (docs.length < limit) {
+      const broad = await trySegment(broadKey);
+      const seen = new Set(docs.map((d) => d.id));
+      for (const d of broad) {
+        if (!seen.has(d.id)) docs.push(d);
+      }
+    }
+
+    if (docs.length === 0) return "";
+
+    // Score: open count + 5 if reply received + faster reply ranks higher
+    docs.sort((a, b) => {
+      const aScore = (a.open_count || 0) + (a.has_reply ? 5 : 0);
+      const bScore = (b.open_count || 0) + (b.has_reply ? 5 : 0);
+      return bScore - aScore;
+    });
+
+    const selected = docs.slice(0, limit);
+    let block = `\nWINNING EXAMPLES (these emails got replies in the same segment — match their structure, tone, and ask placement):\n`;
+    for (let i = 0; i < selected.length; i++) {
+      const m = selected[i];
+      block += `\nExample ${i + 1}:`;
+      if (m.subject) block += `\nSubject: ${m.subject}`;
+      block += `\nBody:\n${m.content}\n`;
+    }
+    return block;
+  } catch (err) {
+    console.warn("Failed to fetch winning examples:", err.message);
+    return "";
+  }
+}
+
 function hasEnrichment(doc) {
   const e = doc.enrichment || {};
   return !!(
@@ -744,14 +792,18 @@ export const generateDrafts = functions
         const enrichment = leadDoc.enrichment || {};
         const venueCat = enrichment.venue_category || leadDoc.category || "cocktail_bar";
         const toneTier = enrichment.tone_tier || "bartender_casual";
+        const segmentKey = buildSegmentKey(leadDoc, enrichment);
+        const broadSegmentKey = buildBroadSegmentKey(leadDoc, enrichment);
         const prompt = buildPrompt(leadDoc, enrichment);
 
-        // Inject edit feedback so Claude learns from past human corrections
+        // Inject edit feedback + past winners so Claude learns from corrections AND from what got replies
         const feedbackBlock = await getEditFeedback(venueCat, toneTier);
+        const winnersBlock = await getWinningExamples(segmentKey, broadSegmentKey);
         const promptRules = await getPromptRules();
         const systemPrompt = EMAIL_SYSTEM_PROMPT
           + (promptRules ? `\n\nPROMPT RULES (apply to every email):\n${promptRules}` : "")
-          + (feedbackBlock || "");
+          + (feedbackBlock || "")
+          + (winnersBlock || "");
 
         const rawText = await callDraftLLM(provider, systemPrompt, prompt);
         const { subject, content } = parseSubjectContent(rawText);
@@ -793,6 +845,10 @@ export const generateDrafts = functions
           provider,
           generated_by: context.auth.uid,
           generated_by_name: callerName,
+          segment_key: segmentKey,
+          broad_segment_key: broadSegmentKey,
+          subject_features: extractSubjectFeatures(subject),
+          content_features: extractContentFeatures(content),
         });
 
         await db.collection("leads").doc(leadDoc.id).update({
@@ -4569,10 +4625,15 @@ export const scheduledDailyReport = functions
     });
 
     try {
-      // Recipients: admins only
+      // Recipients: admins + extra CC list
       const adminSnap = await db.collection("users").where("role", "==", "admin").get();
-      const adminEmails = adminSnap.docs.map(d => d.data().email).filter(Boolean);
-      const adminUsers = adminSnap.docs.map(d => d.data());
+      const adminUsersAll = adminSnap.docs.map(d => d.data());
+      const adminUsers = adminUsersAll;
+      const EXTRA_REPORT_RECIPIENTS = ["alex@asterleybros.com"];
+      const adminEmails = Array.from(new Set([
+        ...adminUsersAll.map(u => u.email).filter(Boolean),
+        ...EXTRA_REPORT_RECIPIENTS,
+      ]));
 
       if (!adminEmails.length) {
         console.log("[dailyReport] No admin emails found, skipping");
@@ -5545,5 +5606,276 @@ export const backfillContentRatings = functions
     }
 
     return { scored, skipped, total: unrated.length };
+  });
+
+// ===== Outreach feedback loop: aggregation + AI suggestions =====
+//
+// runOutreachAggregation walks every sent outreach_message that has features +
+// segment_key, computes open_rate / reply_rate per (segment, feature_dimension,
+// feature_value), and writes the result to outreach_stats. Used both by a
+// scheduled daily run and a manual callable trigger.
+
+const FEATURE_DIMENSIONS = [
+  { source: "subject_features", key: "length_bucket" },
+  { source: "subject_features", key: "has_question" },
+  { source: "subject_features", key: "personalization_count" },
+  { source: "subject_features", key: "starts_with_name" },
+  { source: "content_features", key: "length_bucket" },
+  { source: "content_features", key: "cta_type" },
+  { source: "content_features", key: "tone_signal" },
+  { source: "content_features", key: "ask_placement" },
+  { source: "content_features", key: "paragraph_count" },
+];
+
+function bucketValue(v) {
+  if (v === null || v === undefined) return "unknown";
+  if (typeof v === "boolean") return v ? "true" : "false";
+  if (typeof v === "number") {
+    if (v === 0) return "0";
+    if (v <= 2) return "1-2";
+    if (v <= 4) return "3-4";
+    return "5+";
+  }
+  return String(v);
+}
+
+async function runOutreachAggregation() {
+  // Only sent emails are eligible — drafts have no opens/replies
+  const snap = await db.collection("outreach_messages")
+    .where("status", "==", "sent")
+    .where("channel", "==", "email")
+    .get();
+
+  // buckets: Map<segment_key, Map<dim_key, Map<value, {sent, opens, replies}>>>
+  const segments = new Map();
+
+  for (const doc of snap.docs) {
+    const m = doc.data();
+    if (!m.segment_key) continue;
+    if (!m.subject_features && !m.content_features) continue;
+
+    for (const segKey of [m.segment_key, m.broad_segment_key].filter(Boolean)) {
+      if (!segments.has(segKey)) segments.set(segKey, new Map());
+      const dims = segments.get(segKey);
+
+      for (const dim of FEATURE_DIMENSIONS) {
+        const features = m[dim.source];
+        if (!features) continue;
+        const dimKey = `${dim.source}.${dim.key}`;
+        const value = bucketValue(features[dim.key]);
+
+        if (!dims.has(dimKey)) dims.set(dimKey, new Map());
+        const values = dims.get(dimKey);
+        if (!values.has(value)) values.set(value, { sent: 0, opens: 0, replies: 0 });
+        const stats = values.get(value);
+
+        stats.sent += 1;
+        if (m.opened) stats.opens += 1;
+        if (m.has_reply) stats.replies += 1;
+      }
+    }
+  }
+
+  // Persist — one doc per segment_key with embedded dimension breakdown
+  const batch = db.batch();
+  let written = 0;
+  const now = new Date().toISOString();
+
+  for (const [segKey, dims] of segments) {
+    const dimensions = {};
+    for (const [dimKey, values] of dims) {
+      const breakdown = {};
+      for (const [value, stats] of values) {
+        breakdown[value] = {
+          sent: stats.sent,
+          opens: stats.opens,
+          replies: stats.replies,
+          open_rate: stats.sent > 0 ? stats.opens / stats.sent : 0,
+          reply_rate: stats.sent > 0 ? stats.replies / stats.sent : 0,
+        };
+      }
+      dimensions[dimKey] = breakdown;
+    }
+
+    const docId = segKey.replace(/[^a-zA-Z0-9_|-]/g, "_");
+    const ref = db.collection("outreach_stats").doc(docId);
+    batch.set(ref, {
+      segment_key: segKey,
+      dimensions,
+      computed_at: now,
+    });
+    written += 1;
+  }
+
+  if (written > 0) await batch.commit();
+  return { segments_written: written, messages_scanned: snap.size };
+}
+
+// Scheduled daily — Tuesday-Friday morning, after overnight scrapes
+export const scheduledAggregateOutreachStats = functions
+  .runWith({ timeoutSeconds: 540, memory: "512MB" })
+  .pubsub.schedule("0 7 * * 1-5")
+  .timeZone("Europe/London")
+  .onRun(async () => {
+    try {
+      const result = await runOutreachAggregation();
+      console.log("Outreach stats aggregated:", JSON.stringify(result));
+    } catch (err) {
+      console.error("Aggregation failed:", err.message);
+    }
+    return null;
+  });
+
+// Manual trigger for backfill / on-demand recompute
+export const aggregateOutreachStats = functions
+  .runWith({ timeoutSeconds: 540, memory: "512MB" })
+  .https.onCall(async (_data, context) => {
+    if (!context.auth) {
+      throw new HttpsError("unauthenticated", "Must be signed in.");
+    }
+    return runOutreachAggregation();
+  });
+
+// suggestDraftImprovements — pull the matching segment's stats, hand them to
+// Gemini with the draft, and return ranked suggestions for the coach panel.
+export const suggestDraftImprovements = functions
+  .runWith({ timeoutSeconds: 60, memory: "256MB", secrets: ["GEMINI_API_KEY"] })
+  .https.onCall(async (data, context) => {
+    if (!context.auth) {
+      throw new HttpsError("unauthenticated", "Must be signed in.");
+    }
+    const messageId = data?.message_id;
+    if (!messageId) throw new HttpsError("invalid-argument", "message_id required.");
+
+    const msgSnap = await db.collection("outreach_messages").doc(messageId).get();
+    if (!msgSnap.exists) throw new HttpsError("not-found", "Message not found.");
+    const msg = msgSnap.data();
+
+    // Resolve features from the live draft body, even if the doc was created
+    // before the feature extractor existed.
+    const subjectFeatures = msg.subject_features || extractSubjectFeatures(msg.subject);
+    const contentFeatures = msg.content_features || extractContentFeatures(msg.content);
+
+    // Pull stats — try narrow segment first, then broad
+    let statsDoc = null;
+    if (msg.segment_key) {
+      const id = msg.segment_key.replace(/[^a-zA-Z0-9_|-]/g, "_");
+      const s = await db.collection("outreach_stats").doc(id).get();
+      if (s.exists) statsDoc = s.data();
+    }
+    if (!statsDoc && msg.broad_segment_key) {
+      const id = msg.broad_segment_key.replace(/[^a-zA-Z0-9_|-]/g, "_");
+      const s = await db.collection("outreach_stats").doc(id).get();
+      if (s.exists) statsDoc = s.data();
+    }
+
+    // If no stats yet, return a soft empty result rather than erroring — UI
+    // will render an "insufficient data" state.
+    if (!statsDoc) {
+      return {
+        suggestions: [],
+        segment_key: msg.segment_key || null,
+        sample_size: 0,
+        reason: "No aggregated stats yet for this segment. Run aggregation after more sends.",
+      };
+    }
+
+    // Find dimensions where the current draft sits in a low-performing bucket
+    // and pass that to Gemini as concrete evidence.
+    const evidence = [];
+    const allFeatures = {
+      "subject_features": subjectFeatures || {},
+      "content_features": contentFeatures || {},
+    };
+
+    for (const [dimKey, breakdown] of Object.entries(statsDoc.dimensions || {})) {
+      const [source, key] = dimKey.split(".");
+      const currentValue = bucketValue(allFeatures[source]?.[key]);
+      const currentBucket = breakdown[currentValue];
+      const buckets = Object.entries(breakdown).filter(([_, b]) => b.sent >= 3);
+      if (buckets.length === 0) continue;
+      const best = buckets.sort((a, b) => b[1].reply_rate - a[1].reply_rate)[0];
+      if (!currentBucket) continue;
+      // Only flag when there's a meaningful gap and enough samples to trust it
+      if (best[0] !== currentValue && best[1].reply_rate > currentBucket.reply_rate + 0.05) {
+        evidence.push({
+          dimension: dimKey,
+          current_value: currentValue,
+          current_reply_rate: currentBucket.reply_rate,
+          best_value: best[0],
+          best_reply_rate: best[1].reply_rate,
+          best_sample_size: best[1].sent,
+        });
+      }
+    }
+
+    let sampleSize = 0;
+    for (const breakdown of Object.values(statsDoc.dimensions || {})) {
+      for (const b of Object.values(breakdown)) sampleSize = Math.max(sampleSize, b.sent);
+    }
+
+    if (evidence.length === 0) {
+      return {
+        suggestions: [],
+        segment_key: msg.segment_key || null,
+        sample_size: sampleSize,
+        reason: "Draft already aligns with top-performing patterns for this segment.",
+      };
+    }
+
+    // Hand evidence + draft to Gemini, ask for concrete rewrites
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) throw new HttpsError("failed-precondition", "GEMINI_API_KEY not configured.");
+    const ai = new GoogleGenAI({ apiKey });
+
+    const promptBody = `You are coaching a sales rep on a cold outreach email. You have hard data on what gets replies in this segment. Suggest concrete, specific edits the rep should consider.
+
+DRAFT SUBJECT: ${msg.subject || "(none)"}
+
+DRAFT BODY:
+"""
+${msg.content || ""}
+"""
+
+EVIDENCE (each row: this draft's bucket vs. the top-performing bucket for this segment):
+${evidence.map((e) => `- ${e.dimension}: draft is "${e.current_value}" with ${(e.current_reply_rate * 100).toFixed(1)}% reply rate. Top bucket is "${e.best_value}" with ${(e.best_reply_rate * 100).toFixed(1)}% reply rate (n=${e.best_sample_size}).`).join("\n")}
+
+Return ONLY valid JSON in this shape:
+{
+  "suggestions": [
+    {
+      "dimension": "<feature dimension being addressed>",
+      "title": "<short imperative — 5-8 words>",
+      "rationale": "<why, citing the data — 1 sentence>",
+      "concrete_change": "<the specific rewrite or edit — 1-2 sentences>",
+      "confidence": "high|medium|low"
+    }
+  ]
+}
+
+Rules:
+- Maximum 4 suggestions, ranked by impact
+- Skip suggestions where the draft already matches the top bucket
+- Be specific — "use a question subject" beats "improve subject"
+- Confidence "high" only when sample size is 10+ AND gap is 10%+`;
+
+    try {
+      const response = await ai.models.generateContent({
+        model: GEMINI_DRAFT_MODEL,
+        contents: promptBody,
+        config: { maxOutputTokens: 1024, temperature: 0.4, responseMimeType: "application/json" },
+      });
+      const raw = response.text || "{}";
+      const parsed = JSON.parse(raw);
+      return {
+        suggestions: parsed.suggestions || [],
+        segment_key: msg.segment_key || null,
+        sample_size: sampleSize,
+        evidence,
+      };
+    } catch (err) {
+      console.error("suggestDraftImprovements LLM call failed:", err.message);
+      throw new HttpsError("internal", "Failed to generate suggestions.");
+    }
   });
 

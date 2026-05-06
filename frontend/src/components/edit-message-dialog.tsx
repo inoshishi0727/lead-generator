@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { X, Mail, MessageCircle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { DraftCoachPanel } from "@/components/draft-coach-panel";
 import type { OutreachMessage } from "@/lib/types";
 
 interface Props {
@@ -94,6 +95,9 @@ export function EditMessageDialog({ message, onSave, onClose }: Props) {
 
         {/* Body */}
         <div className="space-y-4 px-6 py-4">
+          {/* AI Coach panel — only meaningful for sent/draft emails with a segment */}
+          {isEmail && message.id && <DraftCoachPanel messageId={message.id} />}
+
           {/* Subject (email only) */}
           {isEmail && (
             <div>
