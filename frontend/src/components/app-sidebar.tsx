@@ -8,6 +8,7 @@ import {
   Building2,
   Mail,
   Megaphone,
+  MessageCircle,
   Search,
   Settings,
   TrendingUp,
@@ -189,6 +190,7 @@ const NAV_ITEMS = [
   { href: "/clients", label: "Clients", Icon: Building2 },
   { href: "/campaigns", label: "Campaigns", Icon: Megaphone },
   { href: "/outreach", label: "Outreach", Icon: Mail },
+  { href: "/conversations", label: "Conversations", Icon: MessageCircle },
   { href: "/analytics", label: "Analytics", Icon: TrendingUp },
   { href: "/settings", label: "Settings", Icon: Settings },
 ];

@@ -806,3 +806,100 @@ export async function getLinkedInEmployees(leadId: string): Promise<LinkedInEmpl
 
   return results;
 }
+
+// ── Sommelier Chatbot Conversations ──
+
+import type {
+  SommelierConversation,
+  SommelierMessage,
+  SommelierConversationDetail,
+} from "./types";
+
+function toIso(value: any): string {
+  if (!value) return "";
+  if (typeof value === "string") return value;
+  if (typeof value === "object" && typeof value.toDate === "function") {
+    return value.toDate().toISOString();
+  }
+  if (value instanceof Date) return value.toISOString();
+  return String(value);
+}
+
+export async function getSommelierConversations(filters?: {
+  limit?: number;
+  search?: string;
+  startDate?: string;
+  endDate?: string;
+}): Promise<SommelierConversation[]> {
+  const ref = collection(db, "sommelier_conversations");
+  const constraints: any[] = [orderBy("lastActive", "desc")];
+  if (filters?.limit) constraints.push(fbLimit(filters.limit));
+
+  const q = query(ref, ...constraints);
+  const snap = await getDocs(q);
+
+  let results: SommelierConversation[] = snap.docs.map((d) => {
+    const data = d.data();
+    return {
+      sessionId: d.id,
+      createdAt: toIso(data.createdAt),
+      lastActive: toIso(data.lastActive),
+      pageUrl: data.pageUrl ?? null,
+      messagesCount: data.messagesCount ?? 0,
+      firstUserMessage: data.firstUserMessage ?? null,
+      source: data.source ?? "sommelier",
+    };
+  });
+
+  if (filters?.search) {
+    const q = filters.search.toLowerCase();
+    results = results.filter((c) =>
+      (c.firstUserMessage || "").toLowerCase().includes(q)
+    );
+  }
+  if (filters?.startDate) {
+    const start = new Date(filters.startDate).getTime();
+    results = results.filter((c) => new Date(c.createdAt).getTime() >= start);
+  }
+  if (filters?.endDate) {
+    const end = new Date(filters.endDate).getTime();
+    results = results.filter((c) => new Date(c.createdAt).getTime() <= end);
+  }
+
+  return results;
+}
+
+export async function getSommelierConversation(
+  sessionId: string
+): Promise<SommelierConversationDetail | null> {
+  const docRef = doc(db, "sommelier_conversations", sessionId);
+  const snap = await getDoc(docRef);
+  if (!snap.exists()) return null;
+  const data = snap.data();
+
+  const conversation: SommelierConversation = {
+    sessionId,
+    createdAt: toIso(data.createdAt),
+    lastActive: toIso(data.lastActive),
+    pageUrl: data.pageUrl ?? null,
+    messagesCount: data.messagesCount ?? 0,
+    firstUserMessage: data.firstUserMessage ?? null,
+    source: data.source ?? "sommelier",
+  };
+
+  const msgsRef = collection(db, "sommelier_conversations", sessionId, "messages");
+  const msgsSnap = await getDocs(query(msgsRef, orderBy("createdAt", "asc")));
+
+  const messages: SommelierMessage[] = msgsSnap.docs.map((d) => {
+    const m = d.data();
+    return {
+      id: d.id,
+      role: m.role,
+      content: m.content,
+      metadata: m.metadata ?? null,
+      createdAt: toIso(m.createdAt),
+    };
+  });
+
+  return { conversation, messages };
+}

@@ -186,6 +186,72 @@ export interface OutreachMessage {
   content_rated_at?: string | null;
   // Draft generation provider
   provider?: "claude" | "gemini" | null;
+  // Feedback loop: extracted features + segment for stats aggregation
+  segment_key?: string | null;
+  broad_segment_key?: string | null;
+  subject_features?: SubjectFeatures | null;
+  content_features?: ContentFeatures | null;
+}
+
+export interface SubjectFeatures {
+  word_count: number;
+  length_bucket: "very_short" | "short" | "medium" | "long";
+  has_question: boolean;
+  personalization_count: number;
+  starts_with_name: boolean;
+  has_number: boolean;
+  all_lowercase: boolean;
+  char_count: number;
+}
+
+export interface ContentFeatures {
+  word_count: number;
+  length_bucket: "very_short" | "short" | "medium" | "long" | "very_long";
+  sentence_count: number;
+  paragraph_count: number;
+  question_count: number;
+  exclamation_count: number;
+  cta_type: "none" | "tasting" | "meeting" | "question" | "reply";
+  tone_signal: "neutral" | "casual" | "formal";
+  personalization_count: number;
+  ask_placement: "early" | "middle" | "late" | "no_ask" | "unknown";
+}
+
+export interface OutreachStatsBucket {
+  sent: number;
+  opens: number;
+  replies: number;
+  open_rate: number;
+  reply_rate: number;
+}
+
+export interface OutreachStats {
+  segment_key: string;
+  dimensions: Record<string, Record<string, OutreachStatsBucket>>;
+  computed_at: string;
+}
+
+export interface DraftSuggestion {
+  dimension: string;
+  title: string;
+  rationale: string;
+  concrete_change: string;
+  confidence: "high" | "medium" | "low";
+}
+
+export interface DraftSuggestionsResult {
+  suggestions: DraftSuggestion[];
+  segment_key: string | null;
+  sample_size: number;
+  reason?: string;
+  evidence?: Array<{
+    dimension: string;
+    current_value: string;
+    current_reply_rate: number;
+    best_value: string;
+    best_reply_rate: number;
+    best_sample_size: number;
+  }>;
 }
 
 // --- Edit Feedback / Reflection ---
@@ -421,4 +487,29 @@ export interface EmailPerformance7Day {
   totalSent: number;
   totalReplied: number;
   replyRate: number;
+}
+
+// ── Sommelier Chatbot ──
+
+export interface SommelierConversation {
+  sessionId: string;
+  createdAt: string;
+  lastActive: string;
+  pageUrl: string | null;
+  messagesCount: number;
+  firstUserMessage: string | null;
+  source: string;
+}
+
+export interface SommelierMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  metadata: string | null;
+  createdAt: string;
+}
+
+export interface SommelierConversationDetail {
+  conversation: SommelierConversation;
+  messages: SommelierMessage[];
 }
