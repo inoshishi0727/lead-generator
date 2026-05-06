@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Search, MessageCircle, Calendar, X } from "lucide-react";
+import { Search, MessageCircle, X } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { useDebounce } from "@/hooks/use-debounce";
@@ -50,30 +50,41 @@ export default function ConversationsPage() {
     setEndDate("");
   };
 
-  const hasFilters = search || startDate || endDate;
+  const hasFilters = !!(search || startDate || endDate);
+  const sessionLabel = isLoading
+    ? "Loading…"
+    : `${conversations.length} session${conversations.length === 1 ? "" : "s"}`;
 
   return (
-    <div className="p-6 space-y-4">
-      <div className="flex items-center gap-2">
-        <MessageCircle className="h-5 w-5 text-amber-500" />
-        <h1 className="text-xl font-semibold">Sommelier Conversations</h1>
-        <span className="text-xs text-muted-foreground ml-2">
-          {isLoading ? "Loading…" : `${conversations.length} sessions`}
-        </span>
+    <div className="sp-page space-y-6">
+      <div className="sp-page-head">
+        <div>
+          <h1 className="sp-page-title flex items-center gap-2">
+            <MessageCircle className="h-6 w-6 text-amber-500" />
+            Sommelier Conversations
+          </h1>
+          <div className="sp-page-subtitle">
+            {sessionLabel} · Chats from the Asterley Sommelier widget on the Shopify store. Click any row to read the full thread.
+          </div>
+        </div>
+        {hasFilters && (
+          <div className="sp-page-actions">
+            <Button variant="outline" size="sm" onClick={clearFilters}>
+              <X className="mr-1.5 h-3.5 w-3.5" />
+              Clear filters
+            </Button>
+          </div>
+        )}
       </div>
 
-      <p className="text-sm text-muted-foreground">
-        Chats from the Asterley Sommelier widget on the Shopify store. Click any row to read the full thread.
-      </p>
-
       {/* Filters */}
-      <div className="flex flex-wrap items-end gap-2 pb-2 border-b border-zinc-800">
-        <div className="flex-1 min-w-[200px]">
+      <div className="flex flex-wrap items-end gap-3">
+        <div className="flex-1 min-w-[240px]">
           <label className="text-[10px] uppercase tracking-wider text-muted-foreground block mb-1">
             Search first message
           </label>
           <div className="relative">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
             <Input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
@@ -90,7 +101,7 @@ export default function ConversationsPage() {
             type="date"
             value={startDate}
             onChange={(e) => setStartDate(e.target.value)}
-            className="h-9 text-sm w-[140px]"
+            className="h-9 text-sm w-[150px]"
           />
         </div>
         <div>
@@ -101,45 +112,34 @@ export default function ConversationsPage() {
             type="date"
             value={endDate}
             onChange={(e) => setEndDate(e.target.value)}
-            className="h-9 text-sm w-[140px]"
+            className="h-9 text-sm w-[150px]"
           />
         </div>
-        {hasFilters && (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={clearFilters}
-            className="h-9 text-xs"
-          >
-            <X className="h-3 w-3 mr-1" />
-            Clear
-          </Button>
-        )}
       </div>
 
       {/* Table */}
-      <div className="border border-zinc-800 rounded-lg overflow-hidden">
-        <table className="w-full text-sm">
-          <thead className="bg-zinc-900/50 border-b border-zinc-800">
-            <tr className="text-left text-[10px] uppercase tracking-wider text-muted-foreground">
-              <th className="px-3 py-2 font-medium">Started</th>
-              <th className="px-3 py-2 font-medium">Last active</th>
-              <th className="px-3 py-2 font-medium">First message</th>
-              <th className="px-3 py-2 font-medium text-center">Messages</th>
-              <th className="px-3 py-2 font-medium">Page</th>
+      <div className="sp-table-wrap">
+        <table className="sp-tbl">
+          <thead>
+            <tr>
+              <th>Started</th>
+              <th>Last active</th>
+              <th>First message</th>
+              <th style={{ textAlign: "center" }}>Messages</th>
+              <th>Page</th>
             </tr>
           </thead>
           <tbody>
             {isLoading && (
               <tr>
-                <td colSpan={5} className="px-3 py-8 text-center text-muted-foreground">
+                <td colSpan={5} className="text-center text-muted-foreground" style={{ padding: "32px 12px" }}>
                   Loading conversations…
                 </td>
               </tr>
             )}
             {!isLoading && conversations.length === 0 && (
               <tr>
-                <td colSpan={5} className="px-3 py-8 text-center text-muted-foreground">
+                <td colSpan={5} className="text-center text-muted-foreground" style={{ padding: "32px 12px" }}>
                   {hasFilters
                     ? "No conversations match these filters."
                     : "No conversations yet. Once customers chat with Jarvis, they'll appear here."}
@@ -147,32 +147,24 @@ export default function ConversationsPage() {
               </tr>
             )}
             {conversations.map((c: SommelierConversation) => (
-              <tr
-                key={c.sessionId}
-                onClick={() => setSelected(c.sessionId)}
-                className="border-b border-zinc-800 last:border-0 hover:bg-zinc-900/40 cursor-pointer transition-colors"
-              >
-                <td className="px-3 py-2.5 text-xs whitespace-nowrap">
-                  {formatDateTime(c.createdAt)}
-                </td>
-                <td className="px-3 py-2.5 text-xs whitespace-nowrap text-muted-foreground">
-                  {timeAgo(c.lastActive)}
-                </td>
-                <td className="px-3 py-2.5">
-                  <div className="text-foreground line-clamp-2 max-w-md">
+              <tr key={c.sessionId} onClick={() => setSelected(c.sessionId)}>
+                <td className="whitespace-nowrap">{formatDateTime(c.createdAt)}</td>
+                <td className="whitespace-nowrap text-muted-foreground">{timeAgo(c.lastActive)}</td>
+                <td style={{ whiteSpace: "normal" }}>
+                  <div className="line-clamp-2 max-w-md">
                     {c.firstUserMessage || (
                       <span className="text-muted-foreground italic">No messages yet</span>
                     )}
                   </div>
                 </td>
-                <td className="px-3 py-2.5 text-center">
-                  <span className="inline-block min-w-[1.5rem] px-1.5 py-0.5 rounded-full bg-zinc-800 text-xs">
+                <td style={{ textAlign: "center" }}>
+                  <span className="inline-block min-w-[1.5rem] px-2 py-0.5 rounded-full bg-muted text-xs font-medium">
                     {c.messagesCount}
                   </span>
                 </td>
-                <td className="px-3 py-2.5 text-[11px] text-muted-foreground truncate max-w-[200px]">
+                <td className="text-[11px] text-muted-foreground truncate" style={{ maxWidth: 220 }}>
                   {c.pageUrl ? (
-                    <span title={c.pageUrl}>{new URL(c.pageUrl).pathname}</span>
+                    <span title={c.pageUrl}>{(() => { try { return new URL(c.pageUrl).pathname; } catch { return c.pageUrl; } })()}</span>
                   ) : (
                     "—"
                   )}
