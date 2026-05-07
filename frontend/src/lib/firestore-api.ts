@@ -213,6 +213,7 @@ export async function getOutreachMessages(filters?: {
   campaign_id?: string;
   limit?: number;
   assignedTo?: string;
+  has_reply?: boolean;
 }): Promise<OutreachMessage[]> {
   const ref = collection(db, "outreach_messages");
   const constraints: any[] = [];
@@ -222,6 +223,7 @@ export async function getOutreachMessages(filters?: {
   if (filters?.lead_id) constraints.push(where("lead_id", "==", filters.lead_id));
   if (filters?.campaign_id) constraints.push(where("campaign_id", "==", filters.campaign_id));
   if (filters?.assignedTo) constraints.push(where("assigned_to", "==", filters.assignedTo));
+  if (filters?.has_reply !== undefined) constraints.push(where("has_reply", "==", filters.has_reply));
 
   const q = constraints.length > 0 ? query(ref, ...constraints) : ref;
   const snap = await getDocs(q);
