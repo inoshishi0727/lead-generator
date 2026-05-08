@@ -1,8 +1,8 @@
 "use client";
 
 import { useState, useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { getClients } from "@/lib/firestore-api";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { getClients, updateLeadFields } from "@/lib/firestore-api";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -26,6 +26,7 @@ import {
   MapPin,
   User,
   Pencil,
+  UserMinus,
 } from "lucide-react";
 import type { Lead } from "@/lib/types";
 
@@ -86,6 +87,14 @@ export default function ClientsPage() {
   const [sortDir, setSortDir]     = useState<SortDir>("asc");
   const [editingClient, setEditingClient] = useState<Lead | null>(null);
   const debouncedSearch = useDebounce(search, 200);
+  const qc = useQueryClient();
+
+  async function handleUnmarkClient(e: React.MouseEvent, id: string) {
+    e.stopPropagation();
+    await updateLeadFields(id, { stage: "prospect", client_status: "approved", rejection_reason: null });
+    qc.invalidateQueries({ queryKey: ["clients"] });
+    qc.invalidateQueries({ queryKey: ["leads"] });
+  }
 
   const handleSort = (key: SortKey) => {
     if (key === sortKey) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
@@ -179,13 +188,14 @@ export default function ClientsPage() {
                   <TableHead className="w-[10%] text-right">Stage</TableHead>
                   <TableHead className="w-8" />
                   <TableHead className="w-8" />
+                  <TableHead className="w-8" />
                 </TableRow>
               </TableHeader>
 
               <TableBody>
                 {filtered.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={7} className="py-10 text-center text-muted-foreground text-sm">
+                    <TableCell colSpan={8} className="py-10 text-center text-muted-foreground text-sm">
                       No clients match &quot;{search}&quot;
                     </TableCell>
                   </TableRow>
@@ -207,8 +217,8 @@ export default function ClientsPage() {
                           <div className="flex items-center gap-2 min-w-0">
                             <span className="truncate">{client.business_name}</span>
                             {isMultiLocation && (
-                              <Badge variant="outline" className="shrink-0 text-[9px] border-amber-500/30 text-amber-400 bg-amber-500/10">
-                                multi-location
+                              <Badge variant="outline" className="shrink-0 text-[9px] border-amber-500/30 text-amber-400 bg-amber-500/10" title="Same business name found more than once — check for duplicate leads">
+                                multiple entries
                               </Badge>
                             )}
                           </div>
@@ -276,6 +286,17 @@ export default function ClientsPage() {
                               <ExternalLink className="h-3.5 w-3.5" />
                             </a>
                           ) : null}
+                        </TableCell>
+
+                        {/* Unmark as client */}
+                        <TableCell className="py-3 text-right">
+                          <button
+                            className="text-muted-foreground hover:text-red-400 transition-colors"
+                            onClick={(e) => handleUnmarkClient(e, client.id)}
+                            title="Unmark as client — returns to leads"
+                          >
+                            <UserMinus className="h-3.5 w-3.5" />
+                          </button>
                         </TableCell>
 
                         {/* Edit button */}
