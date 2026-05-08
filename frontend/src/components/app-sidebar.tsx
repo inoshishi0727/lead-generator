@@ -192,6 +192,7 @@ const NAV_ITEMS = [
   { href: "/outreach", label: "Outreach", Icon: Mail },
   { href: "/conversations", label: "Conversations", Icon: MessageCircle },
   { href: "/analytics", label: "Analytics", Icon: TrendingUp },
+  { href: "/analytics/cost", label: "AI Cost", Icon: TrendingUp },
   { href: "/settings", label: "Settings", Icon: Settings },
 ];
 

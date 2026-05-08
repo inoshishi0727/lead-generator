@@ -1,9 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { Search, MessageCircle, X } from "lucide-react";
+import { Search, MessageCircle, Calendar, X, Download } from "lucide-react";
 import { Input } from "@/components/ui/input";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { useDebounce } from "@/hooks/use-debounce";
 import { useSommelierConversations } from "@/hooks/use-sommelier-conversations";
 import { ConversationDetailDialog } from "@/components/conversation-detail-dialog";
@@ -54,6 +54,13 @@ export default function ConversationsPage() {
   const sessionLabel = isLoading
     ? "Loading…"
     : `${conversations.length} session${conversations.length === 1 ? "" : "s"}`;
+
+  const buildExportUrl = (format: "csv" | "json") => {
+    const params = new URLSearchParams({ format });
+    if (startDate) params.set("from", startDate);
+    if (endDate) params.set("to", endDate);
+    return `/api/conversations/export?${params.toString()}`;
+  };
 
   return (
     <div className="sp-page space-y-6">
