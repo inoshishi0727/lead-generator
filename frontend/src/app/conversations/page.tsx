@@ -1,9 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { Search, MessageCircle, Calendar, X } from "lucide-react";
+import { Search, MessageCircle, Calendar, X, Download } from "lucide-react";
 import { Input } from "@/components/ui/input";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { useDebounce } from "@/hooks/use-debounce";
 import { useSommelierConversations } from "@/hooks/use-sommelier-conversations";
 import { ConversationDetailDialog } from "@/components/conversation-detail-dialog";
@@ -52,6 +52,13 @@ export default function ConversationsPage() {
 
   const hasFilters = search || startDate || endDate;
 
+  const buildExportUrl = (format: "csv" | "json") => {
+    const params = new URLSearchParams({ format });
+    if (startDate) params.set("from", startDate);
+    if (endDate) params.set("to", endDate);
+    return `/api/conversations/export?${params.toString()}`;
+  };
+
   return (
     <div className="p-6 space-y-4">
       <div className="flex items-center gap-2">
@@ -60,6 +67,16 @@ export default function ConversationsPage() {
         <span className="text-xs text-muted-foreground ml-2">
           {isLoading ? "Loading…" : `${conversations.length} sessions`}
         </span>
+        <div className="ml-auto flex gap-2">
+          <a href={buildExportUrl("csv")} download className={buttonVariants({ variant: "outline", size: "sm" }) + " h-9 text-xs"}>
+            <Download className="h-3.5 w-3.5 mr-1.5" />
+            Export CSV
+          </a>
+          <a href={buildExportUrl("json")} download className={buttonVariants({ variant: "outline", size: "sm" }) + " h-9 text-xs"}>
+            <Download className="h-3.5 w-3.5 mr-1.5" />
+            Export JSON
+          </a>
+        </div>
       </div>
 
       <p className="text-sm text-muted-foreground">
