@@ -39,16 +39,18 @@ function rowCost(r: {
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
-    const days = Math.max(1, Math.min(365, parseInt(searchParams.get("days") || "30", 10)));
+    const all = searchParams.get("all") === "1" || searchParams.get("days") === "all";
+    const days = all ? 0 : Math.max(1, Math.min(365, parseInt(searchParams.get("days") || "30", 10)));
 
-    const since = new Date();
-    since.setUTCDate(since.getUTCDate() - days);
-    since.setUTCHours(0, 0, 0, 0);
+    let since: Date | null = null;
+    if (!all) {
+      since = new Date();
+      since.setUTCDate(since.getUTCDate() - days);
+      since.setUTCHours(0, 0, 0, 0);
+    }
 
-    const snap = await adminDb
-      .collection("sommelier_usage")
-      .where("createdAt", ">=", since)
-      .get();
+    const base = adminDb.collection("sommelier_usage");
+    const snap = await (since ? base.where("createdAt", ">=", since).get() : base.get());
 
     let totalInput = 0;
     let totalOutput = 0;
@@ -116,8 +118,9 @@ export async function GET(req: NextRequest) {
     const avgCostPerSession = sessionCount > 0 ? totalCost / sessionCount : 0;
 
     return NextResponse.json({
-      windowDays: days,
-      since: since.toISOString(),
+      windowDays: all ? null : days,
+      all,
+      since: since ? since.toISOString() : null,
       pricing: HAIKU_PRICING,
       totals: {
         inputTokens: totalInput,

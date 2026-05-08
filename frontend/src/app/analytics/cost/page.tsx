@@ -16,8 +16,9 @@ interface DailyRow {
 }
 
 interface CostResponse {
-  windowDays: number;
-  since: string;
+  windowDays: number | null;
+  all: boolean;
+  since: string | null;
   pricing: {
     inputPerMTok: number;
     outputPerMTok: number;
@@ -37,6 +38,8 @@ interface CostResponse {
   daily: DailyRow[];
 }
 
+type Window = 7 | 30 | 90 | "all";
+
 const fmtUsd = (n: number) =>
   n.toLocaleString("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 4 });
 
@@ -44,7 +47,7 @@ const fmtNum = (n: number) => n.toLocaleString("en-US");
 
 export default function CostAnalyticsPage() {
   const { isAdmin } = useAuth();
-  const [days, setDays] = useState(30);
+  const [windowSel, setWindowSel] = useState<Window>(30);
   const [data, setData] = useState<CostResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -52,7 +55,8 @@ export default function CostAnalyticsPage() {
   useEffect(() => {
     setLoading(true);
     setErr(null);
-    fetch(`/api/analytics/cost?days=${days}`)
+    const qs = windowSel === "all" ? "all=1" : `days=${windowSel}`;
+    fetch(`/api/analytics/cost?${qs}`)
       .then((r) => r.json())
       .then((j) => {
         if (j.error) {
@@ -64,7 +68,7 @@ export default function CostAnalyticsPage() {
       })
       .catch((e: unknown) => setErr(e instanceof Error ? e.message : String(e)))
       .finally(() => setLoading(false));
-  }, [days]);
+  }, [windowSel]);
 
   if (!isAdmin) {
     return (
@@ -85,17 +89,17 @@ export default function CostAnalyticsPage() {
           Claude Haiku 4.5 token usage and spend.
         </span>
         <div className="ml-auto flex gap-1">
-          {[7, 30, 90].map((n) => (
+          {([7, 30, 90, "all"] as Window[]).map((n) => (
             <button
-              key={n}
-              onClick={() => setDays(n)}
+              key={String(n)}
+              onClick={() => setWindowSel(n)}
               className={`text-xs px-3 py-1 rounded border ${
-                days === n
+                windowSel === n
                   ? "border-amber-500 text-amber-500"
                   : "border-zinc-800 text-muted-foreground hover:text-foreground"
               }`}
             >
-              {n}d
+              {n === "all" ? "All time" : `${n}d`}
             </button>
           ))}
         </div>
@@ -109,7 +113,7 @@ export default function CostAnalyticsPage() {
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <StatCard
               icon={DollarSign}
-              label={`Total spend (${data.windowDays}d)`}
+              label={data.all ? "Total spend (all time)" : `Total spend (${data.windowDays}d)`}
               value={fmtUsd(data.totals.cost)}
             />
             <StatCard
