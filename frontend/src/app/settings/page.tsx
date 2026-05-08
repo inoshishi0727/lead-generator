@@ -17,7 +17,9 @@ import { useAuth } from "@/lib/auth-context";
 import { sendPasswordResetEmail, updatePassword } from "firebase/auth";
 import { auth } from "@/lib/firebase";
 import Link from "next/link";
-import { KeyRound, Loader2, Check, Sparkles } from "lucide-react";
+import { KeyRound, Loader2, Check, Sparkles, TrendingUp } from "lucide-react";
+import { useAggregateOutreachStats } from "@/hooks/use-draft-suggestions";
+import { toast } from "sonner";
 
 export default function SettingsPage() {
   const { isAdmin, loading, user } = useAuth();
@@ -26,6 +28,7 @@ export default function SettingsPage() {
   // Viewers can access settings for password change only
 
   const { data: config, isLoading } = useConfig();
+  const aggregateStats = useAggregateOutreachStats();
 
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -153,6 +156,41 @@ export default function SettingsPage() {
                 View & Manage Versions
               </Button>
             </Link>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* AI Coach aggregation (admin only) */}
+      {isAdmin && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-sm font-semibold">
+              <TrendingUp className="h-4 w-4" />
+              AI Coach Aggregation
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-muted-foreground mb-4">
+              Recompute segment-level open/reply stats used by the AI Coach. Runs automatically 07:00 London Mon–Fri; trigger manually after a backfill or to populate stats sooner.
+            </p>
+            <Button
+              size="sm"
+              disabled={aggregateStats.isPending}
+              onClick={() =>
+                aggregateStats.mutate(undefined, {
+                  onSuccess: (r) =>
+                    toast.success(`Aggregated ${r.segments_written} segments from ${r.messages_scanned} messages.`),
+                  onError: (e: unknown) => toast.error(e instanceof Error ? e.message : "Aggregation failed."),
+                })
+              }
+            >
+              {aggregateStats.isPending ? (
+                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <TrendingUp className="mr-1.5 h-3.5 w-3.5" />
+              )}
+              Run Aggregation Now
+            </Button>
           </CardContent>
         </Card>
       )}
