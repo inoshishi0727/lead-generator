@@ -22,6 +22,7 @@ import {
   CalendarClock,
 } from "lucide-react";
 import { EditMessageDialog } from "@/components/edit-message-dialog";
+import { DraftCoachPanel } from "@/components/draft-coach-panel";
 import { Card } from "@/components/ui/card";
 import { OutreachTimeline } from "@/components/outreach-timeline";
 import { Badge } from "@/components/ui/badge";
@@ -572,6 +573,11 @@ export function MessageCard({ message, inConversation, emailCapReached, isDuplic
 
       {/* Scrollable body — message content + action buttons */}
       <div className="space-y-3 p-4">
+
+        {/* AI Coach — visible while editing email drafts */}
+        {isEditing && message.channel === "email" && message.id && (
+          <DraftCoachPanel messageId={message.id} />
+        )}
 
         {/* Subject input when editing */}
         {isEditing && message.channel === "email" && (
