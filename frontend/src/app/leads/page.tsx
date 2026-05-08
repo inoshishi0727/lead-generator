@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, Suspense } from "react";
+import { useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { LeadsTable } from "@/components/leads-table";
 import { useLeads, useEnrichLeads } from "@/hooks/use-leads";
@@ -53,12 +54,18 @@ const STAGE_GROUPS = [
   },
 ];
 
-export default function LeadsPage() {
+function LeadsPageInner() {
   const { isAdmin, isMember, user, workspaceId } = useAuth();
+  const searchParams = useSearchParams();
   const [source, setSource] = useState("");
   const [stage, setStage] = useState("");
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(() => searchParams.get("q") ?? "");
   const debouncedSearch = useDebounce(search, 300);
+
+  useEffect(() => {
+    const q = searchParams.get("q");
+    if (q) setSearch(q);
+  }, [searchParams]);
   const [category, setCategory] = useState("");
   const [fit, setFit] = useState("");
   const [postcode, setPostcode] = useState("");
@@ -530,5 +537,13 @@ export default function LeadsPage() {
         onClose={() => setShowQuickAdd(false)}
       />
     </div>
+  );
+}
+
+export default function LeadsPage() {
+  return (
+    <Suspense>
+      <LeadsPageInner />
+    </Suspense>
   );
 }
