@@ -4334,7 +4334,7 @@ function buildDailyReportHtml(stats) {
     date,
     sentYesterday, openedYesterday, openRateYesterday,
     repliedYesterday, replyRateYesterday,
-    newLeadsYesterday, draftsGeneratedYesterday,
+    newLeadsYesterday, draftsGeneratedYesterday, draftsWaitingForReview,
     approvedWaiting, activeInSequence, repliesYesterday,
     memberBreakdown,
     totalLeads, responseRate, conversionRate,
@@ -4462,9 +4462,10 @@ function buildDailyReportHtml(stats) {
           </div>
 
           <!-- Action items -->
-          ${(approvedWaiting > 0 || repliesYesterday > 0) ? `
+          ${(draftsWaitingForReview > 0 || approvedWaiting > 0 || repliesYesterday > 0) ? `
           <div class="action-box">
             <div class="action-title">Action Required</div>
+            ${draftsWaitingForReview > 0 ? `<div class="action-item">📝 <strong>${draftsWaitingForReview}</strong> draft${draftsWaitingForReview !== 1 ? "s" : ""} ready for review — approve or reject in Outreach</div>` : ""}
             ${approvedWaiting > 0 ? `<div class="action-item">📤 <strong>${approvedWaiting}</strong> approved email${approvedWaiting !== 1 ? "s" : ""} queued and ready to send</div>` : ""}
             ${repliesYesterday > 0 ? `<div class="action-item">💬 <strong>${repliesYesterday}</strong> repl${repliesYesterday !== 1 ? "ies" : "y"} received yesterday — check Conversations</div>` : ""}
             <div style="margin-top:10px;">
@@ -4664,13 +4665,14 @@ export const scheduledDailyReport = functions
       const [
         sentYesterdaySnap,
         newLeadsSnap,
-        draftsYesterdaySnap,
+        allCurrentDraftsSnap,
         approvedSnap,
         activeSnap,
         repliesYesterdaySnap,
         allLeadsSnap,
         sent12wkSnap,
         allMessagesSnap,
+        generatedYesterdaySnap,
       ] = await Promise.all([
         db.collection("outreach_messages").where("status", "==", "sent").where("sent_at", ">=", yStart).where("sent_at", "<=", yEnd).get(),
         db.collection("leads").where("scraped_at", ">=", yStart).where("scraped_at", "<=", yEnd).get(),
@@ -4681,6 +4683,7 @@ export const scheduledDailyReport = functions
         db.collection("leads").get(),
         db.collection("outreach_messages").where("status", "==", "sent").where("sent_at", ">=", twelveWeeksAgo).get(),
         db.collection("outreach_messages").where("status", "==", "sent").get(),
+        db.collection("outreach_messages").where("created_at", ">=", yStart).where("created_at", "<=", yEnd).get(),
       ]);
 
       // Yesterday stats
@@ -4814,7 +4817,8 @@ export const scheduledDailyReport = functions
         sentYesterday, openedYesterday, openRateYesterday,
         repliedYesterday, replyRateYesterday,
         newLeadsYesterday: newLeadsSnap.size,
-        draftsGeneratedYesterday: draftsYesterdaySnap.docs.filter(d => { const ca = toIsoDailyReport(d.data().created_at); return ca >= yStart && ca <= yEnd; }).length,
+        draftsGeneratedYesterday: generatedYesterdaySnap.size,
+        draftsWaitingForReview: allCurrentDraftsSnap.size,
         approvedWaiting: approvedSnap.size,
         activeInSequence: activeSnap.size,
         repliesYesterday: repliesYesterdaySnap.docs.filter(d => { const ra = toIsoDailyReport(d.data().received_at || d.data().created_at); return ra >= yStart && ra <= yEnd; }).length,
