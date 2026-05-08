@@ -72,6 +72,9 @@ export default function OutreachPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const debouncedSearchQuery = useDebounce(searchQuery, 200);
   const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
+  const [clientsViewAll, setClientsViewAll] = useState(false);
+
+  const isThreadView = statusFilter === "conversations" || (statusFilter === "clients" && !clientsViewAll);
 
   // Member auto-scopes to own messages
   const assignedTo = isMember ? user?.uid : undefined;
@@ -84,15 +87,19 @@ export default function OutreachPage() {
   // Universal fetch for stat cards — always all messages regardless of current tab
   const { data: universalApiMessages } = useMessages({ assignedTo } as any, 1000);
 
-  // Use API-backed messages by default, but when viewing Follow-ups, Clients, or Scheduled,
-  // fetch directly from Firestore client to avoid server-side cache delays (live functions write
-  // directly to Firestore). Wrapped in useQuery so mutations can invalidate ["outreach"] and trigger
-  // refetch — otherwise edits (e.g. subject changes) wouldn't appear until tab switch.
+  // Use API-backed messages by default, but when viewing Inbox, Follow-ups, Clients, or Scheduled,
+  // fetch directly from Firestore client to avoid server-side cache delays + the default 200-row
+  // dilution that hides older replied messages behind newer drafts.
   const { data: apiMessages, isLoading: apiLoading } = useMessages(firestoreFilter);
-  const useClientSide = statusFilter === "follow-ups" || statusFilter === "clients" || statusFilter === "scheduled";
+  const useClientSide = statusFilter === "conversations" || statusFilter === "follow-ups" || statusFilter === "clients" || statusFilter === "scheduled";
   const { data: clientSideMessages, isLoading: clientSideLoading } = useQuery({
     queryKey: ["outreach", "messages", "clientSide", statusFilter, assignedTo],
-    queryFn: () => getOutreachMessages({ limit: 500, assignedTo }),
+    queryFn: () => {
+      if (statusFilter === "conversations") {
+        return getOutreachMessages({ has_reply: true, assignedTo, limit: 1000 });
+      }
+      return getOutreachMessages({ limit: 1000, assignedTo });
+    },
     enabled: useClientSide,
   });
 
@@ -141,7 +148,7 @@ export default function OutreachPage() {
           && !m.is_client_campaign
         )
       : statusFilter === "clients"
-        ? (messages ?? []).filter((m) => m.is_client_campaign)
+        ? (messages ?? []).filter((m) => m.is_client_campaign && (clientsViewAll || m.has_reply))
         : statusFilter === "scheduled"
           ? (messages ?? []).filter((m) => m.status === "approved" && !!m.scheduled_send_date && !m.is_client_campaign)
           : (statusFilter === "all")
@@ -232,7 +239,7 @@ export default function OutreachPage() {
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null);
 
   const conversationThreads = useMemo(() => {
-    if (statusFilter !== "conversations") return null;
+    if (!isThreadView) return null;
     const threads = new Map<string, { leadId: string; businessName: string; messages: typeof allMessages }>();
     for (const msg of allMessages) {
       if (!threads.has(msg.lead_id)) {
@@ -245,7 +252,7 @@ export default function OutreachPage() {
         msgs.reduce((m, x) => { const t = x.sent_at || x.created_at || ""; return t > m ? t : m; }, "");
       return latest(b.messages).localeCompare(latest(a.messages));
     });
-  }, [allMessages, statusFilter]);
+  }, [allMessages, isThreadView]);
 
   const selectedMessage = allMessages.find((m) => m.id === selectedMessageId) ?? allMessages[0] ?? null;
   const selectedThread = conversationThreads?.find((t) => t.leadId === selectedLeadId) ?? conversationThreads?.[0] ?? null;
@@ -253,7 +260,7 @@ export default function OutreachPage() {
   useEffect(() => {
     setSelectedMessageId(allMessages[0]?.id ?? null);
     setSelectedLeadId(conversationThreads?.[0]?.leadId ?? null);
-  }, [statusFilter, categoryFilter, stepFilter, debouncedSearchQuery]);
+  }, [statusFilter, categoryFilter, stepFilter, debouncedSearchQuery, clientsViewAll]);
 
   function handleGenerate() {
     generateMutation.mutate(undefined);
@@ -485,6 +492,22 @@ export default function OutreachPage() {
                 onChange={(e) => setSearchQuery(e.target.value)}
               />
             </div>
+            {statusFilter === "clients" && (
+              <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                <button
+                  className={`sp-email-filter-step${!clientsViewAll ? " active" : ""}`}
+                  onClick={() => setClientsViewAll(false)}
+                >
+                  Conversations
+                </button>
+                <button
+                  className={`sp-email-filter-step${clientsViewAll ? " active" : ""}`}
+                  onClick={() => setClientsViewAll(true)}
+                >
+                  All messages
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Scrollable email list */}
@@ -495,12 +518,12 @@ export default function OutreachPage() {
                 <Skeleton className="h-14 w-full" />
                 <Skeleton className="h-14 w-full" />
               </div>
-            ) : allMessages.length === 0 && (statusFilter !== "conversations" || !conversationThreads?.length) ? (
+            ) : allMessages.length === 0 && (!isThreadView || !conversationThreads?.length) ? (
               <div className="p-8 text-center" style={{ color: "var(--sp-ink-3)" }}>
                 <FileText style={{ width: 28, height: 28, margin: "0 auto 8px", opacity: 0.3 }} />
                 <p style={{ fontSize: 12 }}>No messages in this view.</p>
               </div>
-            ) : statusFilter === "conversations" ? (
+            ) : isThreadView ? (
               (conversationThreads ?? []).map(({ leadId, businessName, messages: msgs }) => (
                 <div
                   key={leadId}
@@ -558,7 +581,7 @@ export default function OutreachPage() {
 
         {/* RIGHT: email detail — scrolls independently */}
         <div style={{ flex: 1, minWidth: 0, overflowY: "auto" }}>
-          {statusFilter === "conversations" ? (
+          {isThreadView ? (
             selectedThread ? (
               <ThreadCard
                 leadId={selectedThread.leadId}

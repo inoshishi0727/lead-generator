@@ -12,6 +12,7 @@ export interface MessageFilters {
   channel?: string;
   lead_id?: string;
   assignedTo?: string;
+  has_reply?: boolean;
 }
 
 export function useMessages(filters?: MessageFilters, limit: number = 200) {
@@ -19,6 +20,7 @@ export function useMessages(filters?: MessageFilters, limit: number = 200) {
   if (filters?.status) params.set("status", filters.status);
   if (filters?.channel) params.set("channel", filters.channel);
   if (filters?.lead_id) params.set("lead_id", filters.lead_id);
+  if (filters?.has_reply !== undefined) params.set("has_reply", String(filters.has_reply));
   params.set("limit", String(limit));
   const qs = params.toString();
   const path = `/api/outreach/messages?${qs}`;
@@ -28,7 +30,7 @@ export function useMessages(filters?: MessageFilters, limit: number = 200) {
     queryFn: () =>
       hasBackend
         ? api.get<OutreachMessage[]>(path)
-        : getOutreachMessages({ ...filters, limit, assignedTo: filters?.assignedTo }),
+        : getOutreachMessages({ ...filters, limit, assignedTo: filters?.assignedTo, has_reply: filters?.has_reply }),
   });
 }
 
