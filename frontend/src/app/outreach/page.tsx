@@ -106,23 +106,29 @@ export default function OutreachPage() {
   const messages = useClientSide ? (clientSideMessages ?? []) : (apiMessages ?? []);
   const isLoading = useClientSide ? clientSideLoading : apiLoading;
 
-  const { replies: inboundReplies, lastReadAt, markLeadRead } = useReplyNotifications();
+  const { replies: inboundReplies, readMap, markLeadRead } = useReplyNotifications();
 
-  // Count unread replies per lead (for per-thread badges)
+  // Count unread replies per lead using per-lead read timestamps
   const unreadByLead = useMemo(() => {
     const map = new Map<string, number>();
     for (const r of inboundReplies) {
-      if (lastReadAt && r.created_at <= lastReadAt) continue;
       if (!r.lead_id) continue;
+      const leadReadAt = readMap[r.lead_id];
+      if (leadReadAt && r.created_at <= leadReadAt) continue;
       map.set(r.lead_id, (map.get(r.lead_id) ?? 0) + 1);
     }
     return map;
-  }, [inboundReplies, lastReadAt]);
+  }, [inboundReplies, readMap]);
 
-  const unreadConversations = useMemo(
-    () => [...unreadByLead.values()].filter((c) => c > 0).length,
-    [unreadByLead]
-  );
+  // Only count leads that are actually visible as conversation threads
+  const unreadConversations = useMemo(() => {
+    const visibleLeadIds = new Set(
+      (messages ?? []).filter((m) => m.has_reply && !m.is_client_campaign).map((m) => m.lead_id)
+    );
+    return [...unreadByLead.entries()]
+      .filter(([leadId, count]) => count > 0 && visibleLeadIds.has(leadId))
+      .length;
+  }, [unreadByLead, messages]);
 
   const generateMutation = useGenerateDrafts();
   const regenerateAllMutation = useRegenerateAll();
@@ -261,6 +267,13 @@ export default function OutreachPage() {
     setSelectedMessageId(allMessages[0]?.id ?? null);
     setSelectedLeadId(conversationThreads?.[0]?.leadId ?? null);
   }, [statusFilter, categoryFilter, stepFilter, debouncedSearchQuery, clientsViewAll]);
+
+  // Auto-mark the active conversation thread as read whenever it changes
+  useEffect(() => {
+    if (statusFilter === "conversations" && selectedThread?.leadId) {
+      markLeadRead(selectedThread.leadId);
+    }
+  }, [selectedThread?.leadId, statusFilter]);
 
   function handleGenerate() {
     generateMutation.mutate(undefined);
