@@ -111,6 +111,7 @@ const REJECTION_LABELS: Record<string, string> = {
   snoozed: "Snoozed",
   current_account: "Current Account",
   in_discussion: "In Discussion",
+  duplicate: "Duplicate",
 };
 
 function rejectionLabel(reason: string): string {
@@ -817,6 +818,16 @@ export function MessageCard({ message, inConversation, emailCapReached, isDuplic
               <>
                 <Button
                   size="sm"
+                  variant="outline"
+                  onClick={startEditing}
+                  disabled={isPending}
+                >
+                  <Pencil className="mr-1 h-3.5 w-3.5" />
+                  Edit
+                </Button>
+
+                <Button
+                  size="sm"
                   variant="default"
                   className="bg-emerald-600 hover:bg-emerald-700"
                   onClick={handleApprove}
@@ -1146,6 +1157,7 @@ export function MessageCard({ message, inConversation, emailCapReached, isDuplic
                 { value: "wrong_product", label: "Wrong product" },
                 { value: "not_suitable",  label: "Not suitable" },
                 { value: "needs_edit",    label: "Needs editing" },
+                { value: "duplicate",     label: "Duplicate" },
                 { value: "other",         label: "Other" },
               ].map(({ value, label }) => (
                 <button
