@@ -1,6 +1,7 @@
 "use client";
 
-import { usePathname } from "next/navigation";
+import { useRef, useState, useEffect } from "react";
+import { usePathname, useRouter } from "next/navigation";
 import { AppSidebar } from "@/components/app-sidebar";
 import { useTheme } from "@/components/theme-provider";
 
@@ -25,6 +26,32 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const label = getLabel(pathname);
   const { theme, toggle } = useTheme();
+  const router = useRouter();
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [query, setQuery] = useState("");
+
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+        e.preventDefault();
+        inputRef.current?.focus();
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  function handleSearchSubmit(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Enter" && query.trim()) {
+      router.push(`/leads?q=${encodeURIComponent(query.trim())}`);
+      setQuery("");
+      inputRef.current?.blur();
+    }
+    if (e.key === "Escape") {
+      setQuery("");
+      inputRef.current?.blur();
+    }
+  }
 
   return (
     <div className="sp-app">
@@ -60,7 +87,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="11" cy="11" r="7" /><path d="M21 21l-4.3-4.3" />
             </svg>
-            <input placeholder="Search leads, emails, venues…" />
+            <input
+              ref={inputRef}
+              placeholder="Search leads, emails, venues…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={handleSearchSubmit}
+            />
             <kbd>⌘K</kbd>
           </div>
         </div>
