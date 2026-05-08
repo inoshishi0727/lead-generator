@@ -643,15 +643,30 @@ export async function getClients(): Promise<Lead[]> {
     getLeads({ stage: "client" }),
     getLeads({ stage: "converted" }),
   ]);
-  const seen = new Set<string>();
+  const seenIds = new Set<string>();
   const merged: Lead[] = [];
   for (const l of [...clientLeads, ...convertedLeads]) {
-    if (!seen.has(l.id)) {
-      seen.add(l.id);
+    if (!seenIds.has(l.id)) {
+      seenIds.add(l.id);
       merged.push(l);
     }
   }
-  return merged.sort((a, b) => a.business_name.localeCompare(b.business_name));
+  // Dedup by business name — keep the most recently created entry
+  const seenNames = new Map<string, Lead>();
+  for (const l of merged) {
+    const key = (l.business_name ?? "").toLowerCase().trim();
+    const existing = seenNames.get(key);
+    if (!existing) {
+      seenNames.set(key, l);
+    } else {
+      const existingDate = existing.created_at ?? existing.scraped_at ?? "";
+      const currentDate = l.created_at ?? l.scraped_at ?? "";
+      if (currentDate > existingDate) seenNames.set(key, l);
+    }
+  }
+  return Array.from(seenNames.values()).sort((a, b) =>
+    a.business_name.localeCompare(b.business_name)
+  );
 }
 
 // --- Campaigns ---

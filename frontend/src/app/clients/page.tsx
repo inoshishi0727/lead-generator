@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { getClients } from "@/lib/firestore-api";
+import React, { useState, useMemo } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { getClients, updateLeadFields } from "@/lib/firestore-api";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -26,6 +26,7 @@ import {
   MapPin,
   User,
   Pencil,
+  UserMinus,
 } from "lucide-react";
 import type { Lead } from "@/lib/types";
 
@@ -62,6 +63,23 @@ const SORT_COLS: { key: SortKey; label: string; className: string }[] = [
   { key: "assigned_to", label: "Owner",     className: "w-[12%]" },
 ];
 
+function getGroupKey(name: string): string {
+  return (name ?? "").trim().split(/\s+/).slice(0, 2).join(" ").toLowerCase();
+}
+
+function longestCommonWordPrefix(names: string[]): string {
+  if (names.length === 0) return "";
+  const wordArrays = names.map((n) => (n ?? "").trim().split(/\s+/));
+  const minLen = Math.min(...wordArrays.map((w) => w.length));
+  const common: string[] = [];
+  for (let i = 0; i < minLen; i++) {
+    if (wordArrays.every((w) => w[i].toLowerCase() === wordArrays[0][i].toLowerCase())) {
+      common.push(wordArrays[0][i]);
+    } else break;
+  }
+  return common.join(" ");
+}
+
 function sortClients(clients: Lead[], key: SortKey, dir: SortDir): Lead[] {
   return [...clients].sort((a, b) => {
     let av = "";
@@ -86,6 +104,14 @@ export default function ClientsPage() {
   const [sortDir, setSortDir]     = useState<SortDir>("asc");
   const [editingClient, setEditingClient] = useState<Lead | null>(null);
   const debouncedSearch = useDebounce(search, 200);
+  const qc = useQueryClient();
+
+  async function handleUnmarkClient(e: React.MouseEvent, id: string) {
+    e.stopPropagation();
+    await updateLeadFields(id, { stage: "prospect", client_status: "approved", rejection_reason: null });
+    qc.invalidateQueries({ queryKey: ["clients"] });
+    qc.invalidateQueries({ queryKey: ["leads"] });
+  }
 
   const handleSort = (key: SortKey) => {
     if (key === sortKey) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
@@ -117,6 +143,21 @@ export default function ClientsPage() {
     }
     return sortClients(list, sortKey, sortDir);
   }, [clients, debouncedSearch, sortKey, sortDir]);
+
+  const grouped = useMemo(() => {
+    const map = new Map<string, Lead[]>();
+    for (const c of filtered) {
+      const key = getGroupKey(c.business_name ?? "");
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(c);
+    }
+    return Array.from(map.values()).map((members) => ({
+      label: members.length > 1
+        ? longestCommonWordPrefix(members.map((m) => m.business_name ?? ""))
+        : null,
+      members,
+    }));
+  }, [filtered]);
 
   const SortIcon = ({ k }: { k: SortKey }) =>
     k !== sortKey
@@ -179,53 +220,59 @@ export default function ClientsPage() {
                   <TableHead className="w-[10%] text-right">Stage</TableHead>
                   <TableHead className="w-8" />
                   <TableHead className="w-8" />
+                  <TableHead className="w-8" />
                 </TableRow>
               </TableHeader>
 
               <TableBody>
                 {filtered.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={7} className="py-10 text-center text-muted-foreground text-sm">
+                    <TableCell colSpan={8} className="py-10 text-center text-muted-foreground text-sm">
                       No clients match &quot;{search}&quot;
                     </TableCell>
                   </TableRow>
                 ) : (
-                  filtered.map((client, index) => {
-                    const isMultiLocation =
-                      (nameCount.get((client.business_name ?? "").toLowerCase()) ?? 0) > 1;
-                    const location = client.address ?? client.location_area ?? null;
-                    const catColor = CATEGORY_COLORS[client.venue_category ?? ""] ?? "border-zinc-500/30 text-zinc-400 bg-zinc-500/10";
+                  grouped.map(({ label, members }) =>
+                    members.map((client, memberIndex) => {
+                      const location = client.address ?? client.location_area ?? null;
+                      const catColor = CATEGORY_COLORS[client.venue_category ?? ""] ?? "border-zinc-500/30 text-zinc-400 bg-zinc-500/10";
+                      const isGrouped = !!label;
+                      const isFirstInGroup = memberIndex === 0;
 
-                    return (
-                      <TableRow
-                        key={client.id}
-                        className={`transition-colors hover:bg-accent/50 cursor-pointer ${index % 2 === 1 ? "bg-muted/30" : ""}`}
-                        onClick={() => setEditingClient(client)}
-                      >
-                        {/* Business name */}
-                        <TableCell className="font-medium text-primary truncate py-3">
-                          <div className="flex items-center gap-2 min-w-0">
-                            <span className="truncate">{client.business_name}</span>
-                            {isMultiLocation && (
-                              <Badge variant="outline" className="shrink-0 text-[9px] border-amber-500/30 text-amber-400 bg-amber-500/10">
-                                multi-location
-                              </Badge>
-                            )}
-                          </div>
-                          {client.contact_name && (
-                            <div className="flex items-center gap-1 mt-0.5 text-xs text-muted-foreground">
-                              <User className="h-3 w-3 shrink-0" />
-                              <span className="truncate">{client.contact_name}</span>
-                            </div>
+                      return (
+                        <React.Fragment key={client.id}>
+                          {isGrouped && isFirstInGroup && (
+                            <TableRow className="bg-muted/40 border-t-2 border-muted hover:bg-muted/40">
+                              <TableCell colSpan={8} className="py-1.5 px-4">
+                                <span className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+                                  {label}
+                                </span>
+                              </TableCell>
+                            </TableRow>
                           )}
-                        </TableCell>
+                          <TableRow
+                            className={`transition-colors hover:bg-accent/50 cursor-pointer ${isGrouped ? "border-l-2 border-l-muted" : ""}`}
+                            onClick={() => setEditingClient(client)}
+                          >
+                            {/* Business name */}
+                            <TableCell className={`font-medium text-primary truncate py-3 ${isGrouped ? "pl-6" : ""}`}>
+                              <div className="flex items-center gap-2 min-w-0">
+                                <span className="truncate">{client.business_name}</span>
+                              </div>
+                              {client.contact_name && (
+                                <div className="flex items-center gap-1 mt-0.5 text-xs text-muted-foreground">
+                                  <User className="h-3 w-3 shrink-0" />
+                                  <span className="truncate">{client.contact_name}</span>
+                                </div>
+                              )}
+                            </TableCell>
 
                         {/* Location */}
                         <TableCell className="py-3">
                           {location ? (
                             <div className="flex items-start gap-1 text-xs text-muted-foreground">
                               <MapPin className="h-3 w-3 shrink-0 mt-0.5" />
-                              <span className={`truncate ${isMultiLocation ? "font-medium text-foreground/80" : ""}`}>
+                              <span className={`truncate ${isGrouped ? "font-medium text-foreground/80" : ""}`}>
                                 {location}
                               </span>
                             </div>
@@ -278,6 +325,17 @@ export default function ClientsPage() {
                           ) : null}
                         </TableCell>
 
+                        {/* Unmark as client */}
+                        <TableCell className="py-3 text-right">
+                          <button
+                            className="text-muted-foreground hover:text-red-400 transition-colors"
+                            onClick={(e) => handleUnmarkClient(e, client.id)}
+                            title="Unmark as client — returns to leads"
+                          >
+                            <UserMinus className="h-3.5 w-3.5" />
+                          </button>
+                        </TableCell>
+
                         {/* Edit button */}
                         <TableCell className="py-3 text-right">
                           <button
@@ -287,9 +345,11 @@ export default function ClientsPage() {
                             <Pencil className="h-3.5 w-3.5" />
                           </button>
                         </TableCell>
-                      </TableRow>
-                    );
-                  })
+                          </TableRow>
+                        </React.Fragment>
+                      );
+                    })
+                  )
                 )}
               </TableBody>
             </Table>

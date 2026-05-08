@@ -293,7 +293,8 @@ Restate CTA briefly: "Happy to send samples. Let me know."`,
   3: `STEP 3 — 2nd Follow Up (The Value Touch). Under 80 words. Same thread. Subject: "Re: {previous_subject}"
 Angle: Give, don't ask. Share something genuinely useful in your own words — a trend observation, a serve idea, or a seasonal insight relevant to this venue. Write it conversationally, as if you're passing on a thought. Do NOT include any URLs, links, or article references of any kind.
 The message is 2-3 sentences max. "Thought this might be relevant for you — [your genuine observation]. No ask, just sharing."
-Do NOT re-introduce who we are. Do NOT pitch product. Do NOT include any hyperlinks or URLs.`,
+Do NOT re-introduce who we are. Do NOT pitch product. Do NOT include any hyperlinks or URLs.
+Do NOT quote or include any text from the previous email. Output only the new email body.`,
 
   4: `STEP 4 — 3rd Follow Up (The Soft Close). Under 80 words. Subject: "Re: {previous_subject}"
 This is the LAST email in the sequence. Keep it very short and respectful.
@@ -301,7 +302,8 @@ This is the LAST email in the sequence. Keep it very short and respectful.
 - Make the CTA frictionless: "I'll have a sample box sent to [venue name] this week if you text me the delivery address. No commitment."
 - No pressure language
 - Leave the door open: "We'll be back in touch when we've got something seasonal to share"
-Never guilt-trip. No "I haven't heard back" or "I'm sure you're busy." Tone: gracious.`,
+Never guilt-trip. No "I haven't heard back" or "I'm sure you're busy." Tone: gracious.
+Do NOT quote or include any text from the previous email. Output only the new email body.`,
 
   5: `STEP 5 — Re-engagement (After 90 Days). Under 100 words. Fresh subject line (NOT "Re:").
 It's been 3 months since we last touched base. Warm, low-pressure tone. Acknowledge the silence naturally.
@@ -895,7 +897,14 @@ export const regenerateDraft = functions
     const enrichment = leadDoc.enrichment || {};
     const venueCat = enrichment.venue_category || leadDoc.category || "cocktail_bar";
     const toneTier = enrichment.tone_tier || "bartender_casual";
-    const prompt = buildPrompt(leadDoc, enrichment);
+
+    const msgSnap = await db.collection("outreach_messages").doc(message_id).get();
+    const msgDoc = msgSnap.exists ? msgSnap.data() : {};
+    const stepNumber = msgDoc.step_number || 1;
+    const previousSubject = stepNumber > 1
+      ? (msgDoc.subject || msgDoc.original_subject || "")
+      : "";
+    const prompt = buildPrompt(leadDoc, enrichment, stepNumber, previousSubject);
 
     const feedbackBlock = await getEditFeedback(venueCat, toneTier);
     const promptRules = await getPromptRules();
@@ -4325,7 +4334,7 @@ function buildDailyReportHtml(stats) {
     date,
     sentYesterday, openedYesterday, openRateYesterday,
     repliedYesterday, replyRateYesterday,
-    newLeadsYesterday, draftsGeneratedYesterday,
+    newLeadsYesterday, draftsGeneratedYesterday, draftsWaitingForReview,
     approvedWaiting, activeInSequence, repliesYesterday,
     memberBreakdown,
     totalLeads, responseRate, conversionRate,
@@ -4453,9 +4462,10 @@ function buildDailyReportHtml(stats) {
           </div>
 
           <!-- Action items -->
-          ${(approvedWaiting > 0 || repliesYesterday > 0) ? `
+          ${(draftsWaitingForReview > 0 || approvedWaiting > 0 || repliesYesterday > 0) ? `
           <div class="action-box">
             <div class="action-title">Action Required</div>
+            ${draftsWaitingForReview > 0 ? `<div class="action-item">📝 <strong>${draftsWaitingForReview}</strong> draft${draftsWaitingForReview !== 1 ? "s" : ""} ready for review — approve or reject in Outreach</div>` : ""}
             ${approvedWaiting > 0 ? `<div class="action-item">📤 <strong>${approvedWaiting}</strong> approved email${approvedWaiting !== 1 ? "s" : ""} queued and ready to send</div>` : ""}
             ${repliesYesterday > 0 ? `<div class="action-item">💬 <strong>${repliesYesterday}</strong> repl${repliesYesterday !== 1 ? "ies" : "y"} received yesterday — check Conversations</div>` : ""}
             <div style="margin-top:10px;">
@@ -4655,13 +4665,14 @@ export const scheduledDailyReport = functions
       const [
         sentYesterdaySnap,
         newLeadsSnap,
-        draftsYesterdaySnap,
+        allCurrentDraftsSnap,
         approvedSnap,
         activeSnap,
         repliesYesterdaySnap,
         allLeadsSnap,
         sent12wkSnap,
         allMessagesSnap,
+        generatedYesterdaySnap,
       ] = await Promise.all([
         db.collection("outreach_messages").where("status", "==", "sent").where("sent_at", ">=", yStart).where("sent_at", "<=", yEnd).get(),
         db.collection("leads").where("scraped_at", ">=", yStart).where("scraped_at", "<=", yEnd).get(),
@@ -4672,6 +4683,7 @@ export const scheduledDailyReport = functions
         db.collection("leads").get(),
         db.collection("outreach_messages").where("status", "==", "sent").where("sent_at", ">=", twelveWeeksAgo).get(),
         db.collection("outreach_messages").where("status", "==", "sent").get(),
+        db.collection("outreach_messages").where("created_at", ">=", yStart).where("created_at", "<=", yEnd).get(),
       ]);
 
       // Yesterday stats
@@ -4805,7 +4817,8 @@ export const scheduledDailyReport = functions
         sentYesterday, openedYesterday, openRateYesterday,
         repliedYesterday, replyRateYesterday,
         newLeadsYesterday: newLeadsSnap.size,
-        draftsGeneratedYesterday: draftsYesterdaySnap.docs.filter(d => { const ca = toIsoDailyReport(d.data().created_at); return ca >= yStart && ca <= yEnd; }).length,
+        draftsGeneratedYesterday: generatedYesterdaySnap.size,
+        draftsWaitingForReview: allCurrentDraftsSnap.size,
         approvedWaiting: approvedSnap.size,
         activeInSequence: activeSnap.size,
         repliesYesterday: repliesYesterdaySnap.docs.filter(d => { const ra = toIsoDailyReport(d.data().received_at || d.data().created_at); return ra >= yStart && ra <= yEnd; }).length,
