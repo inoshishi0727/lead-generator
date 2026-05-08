@@ -1,9 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { Search, MessageCircle, X } from "lucide-react";
+import { Search, MessageCircle, X, Download } from "lucide-react";
 import { Input } from "@/components/ui/input";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { useDebounce } from "@/hooks/use-debounce";
 import { useSommelierConversations } from "@/hooks/use-sommelier-conversations";
 import { ConversationDetailDialog } from "@/components/conversation-detail-dialog";
@@ -55,6 +55,13 @@ export default function ConversationsPage() {
     ? "Loading…"
     : `${conversations.length} session${conversations.length === 1 ? "" : "s"}`;
 
+  const buildExportUrl = (format: "csv" | "json") => {
+    const params = new URLSearchParams({ format });
+    if (startDate) params.set("from", startDate);
+    if (endDate) params.set("to", endDate);
+    return `/api/conversations/export?${params.toString()}`;
+  };
+
   return (
     <div className="sp-page space-y-6">
       <div className="sp-page-head">
@@ -67,14 +74,22 @@ export default function ConversationsPage() {
             {sessionLabel} · Chats from the Asterley Sommelier widget on the Shopify store. Click any row to read the full thread.
           </div>
         </div>
-        {hasFilters && (
-          <div className="sp-page-actions">
+        <div className="sp-page-actions flex gap-2">
+          <a href={buildExportUrl("csv")} download className={buttonVariants({ variant: "outline", size: "sm" })}>
+            <Download className="mr-1.5 h-3.5 w-3.5" />
+            Export CSV
+          </a>
+          <a href={buildExportUrl("json")} download className={buttonVariants({ variant: "outline", size: "sm" })}>
+            <Download className="mr-1.5 h-3.5 w-3.5" />
+            Export JSON
+          </a>
+          {hasFilters && (
             <Button variant="outline" size="sm" onClick={clearFilters}>
               <X className="mr-1.5 h-3.5 w-3.5" />
               Clear filters
             </Button>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       {/* Filters */}
