@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import { getFunnel, getCategories, getRatios, getTrends, getSubjectLineStats, getReplyRateTrend, getReplyRateByDimension, getOpenRateTrend, getTopOpeners, getBestPerformingContent, getEmailsBySubject, getEmailPerformance7Day } from "@/lib/firestore-analytics";
+import { getFunnel, getCategories, getRatios, getTrends, getSubjectLineStats, getReplyRateTrend, getReplyRateByDimension, getOpenRateTrend, getOpenRateByStep, getTopOpeners, getBestPerformingContent, getEmailsBySubject, getEmailPerformance7Day } from "@/lib/firestore-analytics";
+import type { OpenRateByStepPoint } from "@/lib/firestore-analytics";
 import { getTeamMetrics } from "@/lib/firestore-team-analytics";
 import type {
   FunnelData,
@@ -82,6 +83,13 @@ export function useReplyRateByDimension(dimension: "tone_tier" | "step_number" |
   return useQuery<{ points: ReplyRateByDimensionPoint[] }>({
     queryKey: ["analytics", "reply-rate-by-dimension", dimension],
     queryFn: () => getReplyRateByDimension(dimension),
+  });
+}
+
+export function useOpenRateByStep() {
+  return useQuery<{ points: OpenRateByStepPoint[] }>({
+    queryKey: ["analytics", "open-rate-by-step"],
+    queryFn: () => getOpenRateByStep(),
   });
 }
 

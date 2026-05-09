@@ -11,6 +11,7 @@ import { AIRecommendations } from "@/components/ai-recommendations";
 import { SubjectLineChart } from "@/components/subject-line-chart";
 import { ReplyRateTrendChart } from "@/components/reply-rate-trend-chart";
 import { OutreachBreakdownChart } from "@/components/outreach-breakdown-chart";
+import { OpenRateByStepChart } from "@/components/open-rate-by-step-chart";
 import { EmailEngagementChart } from "@/components/email-engagement-chart";
 import { EmailOpensCard } from "@/components/email-opens-card";
 import { BestPerformingContentCard } from "@/components/best-performing-content-card";
@@ -113,6 +114,7 @@ export default function AnalyticsPage() {
         </div>
         <div className="grid gap-6 lg:grid-cols-2">
           <OutreachBreakdownChart />
+          <OpenRateByStepChart />
         </div>
       </div>
 
