@@ -349,6 +349,45 @@ function wasOpened(msg: Record<string, any>): boolean {
   return !!(msg.opened || msg.has_reply || (msg.reply_count && msg.reply_count > 0));
 }
 
+// Open rate grouped by message position in the sequence (initial / follow_up_1 / follow_up_2 / etc.)
+export interface OpenRateByStepPoint {
+  label: string;        // "Initial", "Follow-up 1", "Follow-up 2"
+  step_number: number;  // 1, 2, 3
+  sent: number;
+  opened: number;
+  open_rate: number;    // percentage with one decimal
+}
+
+export async function getOpenRateByStep(): Promise<{ points: OpenRateByStepPoint[] }> {
+  const msgs = await getAllSentOutreachMessages();
+  if (!msgs.length) return { points: [] };
+
+  const grouped: Record<number, { sent: number; opened: number }> = {};
+
+  for (const msg of msgs) {
+    const step = Number(msg.step_number ?? 1);
+    if (!grouped[step]) grouped[step] = { sent: 0, opened: 0 };
+    grouped[step].sent++;
+    if (wasOpened(msg)) grouped[step].opened++;
+  }
+
+  const points: OpenRateByStepPoint[] = Object.entries(grouped)
+    .map(([raw, counts]) => {
+      const step_number = Number(raw);
+      const label = step_number === 1 ? "Initial" : `Follow-up ${step_number - 1}`;
+      return {
+        label,
+        step_number,
+        sent: counts.sent,
+        opened: counts.opened,
+        open_rate: counts.sent > 0 ? Math.round((counts.opened / counts.sent) * 1000) / 10 : 0,
+      };
+    })
+    .sort((a, b) => a.step_number - b.step_number);
+
+  return { points };
+}
+
 export async function getSubjectLineStats(): Promise<{ subjects: SubjectLineStat[] }> {
   const snap = await getDocs(collection(db, "outreach_messages"));
   const msgs = snap.docs.map((d) => d.data());
