@@ -3068,96 +3068,6 @@ async function runFollowUpGeneration() {
     }
   }
 
-  // ---- STEP 3: Channel escalation — Instagram DM if email unopened ----
-  for (const lead of allLeads) {
-    try {
-      const skipReason = shouldSkipLead(lead, leadsWithReplies.has(lead.id));
-      if (skipReason) {
-        continue; // Silent skip for escalation checks
-      }
-
-      if (!lead.instagram_handle) {
-        continue; // No Instagram handle, can't escalate
-      }
-
-      const leadMessages = allMessages.filter((m) => m.lead_id === lead.id);
-
-      if (!shouldGenerateEscalationDm(leadMessages, now)) {
-        continue;
-      }
-
-      // Check if escalation DM already exists (planned, draft, approved, or sent)
-      const existingDm = leadMessages.find(
-        (m) => m.is_channel_escalation === true &&
-          (m.status === "planned" || m.status === "draft" || m.status === "approved" || m.status === "sent")
-      );
-      if (existingDm) {
-        continue; // Already handled
-      }
-
-      // Generate Instagram DM draft using Claude
-      const enrichment = lead.enrichment || {};
-      let dmContent = "";
-      try {
-        const dmPrompt = `${INSTAGRAM_ESCALATION_PROMPT}
-
-RECIPIENT: ${lead.business_name}
-INSTAGRAM: ${lead.instagram_handle}
-CONTEXT: ${enrichment.context_notes || "No additional context"}`;
-
-        const dmResponse = await claudeClient.messages.create({
-          model: CLAUDE_MODEL,
-          max_tokens: 200,
-          messages: [
-            {
-              role: "user",
-              content: dmPrompt,
-            },
-          ],
-        });
-
-        dmContent = dmResponse.content[0]?.type === "text" ? dmResponse.content[0].text : "";
-      } catch (err) {
-        console.warn(`Failed to generate DM content for ${lead.business_name}:`, err.message);
-        dmContent = "Hey! Saw your venue and thought you'd love Asterley Bros. Mind if I reach out?";
-      }
-
-      // Create draft for approval
-      const dmId = crypto.randomUUID();
-      await db.collection("outreach_messages").doc(dmId).set({
-        id: dmId,
-        lead_id: lead.id,
-        business_name: lead.business_name,
-        venue_category: enrichment.venue_category || null,
-        channel: "instagram_dm",
-        subject: null,
-        content: dmContent,
-        status: "draft",
-        step_number: 2,
-        follow_up_label: null,
-        is_channel_escalation: true,
-        scheduled_send_date: tomorrowStr,
-        created_at: new Date().toISOString(),
-        tone_tier: enrichment.tone_tier || null,
-        lead_products: enrichment.lead_products || [],
-        contact_name: lead.contact_name || null,
-        context_notes: enrichment.context_notes || null,
-        menu_fit: enrichment.menu_fit || null,
-        recipient_email: lead.instagram_handle || null,
-        website: lead.website || null,
-        workspace_id: lead.workspace_id || "",
-        assigned_to: lead.assigned_to || null,
-        was_edited: false,
-      });
-
-      console.log(`ESCALATE [${lead.business_name}]: Instagram DM draft created for approval`);
-      generated++;
-    } catch (err) {
-      console.error("Escalation DM creation failed for", lead.business_name, err.message);
-      failed++;
-    }
-  }
-
   return { generated, skipped, failed, total };
 }
 
@@ -5653,25 +5563,60 @@ function bucketValue(v) {
 }
 
 async function runOutreachAggregation() {
-  // Only sent messages are eligible — drafts have no opens/replies
+  // Only sent emails are eligible — drafts have no opens/replies
   const snap = await db.collection("outreach_messages")
     .where("status", "==", "sent")
+    .where("channel", "==", "email")
     .get();
+
+  // Lazy lead cache so we only fetch each lead once when backfilling segment keys
+  const leadCache = new Map();
+  async function getLead(leadId) {
+    if (leadCache.has(leadId)) return leadCache.get(leadId);
+    const doc = await db.collection("leads").doc(leadId).get();
+    const lead = doc.exists ? doc.data() : null;
+    leadCache.set(leadId, lead);
+    return lead;
+  }
 
   // buckets: Map<segment_key, Map<dim_key, Map<value, {sent, opens, replies}>>>
   const segments = new Map();
 
   for (const doc of snap.docs) {
     const m = doc.data();
-    if (!m.segment_key) continue;
-    if (!m.subject_features && !m.content_features) continue;
 
-    for (const segKey of [m.segment_key, m.broad_segment_key].filter(Boolean)) {
+    // Backfill features and segment keys for older messages
+    let segmentKey = m.segment_key;
+    let broadSegmentKey = m.broad_segment_key;
+    let subjectFeatures = m.subject_features;
+    let contentFeatures = m.content_features;
+
+    if (!subjectFeatures && m.subject) subjectFeatures = extractSubjectFeatures(m.subject);
+    if (!contentFeatures && m.content) contentFeatures = extractContentFeatures(m.content);
+
+    if ((!segmentKey || !broadSegmentKey) && m.lead_id) {
+      const lead = await getLead(m.lead_id);
+      if (lead) {
+        const enrichment = lead.enrichment || {};
+        if (!segmentKey) segmentKey = buildSegmentKey(lead, enrichment);
+        if (!broadSegmentKey) broadSegmentKey = buildBroadSegmentKey(lead, enrichment);
+      }
+    }
+
+    if (!segmentKey) continue;
+    if (!subjectFeatures && !contentFeatures) continue;
+
+    const featuresBySource = {
+      subject_features: subjectFeatures,
+      content_features: contentFeatures,
+    };
+
+    for (const segKey of [segmentKey, broadSegmentKey].filter(Boolean)) {
       if (!segments.has(segKey)) segments.set(segKey, new Map());
       const dims = segments.get(segKey);
 
       for (const dim of FEATURE_DIMENSIONS) {
-        const features = m[dim.source];
+        const features = featuresBySource[dim.source];
         if (!features) continue;
         const dimKey = `${dim.source}.${dim.key}`;
         const value = bucketValue(features[dim.key]);
@@ -5770,15 +5715,28 @@ export const suggestDraftImprovements = functions
     const subjectFeatures = msg.subject_features || extractSubjectFeatures(msg.subject);
     const contentFeatures = msg.content_features || extractContentFeatures(msg.content);
 
+    // Backfill segment keys from the lead if missing on the message
+    let segmentKey = msg.segment_key;
+    let broadSegmentKey = msg.broad_segment_key;
+    if ((!segmentKey || !broadSegmentKey) && msg.lead_id) {
+      const leadSnap = await db.collection("leads").doc(msg.lead_id).get();
+      if (leadSnap.exists) {
+        const lead = leadSnap.data();
+        const enrichment = lead.enrichment || {};
+        if (!segmentKey) segmentKey = buildSegmentKey(lead, enrichment);
+        if (!broadSegmentKey) broadSegmentKey = buildBroadSegmentKey(lead, enrichment);
+      }
+    }
+
     // Pull stats — try narrow segment first, then broad
     let statsDoc = null;
-    if (msg.segment_key) {
-      const id = msg.segment_key.replace(/[^a-zA-Z0-9_|-]/g, "_");
+    if (segmentKey) {
+      const id = segmentKey.replace(/[^a-zA-Z0-9_|-]/g, "_");
       const s = await db.collection("outreach_stats").doc(id).get();
       if (s.exists) statsDoc = s.data();
     }
-    if (!statsDoc && msg.broad_segment_key) {
-      const id = msg.broad_segment_key.replace(/[^a-zA-Z0-9_|-]/g, "_");
+    if (!statsDoc && broadSegmentKey) {
+      const id = broadSegmentKey.replace(/[^a-zA-Z0-9_|-]/g, "_");
       const s = await db.collection("outreach_stats").doc(id).get();
       if (s.exists) statsDoc = s.data();
     }
@@ -5788,7 +5746,7 @@ export const suggestDraftImprovements = functions
     if (!statsDoc) {
       return {
         suggestions: [],
-        segment_key: msg.segment_key || null,
+        segment_key: segmentKey || null,
         sample_size: 0,
         reason: "No aggregated stats yet for this segment. Run aggregation after more sends.",
       };
@@ -5831,7 +5789,7 @@ export const suggestDraftImprovements = functions
     if (evidence.length === 0) {
       return {
         suggestions: [],
-        segment_key: msg.segment_key || null,
+        segment_key: segmentKey || null,
         sample_size: sampleSize,
         reason: "Draft already aligns with top-performing patterns for this segment.",
       };
@@ -5887,7 +5845,7 @@ Rules:
       }
       return {
         suggestions: parsed.suggestions || [],
-        segment_key: msg.segment_key || null,
+        segment_key: segmentKey || null,
         sample_size: sampleSize,
         evidence,
       };
