@@ -577,7 +577,13 @@ export function MessageCard({ message, inConversation, emailCapReached, isDuplic
 
         {/* AI Coach — visible on all drafts, collapsed by default */}
         {message.status === "draft" && message.id && (
-          <DraftCoachPanel messageId={message.id} />
+          <DraftCoachPanel
+            messageId={message.id}
+            onApply={isEditing ? (subject, content) => {
+              setEditSubject(subject);
+              setEditContent(content);
+            } : undefined}
+          />
         )}
 
         {/* Subject input when editing (only emails have subjects) */}

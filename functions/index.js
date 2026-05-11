@@ -5861,3 +5861,62 @@ Rules:
     }
   });
 
+// applyDraftSuggestions — takes a draft + AI Coach suggestions and asks Claude
+// to rewrite the draft incorporating them. Returns { subject, content }.
+export const applyDraftSuggestions = functions
+  .runWith({ timeoutSeconds: 60, memory: "256MB", secrets: ["ANTHROPIC_API_KEY"] })
+  .https.onCall(async (data, context) => {
+    if (!context.auth) {
+      throw new HttpsError("unauthenticated", "Must be signed in.");
+    }
+    const messageId = data?.message_id;
+    const suggestions = Array.isArray(data?.suggestions) ? data.suggestions : [];
+    if (!messageId) throw new HttpsError("invalid-argument", "message_id required.");
+    if (suggestions.length === 0) throw new HttpsError("invalid-argument", "suggestions required.");
+
+    const msgSnap = await db.collection("outreach_messages").doc(messageId).get();
+    if (!msgSnap.exists) throw new HttpsError("not-found", "Message not found.");
+    const msg = msgSnap.data();
+
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) throw new HttpsError("failed-precondition", "ANTHROPIC_API_KEY not configured.");
+    const anthropic = new Anthropic({ apiKey });
+
+    const suggestionList = suggestions
+      .map((s, i) => `${i + 1}. ${s.title} — ${s.concrete_change}`)
+      .join("\n");
+
+    const userPrompt = `Rewrite the email below applying these specific suggestions. Keep the same overall purpose and recipient context. Preserve any merge fields, links, or product names exactly.
+
+ORIGINAL SUBJECT: ${msg.subject || "(none)"}
+
+ORIGINAL BODY:
+"""
+${msg.content || ""}
+"""
+
+SUGGESTIONS TO APPLY:
+${suggestionList}
+
+Return ONLY valid JSON in this exact shape (no markdown, no commentary):
+{"subject": "<rewritten subject>", "content": "<rewritten body>"}`;
+
+    try {
+      const response = await anthropic.messages.create({
+        model: CLAUDE_MODEL,
+        max_tokens: 1024,
+        messages: [{ role: "user", content: userPrompt }],
+      });
+      const raw = response.content[0]?.type === "text" ? response.content[0].text : "{}";
+      const cleaned = raw.replace(/```json\s*/g, "").replace(/```/g, "").trim();
+      const parsed = JSON.parse(cleaned);
+      return {
+        subject: typeof parsed.subject === "string" ? parsed.subject : (msg.subject || ""),
+        content: typeof parsed.content === "string" ? parsed.content : (msg.content || ""),
+      };
+    } catch (err) {
+      console.error("applyDraftSuggestions failed:", err.message, err.stack);
+      throw new HttpsError("internal", "Failed to rewrite draft.");
+    }
+  });
+
