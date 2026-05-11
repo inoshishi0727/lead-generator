@@ -5760,6 +5760,8 @@ export const suggestDraftImprovements = functions
     const messageId = data?.message_id;
     if (!messageId) throw new HttpsError("invalid-argument", "message_id required.");
 
+    try {
+
     const msgSnap = await db.collection("outreach_messages").doc(messageId).get();
     if (!msgSnap.exists) throw new HttpsError("not-found", "Message not found.");
     const msg = msgSnap.data();
@@ -5872,14 +5874,18 @@ Rules:
 - Be specific — "use a question subject" beats "improve subject"
 - Confidence "high" only when sample size is 10+ AND gap is 10%+`;
 
-    try {
       const response = await ai.models.generateContent({
         model: GEMINI_DRAFT_MODEL,
         contents: promptBody,
         config: { maxOutputTokens: 1024, temperature: 0.4, responseMimeType: "application/json" },
       });
       const raw = response.text || "{}";
-      const parsed = JSON.parse(raw);
+      let parsed;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        parsed = {};
+      }
       return {
         suggestions: parsed.suggestions || [],
         segment_key: msg.segment_key || null,
@@ -5887,8 +5893,14 @@ Rules:
         evidence,
       };
     } catch (err) {
-      console.error("suggestDraftImprovements LLM call failed:", err.message);
-      throw new HttpsError("internal", "Failed to generate suggestions.");
+      if (err instanceof HttpsError) throw err;
+      console.error("suggestDraftImprovements failed:", err.message, err.stack);
+      return {
+        suggestions: [],
+        segment_key: null,
+        sample_size: 0,
+        reason: "Suggestions temporarily unavailable.",
+      };
     }
   });
 
