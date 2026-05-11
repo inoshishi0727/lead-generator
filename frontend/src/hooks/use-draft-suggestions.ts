@@ -33,3 +33,19 @@ export function useAggregateOutreachStats() {
     },
   });
 }
+
+export function useApplyDraftSuggestions() {
+  return useMutation({
+    mutationFn: async (input: {
+      message_id: string;
+      suggestions: { title: string; concrete_change: string }[];
+    }) => {
+      const fn = httpsCallable<typeof input, { subject: string; content: string }>(
+        functions,
+        "applyDraftSuggestions"
+      );
+      const result = await fn(input);
+      return result.data;
+    },
+  });
+}
