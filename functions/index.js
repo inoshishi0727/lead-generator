@@ -5696,7 +5696,7 @@ export const aggregateOutreachStats = functions
 // suggestDraftImprovements — pull the matching segment's stats, hand them to
 // Gemini with the draft, and return ranked suggestions for the coach panel.
 export const suggestDraftImprovements = functions
-  .runWith({ timeoutSeconds: 60, memory: "256MB", secrets: ["GEMINI_API_KEY"] })
+  .runWith({ timeoutSeconds: 60, memory: "256MB", secrets: ["ANTHROPIC_API_KEY"] })
   .https.onCall(async (data, context) => {
     if (!context.auth) {
       throw new HttpsError("unauthenticated", "Must be signed in.");
@@ -5795,10 +5795,10 @@ export const suggestDraftImprovements = functions
       };
     }
 
-    // Hand evidence + draft to Gemini, ask for concrete rewrites
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) throw new HttpsError("failed-precondition", "GEMINI_API_KEY not configured.");
-    const ai = new GoogleGenAI({ apiKey });
+    // Hand evidence + draft to Claude, ask for concrete rewrites
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) throw new HttpsError("failed-precondition", "ANTHROPIC_API_KEY not configured.");
+    const anthropic = new Anthropic({ apiKey });
 
     const promptBody = `You are coaching a sales rep on a cold outreach email. You have hard data on what gets replies in this segment. Suggest concrete, specific edits the rep should consider.
 
@@ -5831,23 +5831,28 @@ Rules:
 - Be specific — "use a question subject" beats "improve subject"
 - Confidence "high" only when sample size is 10+ AND gap is 10%+`;
 
-      const response = await ai.models.generateContent({
-        model: GEMINI_DRAFT_MODEL,
-        contents: promptBody,
-        config: { maxOutputTokens: 1024, temperature: 0.4, responseMimeType: "application/json" },
+      const response = await anthropic.messages.create({
+        model: CLAUDE_MODEL,
+        max_tokens: 1024,
+        messages: [{ role: "user", content: promptBody }],
       });
-      const raw = response.text || "{}";
+      const raw = response.content[0]?.type === "text" ? response.content[0].text : "{}";
+      const cleaned = raw.replace(/```json\s*/g, "").replace(/```/g, "").trim();
       let parsed;
       try {
-        parsed = JSON.parse(raw);
+        parsed = JSON.parse(cleaned);
       } catch {
         parsed = {};
       }
+      const suggestions = parsed.suggestions || [];
       return {
-        suggestions: parsed.suggestions || [],
+        suggestions,
         segment_key: segmentKey || null,
         sample_size: sampleSize,
         evidence,
+        reason: suggestions.length === 0
+          ? "Draft already aligns with top-performing patterns for this segment."
+          : undefined,
       };
     } catch (err) {
       if (err instanceof HttpsError) throw err;
