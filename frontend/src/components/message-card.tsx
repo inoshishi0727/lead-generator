@@ -111,6 +111,7 @@ const REJECTION_LABELS: Record<string, string> = {
   snoozed: "Snoozed",
   current_account: "Current Account",
   in_discussion: "In Discussion",
+  duplicate: "Duplicate",
 };
 
 function rejectionLabel(reason: string): string {
@@ -574,8 +575,8 @@ export function MessageCard({ message, inConversation, emailCapReached, isDuplic
       {/* Scrollable body — message content + action buttons */}
       <div className="space-y-3 p-4">
 
-        {/* AI Coach — visible while editing email drafts */}
-        {isEditing && message.channel === "email" && message.id && (
+        {/* AI Coach — visible on all email drafts, collapsed by default */}
+        {message.status === "draft" && message.channel === "email" && message.id && (
           <DraftCoachPanel messageId={message.id} />
         )}
 
@@ -815,6 +816,16 @@ export function MessageCard({ message, inConversation, emailCapReached, isDuplic
             {/* If a generated draft exists on a planned follow-up, allow Approve/Reject */}
             {message.content && message.content.trim() !== "" && (
               <>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={startEditing}
+                  disabled={isPending}
+                >
+                  <Pencil className="mr-1 h-3.5 w-3.5" />
+                  Edit
+                </Button>
+
                 <Button
                   size="sm"
                   variant="default"
@@ -1146,6 +1157,7 @@ export function MessageCard({ message, inConversation, emailCapReached, isDuplic
                 { value: "wrong_product", label: "Wrong product" },
                 { value: "not_suitable",  label: "Not suitable" },
                 { value: "needs_edit",    label: "Needs editing" },
+                { value: "duplicate",     label: "Duplicate" },
                 { value: "other",         label: "Other" },
               ].map(({ value, label }) => (
                 <button
