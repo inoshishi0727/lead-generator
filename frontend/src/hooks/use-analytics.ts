@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import { getFunnel, getCategories, getRatios, getTrends, getSubjectLineStats, getReplyRateTrend, getReplyRateByDimension, getOpenRateTrend, getOpenRateByStep, getTopOpeners, getBestPerformingContent, getEmailsBySubject, getEmailPerformance7Day } from "@/lib/firestore-analytics";
+import { getFunnel, getCategories, getRatios, getTrends, getSubjectLineStats, getReplyRateTrend, getReplyRateByDimension, getOpenRateTrend, getOpenRateByStep, getTopOpeners, getBestPerformingContent, getEmailsBySubject, getEmailPerformance7Day, getStepBreakdown } from "@/lib/firestore-analytics";
 import type { OpenRateByStepPoint } from "@/lib/firestore-analytics";
 import { getTeamMetrics } from "@/lib/firestore-team-analytics";
 import type {
@@ -126,5 +126,12 @@ export function useEmailPerformance7Day() {
   return useQuery<EmailPerformance7DayType>({
     queryKey: ["analytics", "email-performance-7day"],
     queryFn: () => getEmailPerformance7Day(),
+  });
+}
+
+export function useStepBreakdown() {
+  return useQuery({
+    queryKey: ["analytics", "step-breakdown"],
+    queryFn: () => getStepBreakdown(),
   });
 }
