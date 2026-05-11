@@ -575,8 +575,8 @@ export function MessageCard({ message, inConversation, emailCapReached, isDuplic
       {/* Scrollable body — message content + action buttons */}
       <div className="space-y-3 p-4">
 
-        {/* AI Coach — visible while editing email drafts */}
-        {isEditing && message.channel === "email" && message.id && (
+        {/* AI Coach — visible on all email drafts, collapsed by default */}
+        {message.status === "draft" && message.channel === "email" && message.id && (
           <DraftCoachPanel messageId={message.id} />
         )}
 

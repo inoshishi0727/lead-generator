@@ -15,6 +15,7 @@ import { OpenRateByStepChart } from "@/components/open-rate-by-step-chart";
 import { EmailEngagementChart } from "@/components/email-engagement-chart";
 import { EmailOpensCard } from "@/components/email-opens-card";
 import { BestPerformingContentCard } from "@/components/best-performing-content-card";
+import { StepBreakdownCard } from "@/components/step-breakdown-card";
 import { EmailPerformanceCard } from "@/components/email-performance-card";
 import { Button } from "@/components/ui/button";
 import { useFunnel, useCategories, useReplyRateTrend, useOpenRateTrend } from "@/hooks/use-analytics";
@@ -122,6 +123,8 @@ export default function AnalyticsPage() {
         <EmailOpensCard />
         <SubjectLineChart />
       </div>
+
+      <StepBreakdownCard />
 
       <BestPerformingContentCard />
 
