@@ -1,14 +1,16 @@
 "use client";
 
 import { useState } from "react";
-import { Sparkles, ChevronDown, ChevronUp, TrendingUp } from "lucide-react";
+import { Sparkles, ChevronDown, ChevronUp, Loader2, Wand2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { useDraftSuggestions } from "@/hooks/use-draft-suggestions";
+import { useDraftSuggestions, useApplyDraftSuggestions } from "@/hooks/use-draft-suggestions";
 import type { DraftSuggestion } from "@/lib/types";
+import { toast } from "sonner";
 
 interface Props {
   messageId: string;
+  onApply?: (subject: string, content: string) => void;
 }
 
 const CONFIDENCE_COLOR: Record<DraftSuggestion["confidence"], string> = {
@@ -17,9 +19,32 @@ const CONFIDENCE_COLOR: Record<DraftSuggestion["confidence"], string> = {
   low: "bg-muted text-muted-foreground border-border",
 };
 
-export function DraftCoachPanel({ messageId }: Props) {
+export function DraftCoachPanel({ messageId, onApply }: Props) {
   const [open, setOpen] = useState(false);
   const { data, isLoading, isError, refetch } = useDraftSuggestions(messageId, open);
+  const applyMutation = useApplyDraftSuggestions();
+
+  function handleApply() {
+    if (!data?.suggestions.length || !onApply) return;
+    applyMutation.mutate(
+      {
+        message_id: messageId,
+        suggestions: data.suggestions.map((s) => ({
+          title: s.title,
+          concrete_change: s.concrete_change,
+        })),
+      },
+      {
+        onSuccess: (result) => {
+          onApply(result.subject, result.content);
+          toast.success("Suggestions applied — review and save");
+        },
+        onError: () => {
+          toast.error("Couldn't apply suggestions. Try again.");
+        },
+      }
+    );
+  }
 
   return (
     <div className="rounded-md border border-border/50 bg-muted/20">
@@ -31,12 +56,6 @@ export function DraftCoachPanel({ messageId }: Props) {
         <div className="flex items-center gap-2">
           <Sparkles className="h-3.5 w-3.5 text-primary" />
           <span className="text-xs font-medium">AI Coach</span>
-          {data?.sample_size ? (
-            <Badge variant="outline" className="text-[10px] gap-1">
-              <TrendingUp className="h-2.5 w-2.5" />
-              n={data.sample_size}
-            </Badge>
-          ) : null}
         </div>
         {open ? (
           <ChevronUp className="h-3.5 w-3.5 text-muted-foreground" />
@@ -64,6 +83,22 @@ export function DraftCoachPanel({ messageId }: Props) {
             <p className="text-xs text-muted-foreground italic">
               {data.reason || "No suggestions available for this draft."}
             </p>
+          )}
+
+          {data && data.suggestions.length > 0 && onApply && (
+            <Button
+              size="sm"
+              onClick={handleApply}
+              disabled={applyMutation.isPending}
+              className="w-full"
+            >
+              {applyMutation.isPending ? (
+                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Wand2 className="mr-1.5 h-3.5 w-3.5" />
+              )}
+              {applyMutation.isPending ? "Applying..." : "Apply suggestions to draft"}
+            </Button>
           )}
 
           {data && data.suggestions.length > 0 && (
