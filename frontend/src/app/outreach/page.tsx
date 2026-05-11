@@ -103,7 +103,11 @@ export default function OutreachPage() {
     enabled: useClientSide,
   });
 
-  const messages = useClientSide ? (clientSideMessages ?? []) : (apiMessages ?? []);
+  const rawMessages = useClientSide ? (clientSideMessages ?? []) : (apiMessages ?? []);
+  const messages = useMemo(
+    () => rawMessages.filter((m) => m.channel !== "instagram_dm"),
+    [rawMessages]
+  );
   const isLoading = useClientSide ? clientSideLoading : apiLoading;
 
   const { replies: inboundReplies, readMap, markLeadRead } = useReplyNotifications();
