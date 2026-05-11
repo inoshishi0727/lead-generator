@@ -5653,10 +5653,9 @@ function bucketValue(v) {
 }
 
 async function runOutreachAggregation() {
-  // Only sent emails are eligible — drafts have no opens/replies
+  // Only sent messages are eligible — drafts have no opens/replies
   const snap = await db.collection("outreach_messages")
     .where("status", "==", "sent")
-    .where("channel", "==", "email")
     .get();
 
   // buckets: Map<segment_key, Map<dim_key, Map<value, {sent, opens, replies}>>>
