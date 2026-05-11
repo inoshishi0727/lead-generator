@@ -596,3 +596,52 @@ export async function getEmailPerformance7Day(): Promise<EmailPerformance7Day> {
 
   return { series, totalSent, totalReplied, replyRate };
 }
+
+export interface StepStat {
+  step: number;
+  label: string;
+  sent: number;
+  opened: number;
+  open_rate: number;
+  replied: number;
+  reply_rate: number;
+}
+
+export async function getStepBreakdown(): Promise<{ steps: StepStat[] }> {
+  const msgs = await getAllSentOutreachMessages();
+  if (!msgs.length) return { steps: [] };
+
+  const grouped: Record<number, { sent: number; opened: number; replied: number }> = {};
+
+  for (const msg of msgs) {
+    const step = msg.step_number ?? 1;
+    if (!grouped[step]) grouped[step] = { sent: 0, opened: 0, replied: 0 };
+    grouped[step].sent++;
+    if (wasOpened(msg)) grouped[step].opened++;
+    if (msg.has_reply || (msg.reply_count && msg.reply_count > 0)) grouped[step].replied++;
+  }
+
+  const STEP_LABELS: Record<number, string> = {
+    1: "Initial",
+    2: "Follow-up 1",
+    3: "Follow-up 2",
+    4: "Follow-up 3",
+  };
+
+  const steps = Object.entries(grouped)
+    .map(([stepStr, counts]) => {
+      const step = Number(stepStr);
+      return {
+        step,
+        label: STEP_LABELS[step] ?? `Step ${step}`,
+        sent: counts.sent,
+        opened: counts.opened,
+        open_rate: counts.sent > 0 ? Math.round((counts.opened / counts.sent) * 1000) / 10 : 0,
+        replied: counts.replied,
+        reply_rate: counts.sent > 0 ? Math.round((counts.replied / counts.sent) * 1000) / 10 : 0,
+      };
+    })
+    .sort((a, b) => a.step - b.step);
+
+  return { steps };
+}
