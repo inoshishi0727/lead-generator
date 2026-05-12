@@ -2005,6 +2005,18 @@ function extractLeadIdFromTo(toAddresses) {
 }
 
 /**
+ * Extract root domain from a URL or domain string.
+ * e.g. "https://www.example.com/path?q=1" → "example.com"
+ * e.g. "www.example.com" → "example.com"
+ */
+function extractDomain(url) {
+  let s = url.replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/$/, "");
+  s = s.split("/")[0];
+  s = s.split("?")[0];
+  return s.toLowerCase();
+}
+
+/**
  * Use Gemini to parse email content (text + attachments) into structured lead data.
  * Returns an array of leads: [{ business_name, website, phone, address, notes }]
  */
@@ -2017,7 +2029,7 @@ async function parseLeadsFromEmail(subject, textBody, _htmlBody, attachments) {
   const emailText = [
     subject ? `Subject: ${subject}` : "",
     textBody || "",
-  ].filter(Boolean).join("\n\n").slice(0, 4000);
+  ].filter(Boolean).join("\n\n").slice(0, 16000);
 
   // Decode text-based attachments (CSV, TSV, TXT) and append to email text
   const TEXT_MIME = ["text/csv", "text/tab-separated-values", "text/plain", "application/csv"];
@@ -2127,17 +2139,30 @@ function fallbackParseLeads(subject, textBody) {
   const leads = [];
   const text = textBody || "";
 
-  // Extract all URLs
-  const urls = [...text.matchAll(/https?:\/\/[^\s"<>]+/g)].map((m) =>
-    m[0].replace(/[.,;)]+$/, "")
-  );
+  // Extract all URLs (https://, http://, www., and bare domains like example.com)
+  const urls = [
+    ...text.matchAll(/https?:\/\/[^\s"<>]+/g),
+    ...text.matchAll(/(?<![a-z0-9.])www\.[^\s"<>]+/gi),
+    ...text.matchAll(/(?<![a-z0-9.@])\b[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.[a-z]{2,}(?:\.[a-z]{2,})?(?:\/[^\s"<>]*)?(?![a-z])/gi),
+  ].map((m) => m[0].replace(/[.,;)]+$/, ""));
 
-  if (urls.length === 0 && !subject) return [];
+  // Deduplicate URLs
+  const seen = new Set();
+  const uniqueUrls = urls.filter((u) => {
+    const key = u.toLowerCase().replace(/\/$/, "");
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 
-  if (urls.length > 0) {
-    for (const url of urls) {
+  if (uniqueUrls.length === 0 && !subject) return [];
+
+  if (uniqueUrls.length > 0) {
+    for (const url of uniqueUrls) {
       const isMapsUrl = /maps\.google|google\.com\/maps|goo\.gl\/maps/i.test(url);
-      const domain = url.match(/https?:\/\/(?:www\.)?([^/?#]+)/)?.[1] || "";
+      const domain = url.match(/https?:\/\/(?:www\.)?([^/?#]+)/)?.[1]
+        || url.match(/^(?:www\.)?([^/?#]+)/)?.[1]
+        || "";
       const nameFromDomain = domain.split(".")[0].replace(/-/g, " ");
       const businessName = subject?.replace(/^(re|fwd?):\s*/i, "").trim() || nameFromDomain || domain;
 
@@ -2256,30 +2281,60 @@ export const processLeadIngestion = functions
       for (const lead of parsedLeads) {
         if (!lead.business_name || lead.business_name === "Unknown") continue;
 
-        // Deduplicate by business name
+        const businessNameLower = lead.business_name.toLowerCase().trim();
+
+        // Deduplicate by business name (case-insensitive)
         const dupeSnap = await db.collection("leads")
-          .where("business_name", "==", lead.business_name)
+          .where("business_name_lower", "==", businessNameLower)
           .limit(1)
           .get();
         if (!dupeSnap.empty) {
-          console.log("Lead already exists, skipping:", lead.business_name);
+          console.log("Lead already exists by name, skipping:", lead.business_name);
           skippedLeads.push(lead.business_name);
           continue;
         }
 
+        // Deduplicate by website domain
+        const cleanWebsite = lead.website && !/maps\.google|google\.com\/maps|goo\.gl\/maps/i.test(lead.website)
+          ? lead.website
+          : null;
+        if (cleanWebsite) {
+          const domain = extractDomain(cleanWebsite);
+          const domainSnap = await db.collection("leads")
+            .where("website", "!=", null)
+            .get();
+          const domainDupe = domainSnap.docs.find((d) => {
+            const existing = d.data().website;
+            if (!existing) return false;
+            return extractDomain(existing) === domain;
+          });
+          if (domainDupe) {
+            console.log("Lead already exists by website, skipping:", lead.business_name, cleanWebsite);
+            skippedLeads.push(lead.business_name);
+            continue;
+          }
+        }
+
         const isMapsUrl = lead.website && /maps\.google|google\.com\/maps|goo\.gl\/maps/i.test(lead.website);
+        const websiteForDedup = isMapsUrl ? null : (lead.website || null);
+        const domainForDedup = websiteForDedup ? extractDomain(websiteForDedup) : "";
+        const dedupKey = `email_ingestion|${businessNameLower}|${domainForDedup}`;
+        const universalDedupKey = `${businessNameLower}|${domainForDedup}`;
         const leadId = crypto.randomUUID();
 
         await db.collection("leads").doc(leadId).set({
           id: leadId,
           business_name: lead.business_name,
-          website: isMapsUrl ? null : (lead.website || null),
+          business_name_lower: businessNameLower,
+          website: websiteForDedup,
           google_maps_url: isMapsUrl ? lead.website : (lead.google_maps_url || null),
           phone: lead.phone || null,
           address: lead.address || null,
           notes: lead.notes || null,
           source: "email_ingestion",
           stage: "scraped",
+          dedup_key: dedupKey,
+          universal_dedup_key: universalDedupKey,
           added_by_email: fromEmail,
           added_by_name: fromName,
           scraped_at: now,
