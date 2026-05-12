@@ -2017,6 +2017,22 @@ function extractDomain(url) {
 }
 
 /**
+ * Best-effort placeholder name from a URL when the inbound email gave us a
+ * link with no descriptive text. Enrichment can refine this later.
+ */
+function deriveBusinessNameFromUrl(url) {
+  if (!url) return null;
+  const domain = extractDomain(url);
+  if (!domain) return null;
+  const stem = domain.split(".")[0];
+  if (!stem) return null;
+  return stem
+    .replace(/[-_]+/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase())
+    .trim();
+}
+
+/**
  * Use Gemini to parse email content (text + attachments) into structured lead data.
  * Returns an array of leads: [{ business_name, website, phone, address, notes }]
  */
@@ -2076,18 +2092,31 @@ async function parseLeadsFromEmail(subject, textBody, _htmlBody, attachments) {
 Email content:
 ${fullContent}
 
-Extract ALL businesses/venues mentioned anywhere in the content — including in attachments, lists, tables, or CSVs. For each, return:
-- business_name (required)
-- website (URL if present, null if not)
+Extract every business/venue or website link in the content — including links in attachments, lists, tables, or CSVs. A URL alone (no name, no context) is still a valid lead. Bare domains like "www.mondosando.com" are URLs too — normalise to "https://www.mondosando.com".
+
+For each lead, return:
+- website (the venue's primary website URL, normalised to https://. null if only a social link is given)
+- business_name (only if explicitly stated or clearly inferable from surrounding text; otherwise null)
+- instagram_handle (an instagram.com URL if present, else null)
 - phone (if present, null if not)
 - address (if present, null if not)
 - notes (any relevant context, null if nothing useful)
 - google_maps_url (if any URL is a Google Maps link, put it here instead of website)
 
-Return ONLY a valid JSON array. Example:
-[{"business_name":"The Copper Kettle","website":"https://copperkettle.co.uk","phone":null,"address":"12 High St, London","notes":null,"google_maps_url":null}]
+Grouping rule: when a single line / row contains both a venue website AND an Instagram link, they belong to the SAME lead — return one entry with both fields populated, not two entries.
 
-If the content contains a list or table of venues, extract every single one.
+A bare URL with no surrounding description is still a valid lead — return it with business_name: null. Do not skip it.
+
+Either business_name OR website OR instagram_handle MUST be present.
+
+Return ONLY a valid JSON array. Examples:
+[
+  {"business_name":"The Copper Kettle","website":"https://copperkettle.co.uk","instagram_handle":null,"phone":null,"address":"12 High St, London","notes":null,"google_maps_url":null},
+  {"business_name":null,"website":"https://www.mondosando.com","instagram_handle":"https://www.instagram.com/cafe_mondo_se5/","phone":null,"address":null,"notes":null,"google_maps_url":null},
+  {"business_name":null,"website":"https://thepeckhampelican.co.uk/","instagram_handle":null,"phone":null,"address":null,"notes":null,"google_maps_url":null}
+]
+
+If the content contains a list of links — even just one URL per line with no other description — extract EVERY single one as a separate lead.
 If nothing useful found, return [].`,
     },
     ...binaryParts,
@@ -2158,25 +2187,54 @@ function fallbackParseLeads(subject, textBody) {
   if (uniqueUrls.length === 0 && !subject) return [];
 
   if (uniqueUrls.length > 0) {
-    for (const url of uniqueUrls) {
-      const isMapsUrl = /maps\.google|google\.com\/maps|goo\.gl\/maps/i.test(url);
-      const domain = url.match(/https?:\/\/(?:www\.)?([^/?#]+)/)?.[1]
-        || url.match(/^(?:www\.)?([^/?#]+)/)?.[1]
-        || "";
-      const nameFromDomain = domain.split(".")[0].replace(/-/g, " ");
-      const businessName = subject?.replace(/^(re|fwd?):\s*/i, "").trim() || nameFromDomain || domain;
+    // Normalize: prepend https:// to bare domains so downstream code treats
+    // them as real URLs.
+    const normalize = (u) => /^https?:\/\//i.test(u) ? u : `https://${u}`;
+
+    // Group consecutive URLs that share the same primary host alias. The email
+    // format `www.mondosando.com https://www.instagram.com/cafe_mondo_se5/`
+    // means one venue with both a site and a social handle. We treat the
+    // venue website as `website` and any Instagram URL as `instagram_handle`
+    // on the same lead.
+    const isInstagram = (u) => /instagram\.com\//i.test(u);
+    const isMaps = (u) => /maps\.google|google\.com\/maps|goo\.gl\/maps/i.test(u);
+
+    const cleanedUrls = uniqueUrls.map(normalize);
+    const positions = cleanedUrls.map((u) => textBody.toLowerCase().indexOf(u.toLowerCase().replace(/^https?:\/\//, "")));
+
+    // Build groups: walk URLs in original order, start a new group at each
+    // venue-website URL; attach Instagram URLs to the most recent group.
+    const groups = [];
+    for (let i = 0; i < cleanedUrls.length; i++) {
+      const url = cleanedUrls[i];
+      if (isInstagram(url) && groups.length > 0 && positions[i] - groups[groups.length - 1].lastPos < 200) {
+        groups[groups.length - 1].instagram = url;
+        groups[groups.length - 1].lastPos = positions[i];
+        continue;
+      }
+      groups.push({ primary: url, instagram: isInstagram(url) ? url : null, lastPos: positions[i] });
+    }
+
+    for (const g of groups) {
+      const primary = g.primary;
+      const websiteUrl = isInstagram(primary) ? null : (isMaps(primary) ? null : primary);
+      const mapsUrl = isMaps(primary) ? primary : null;
+      const igUrl = g.instagram || (isInstagram(primary) ? primary : null);
+
+      const sourceForName = websiteUrl || mapsUrl || igUrl || primary;
+      const domain = sourceForName.match(/https?:\/\/(?:www\.)?([^/?#]+)/)?.[1] || "";
+      const nameFromDomain = domain.split(".")[0].replace(/[-_]+/g, " ");
+      const businessName = nameFromDomain || domain || null;
 
       leads.push({
         business_name: businessName,
-        website: isMapsUrl ? null : url,
-        google_maps_url: isMapsUrl ? url : null,
+        website: websiteUrl,
+        google_maps_url: mapsUrl,
+        instagram_handle: igUrl,
         phone: null,
         address: null,
         notes: "Parsed via fallback (Gemini unavailable)",
       });
-
-      // Only use subject as name for the first URL
-      if (subject) break;
     }
   } else if (subject) {
     leads.push({
@@ -2279,7 +2337,30 @@ export const processLeadIngestion = functions
       const skippedLeads = [];
 
       for (const lead of parsedLeads) {
-        if (!lead.business_name || lead.business_name === "Unknown") continue;
+        // Normalise bare-domain URLs ("www.mondosando.com") to fully-qualified
+        // https URLs so dedup + enrichment can use them.
+        if (lead.website && !/^https?:\/\//i.test(lead.website)) {
+          lead.website = `https://${lead.website.replace(/^\/+/, "")}`;
+        }
+        if (lead.instagram_handle && !/^https?:\/\//i.test(lead.instagram_handle)) {
+          lead.instagram_handle = `https://${lead.instagram_handle.replace(/^\/+/, "")}`;
+        }
+
+        // A lead needs a name, a website, an Instagram handle, or a maps URL.
+        // URL-only leads get a placeholder name derived from the domain so
+        // enrichment can pick them up and a human can find them in the UI.
+        const hasName = lead.business_name && lead.business_name !== "Unknown";
+        const hasUrl = !!(lead.website || lead.google_maps_url || lead.instagram_handle);
+        if (!hasName && !hasUrl) continue;
+
+        let nameDerivedFromUrl = false;
+        if (!hasName) {
+          lead.business_name = deriveBusinessNameFromUrl(
+            lead.website || lead.google_maps_url || lead.instagram_handle
+          );
+          if (!lead.business_name) continue;
+          nameDerivedFromUrl = true;
+        }
 
         const businessNameLower = lead.business_name.toLowerCase().trim();
 
@@ -2328,6 +2409,7 @@ export const processLeadIngestion = functions
           business_name_lower: businessNameLower,
           website: websiteForDedup,
           google_maps_url: isMapsUrl ? lead.website : (lead.google_maps_url || null),
+          instagram_handle: lead.instagram_handle || null,
           phone: lead.phone || null,
           address: lead.address || null,
           notes: lead.notes || null,
@@ -2341,6 +2423,7 @@ export const processLeadIngestion = functions
           email: null,
           score: null,
           enrichment_status: null,
+          name_derived_from_url: nameDerivedFromUrl,
         });
 
         await db.collection("activity_log").add({
