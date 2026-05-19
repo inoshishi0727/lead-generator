@@ -20,6 +20,7 @@ import {
   Eye,
   EyeOff,
   CalendarClock,
+  Sparkles,
 } from "lucide-react";
 import { EditMessageDialog } from "@/components/edit-message-dialog";
 import { DraftCoachPanel } from "@/components/draft-coach-panel";
@@ -228,8 +229,8 @@ export function MessageCard({ message, inConversation, emailCapReached, isDuplic
     });
   }
 
-  function handleRegenerate(provider: "claude" | "gemini" = "claude") {
-    regenerateMutation.mutate({ id: message.id, provider });
+  function handleRegenerate(provider: "claude" | "gemini" = "claude", prompt_version?: "v17") {
+    regenerateMutation.mutate({ id: message.id, provider, prompt_version });
   }
 
   async function handleGenerateFollowup() {
@@ -807,6 +808,20 @@ export function MessageCard({ message, inConversation, emailCapReached, isDuplic
             <Button
               size="sm"
               variant="ghost"
+              className="text-purple-600 hover:text-purple-700 hover:bg-purple-500/10 dark:text-purple-400 dark:hover:text-purple-300 dark:hover:bg-purple-500/10"
+              onClick={() => handleRegenerate("claude", "v17")}
+              disabled={isPending || regenerateMutation.isPending}
+            >
+              {regenerateMutation.isPending ? (
+                <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Sparkles className="mr-1 h-3.5 w-3.5" />
+              )}
+              {regenerateMutation.isPending ? "Generating..." : "Generate with new prompt"}
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
               className="text-blue-600 hover:text-blue-700 hover:bg-blue-500/10 dark:text-blue-400 dark:hover:text-blue-300 dark:hover:bg-blue-500/10"
               onClick={() => handleRegenerate("gemini")}
               disabled={isPending || regenerateMutation.isPending}
@@ -918,6 +933,10 @@ export function MessageCard({ message, inConversation, emailCapReached, isDuplic
                 <MenuItem onClick={() => handleRegenerate("claude")}>
                   <ClaudeIcon className="h-3.5 w-3.5 text-orange-500" />
                   Regenerate with Claude
+                </MenuItem>
+                <MenuItem onClick={() => handleRegenerate("claude", "v17")}>
+                  <Sparkles className="h-3.5 w-3.5 text-purple-500" />
+                  Generate with new prompt
                 </MenuItem>
                 <MenuItem onClick={() => handleRegenerate("gemini")}>
                   <GeminiIcon className="h-3.5 w-3.5 text-blue-500" />
