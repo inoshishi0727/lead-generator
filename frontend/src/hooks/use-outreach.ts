@@ -143,16 +143,18 @@ export function useRegenerateMessage() {
       style,
       preview,
       provider,
+      prompt_version,
     }: {
       id: string;
       style?: "default" | "flowing";
       preview?: boolean;
       provider?: "claude" | "gemini";
+      prompt_version?: "v17";
     }) => {
       if (hasBackend) {
         return api.post<OutreachMessage>(
           `/api/outreach/messages/${id}/regenerate`,
-          { style, preview, provider }
+          { style, preview, provider, prompt_version }
         );
       }
       const msgs = await getOutreachMessages({ lead_id: undefined, limit: 500 });
@@ -160,10 +162,10 @@ export function useRegenerateMessage() {
       if (!msg) throw new Error("Message not found");
 
       const fn = httpsCallable<
-        { message_id: string; lead_id: string; style?: string; preview?: boolean; provider?: string },
-        { message_id: string; subject: string; content: string; provider: string }
+        { message_id: string; lead_id: string; style?: string; preview?: boolean; provider?: string; prompt_version?: string },
+        { message_id: string; subject: string; content: string; provider: string; prompt_version: string }
       >(functions, "regenerateDraft");
-      const result = await fn({ message_id: id, lead_id: msg.lead_id, style, preview, provider });
+      const result = await fn({ message_id: id, lead_id: msg.lead_id, style, preview, provider, prompt_version });
       return { ...result.data, preview: preview ?? false };
     },
     onSuccess: (data) => {
