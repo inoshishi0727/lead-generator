@@ -46,6 +46,7 @@ import { toast } from "sonner";
 import { useGeneratingLeadId } from "@/hooks/use-live-updates";
 import { useAuth } from "@/lib/auth-context";
 import { useLeadDetail } from "@/hooks/use-lead-detail";
+import { useMessageGenerationHistory } from "@/hooks/use-generation-log";
 
 function ClaudeIcon({ className }: { className?: string }) {
   return (
@@ -157,6 +158,10 @@ export function MessageCard({ message, inConversation, emailCapReached, isDuplic
   const deleteReplyMutation = useDeleteReply();
   const generateFollowupMutation = useGenerateFollowupForLead();
   const generatingLeadId = useGeneratingLeadId();
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const { data: generationHistory = [] } = useMessageGenerationHistory(
+    historyOpen ? message.id : undefined
+  );
 
   // Fetch original email for follow-ups
   const { data: leadMessages } = useMessages(
@@ -642,6 +647,49 @@ export function MessageCard({ message, inConversation, emailCapReached, isDuplic
             <Button size="sm" variant="outline" onClick={() => setIsEditing(false)} disabled={isPending}>
               Cancel
             </Button>
+          </div>
+        )}
+
+        {/* Generation history */}
+        <button
+          type="button"
+          onClick={() => setHistoryOpen((v) => !v)}
+          className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+        >
+          {historyOpen ? (
+            <ChevronUp className="h-3 w-3" />
+          ) : (
+            <ChevronDown className="h-3 w-3" />
+          )}
+          Generation history
+        </button>
+
+        {historyOpen && (
+          <div className="rounded-md border border-border/50 bg-muted/20 p-2.5 space-y-1.5">
+            {generationHistory.length === 0 ? (
+              <p className="text-xs text-muted-foreground italic">No history yet — records appear after the next generation.</p>
+            ) : (
+              generationHistory.map((entry) => (
+                <div key={entry.id} className="flex items-center justify-between gap-2 text-xs">
+                  <span className="text-muted-foreground truncate flex-1">{entry.subject || "(no subject)"}</span>
+                  <div className="flex items-center gap-1.5 flex-shrink-0">
+                    <span className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] font-medium ${
+                      entry.generation_source === "claude" ? "bg-orange-500/15 text-orange-400 border-orange-500/30"
+                      : entry.generation_source === "gemini" ? "bg-blue-500/15 text-blue-400 border-blue-500/30"
+                      : entry.generation_source === "latest" ? "bg-purple-500/15 text-purple-400 border-purple-500/30"
+                      : "bg-muted text-muted-foreground border-border"
+                    }`}>
+                      {{ v1: "v1", claude: "Claude", gemini: "Gemini", latest: "Latest prompt" }[entry.generation_source] ?? entry.generation_source}
+                    </span>
+                    <span className="text-muted-foreground">
+                      {entry.generated_at
+                        ? new Date(entry.generated_at).toLocaleDateString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })
+                        : "—"}
+                    </span>
+                  </div>
+                </div>
+              ))
+            )}
           </div>
         )}
 
