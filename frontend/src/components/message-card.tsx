@@ -674,20 +674,13 @@ export function MessageCard({ message, inConversation, emailCapReached, isDuplic
                   <span className="text-muted-foreground truncate flex-1">{entry.subject || "(no subject)"}</span>
                   <div className="flex items-center gap-1.5 flex-shrink-0">
                     <span className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] font-medium ${
-                      entry.provider === "claude"
-                        ? "bg-orange-500/15 text-orange-400 border-orange-500/30"
-                        : "bg-blue-500/15 text-blue-400 border-blue-500/30"
+                      entry.generation_source === "claude" ? "bg-orange-500/15 text-orange-400 border-orange-500/30"
+                      : entry.generation_source === "gemini" ? "bg-blue-500/15 text-blue-400 border-blue-500/30"
+                      : entry.generation_source === "latest" ? "bg-purple-500/15 text-purple-400 border-purple-500/30"
+                      : "bg-muted text-muted-foreground border-border"
                     }`}>
-                      {entry.provider === "claude" ? "Claude" : "Gemini"}
+                      {{ v1: "v1", claude: "Claude", gemini: "Gemini", latest: "Latest prompt" }[entry.generation_source] ?? entry.generation_source}
                     </span>
-                    <span className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] font-medium ${
-                      entry.prompt_version === "v17"
-                        ? "bg-purple-500/15 text-purple-400 border-purple-500/30"
-                        : "bg-muted text-muted-foreground border-border"
-                    }`}>
-                      {entry.prompt_version === "v17" ? "v1.7" : "v1"}
-                    </span>
-                    <span className="text-muted-foreground capitalize">{entry.triggered_by}</span>
                     <span className="text-muted-foreground">
                       {entry.generated_at
                         ? new Date(entry.generated_at).toLocaleDateString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })

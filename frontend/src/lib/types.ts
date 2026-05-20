@@ -5,10 +5,8 @@ export interface GenerationLogEntry {
   business_name: string;
   subject: string;
   content: string;
-  provider: "claude" | "gemini";
-  prompt_version: "v1" | "v17";
+  generation_source: "v1" | "claude" | "gemini" | "latest";
   step_number: number;
-  triggered_by: "initial" | "regenerate";
   venue_category: string | null;
   generated_at: string;
 }
