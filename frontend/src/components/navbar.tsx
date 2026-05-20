@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
-import { BarChart3, Building2, Mail, Megaphone, Search, Settings, TrendingUp, LogOut, User, HelpCircle, Bell } from "lucide-react";
+import { BarChart3, Building2, ClipboardList, Mail, Megaphone, Search, Settings, TrendingUp, LogOut, User, HelpCircle, Bell } from "lucide-react";
 import { useTour } from "@/components/tour-provider";
 import { DarkModeToggle } from "@/components/dark-mode-toggle";
 import { useAuth } from "@/lib/auth-context";
@@ -111,6 +111,7 @@ export function Navbar() {
     { href: "/campaigns", label: "Campaigns", icon: Megaphone, show: true },
     { href: "/outreach", label: "Outreach", icon: Mail, show: true },
     { href: "/analytics", label: "Analytics", icon: TrendingUp, show: true },
+    { href: "/log", label: "Log", icon: ClipboardList, show: true },
     { href: "/settings", label: "Settings", icon: Settings, show: true },
   ];
 
