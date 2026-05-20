@@ -928,11 +928,21 @@ export async function getGenerationLog(filters?: {
   limit?: number;
 }): Promise<GenerationLogEntry[]> {
   const ref = collection(db, "generation_log");
-  const constraints: Parameters<typeof query>[1][] = [orderBy("generated_at", "desc")];
-  if (filters?.generation_source) constraints.push(where("generation_source", "==", filters.generation_source));
-  constraints.push(fbLimit(filters?.limit ?? 200));
+  const constraints: Parameters<typeof query>[1][] = [];
+  if (filters?.generation_source) {
+    // Filter only — sort client-side to avoid needing a composite index
+    constraints.push(where("generation_source", "==", filters.generation_source));
+    constraints.push(fbLimit(filters?.limit ?? 200));
+  } else {
+    constraints.push(orderBy("generated_at", "desc"));
+    constraints.push(fbLimit(filters?.limit ?? 200));
+  }
   const snap = await getDocs(query(ref, ...constraints));
-  return snap.docs.map((d) => ({ id: d.id, ...d.data() } as GenerationLogEntry));
+  const entries = snap.docs.map((d) => ({ id: d.id, ...d.data() } as GenerationLogEntry));
+  if (filters?.generation_source) {
+    entries.sort((a, b) => b.generated_at.localeCompare(a.generated_at));
+  }
+  return entries;
 }
 
 export async function getMessageGenerationHistory(messageId: string): Promise<GenerationLogEntry[]> {
