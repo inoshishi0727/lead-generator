@@ -12,7 +12,8 @@ const CRUMB_MAP: Record<string, string> = {
   "/campaigns": "Campaigns",
   "/outreach": "Outreach",
   "/analytics": "Analytics",
-"/settings": "Settings",
+  "/log": "Logs",
+  "/settings": "Settings",
   "/help": "Help",
 };
 
