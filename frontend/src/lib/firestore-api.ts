@@ -17,7 +17,7 @@ import {
   onSnapshot,
 } from "firebase/firestore";
 import { db, auth } from "./firebase";
-import type { Lead, LeadDetail, LinkedInEmployee, OutreachMessage, InboundReply, EditFeedback, ReflectionCategory, Campaign } from "./types";
+import type { Lead, LeadDetail, LinkedInEmployee, OutreachMessage, InboundReply, EditFeedback, ReflectionCategory, Campaign, GenerationLogEntry } from "./types";
 
 // --- Leads ---
 
@@ -919,4 +919,26 @@ export async function getSommelierConversation(
   });
 
   return { conversation, messages };
+}
+
+// --- Generation Log ---
+
+export async function getGenerationLog(filters?: {
+  provider?: string;
+  prompt_version?: string;
+  limit?: number;
+}): Promise<GenerationLogEntry[]> {
+  const ref = collection(db, "generation_log");
+  const constraints: Parameters<typeof query>[1][] = [orderBy("generated_at", "desc")];
+  if (filters?.provider) constraints.push(where("provider", "==", filters.provider));
+  if (filters?.prompt_version) constraints.push(where("prompt_version", "==", filters.prompt_version));
+  constraints.push(fbLimit(filters?.limit ?? 200));
+  const snap = await getDocs(query(ref, ...constraints));
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() } as GenerationLogEntry));
+}
+
+export async function getMessageGenerationHistory(messageId: string): Promise<GenerationLogEntry[]> {
+  const ref = collection(db, "outreach_messages", messageId, "generation_history");
+  const snap = await getDocs(query(ref, orderBy("generated_at", "desc")));
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() } as GenerationLogEntry));
 }
