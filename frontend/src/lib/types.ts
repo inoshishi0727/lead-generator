@@ -1,3 +1,18 @@
+export interface GenerationLogEntry {
+  id: string;
+  message_id: string;
+  lead_id: string;
+  business_name: string;
+  subject: string;
+  content: string;
+  provider: "claude" | "gemini";
+  prompt_version: "v1" | "v17";
+  step_number: number;
+  triggered_by: "initial" | "regenerate";
+  venue_category: string | null;
+  generated_at: string;
+}
+
 export interface ScrapeRequest {
   query?: string;
   queries?: string[];
