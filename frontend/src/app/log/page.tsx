@@ -24,10 +24,10 @@ const SOURCE_COLOR: Record<GenerationLogEntry["generation_source"], string> = {
 };
 
 export default function GenerationLogPage() {
-  const [sourceFilter, setSourceFilter] = useState<string>("all");
+  const [sourceFilter, setSourceFilter] = useState<string>("");
 
   const { data: entries = [], isLoading, refetch } = useGenerationLog({
-    generation_source: sourceFilter === "all" ? undefined : sourceFilter,
+    generation_source: sourceFilter || undefined,
   });
 
   return (
@@ -46,12 +46,12 @@ export default function GenerationLogPage() {
         </Button>
       </div>
 
-      <Select value={sourceFilter} onValueChange={(v) => setSourceFilter(v ?? "all")}>
+      <Select value={sourceFilter} onValueChange={(v) => setSourceFilter(v ?? "")}>
         <SelectTrigger className="w-52">
           <SelectValue placeholder="All generations" />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value="all">All generations</SelectItem>
+          <SelectItem value="">All generations</SelectItem>
           <SelectItem value="v1">v1 (original)</SelectItem>
           <SelectItem value="claude">Generated with Claude</SelectItem>
           <SelectItem value="gemini">Generated with Gemini</SelectItem>
