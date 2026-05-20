@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   BarChart3,
   Building2,
+  ClipboardList,
   Mail,
   Megaphone,
   MessageCircle,
@@ -193,6 +194,7 @@ const NAV_ITEMS = [
   { href: "/conversations", label: "Conversations", Icon: MessageCircle },
   { href: "/analytics", label: "Analytics", Icon: TrendingUp },
   { href: "/analytics/cost", label: "AI Cost", Icon: TrendingUp },
+  { href: "/log", label: "Log", Icon: ClipboardList },
   { href: "/settings", label: "Settings", Icon: Settings },
 ];
 

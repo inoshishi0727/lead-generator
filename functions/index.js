@@ -1386,12 +1386,24 @@ export const regenerateDraft = functions
       + (promptRules ? `\n\nPROMPT RULES (apply to every email):\n${promptRules}` : "")
       + (feedbackBlock || "");
 
-    const rawText = await callDraftLLM(prov, systemPrompt, prompt);
-    const { subject, content } = parseSubjectContent(rawText);
+    let rawText = await callDraftLLM(prov, systemPrompt, prompt);
+    let { subject, content } = parseSubjectContent(rawText);
 
     const validationError = validateDraftContent(content, leadDoc.website);
     if (validationError) {
       throw new HttpsError("internal", `Draft failed safety check: ${validationError}`);
+    }
+
+    // v1.7 hard rule: no em dashes or en dashes. Retry once if found.
+    if (useV17 && /[—–]/.test(subject + content)) {
+      console.warn(`v1.7 draft for ${leadDoc.business_name} contained em/en dash — retrying once.`);
+      rawText = await callDraftLLM(prov, systemPrompt,
+        prompt + "\n\nCRITICAL REMINDER: Your previous attempt contained an em dash or en dash. Rewrite with ZERO em dashes (—) or en dashes (–) anywhere. Use colons, full stops, commas, or parentheses instead."
+      );
+      ({ subject, content } = parseSubjectContent(rawText));
+      if (/[—–]/.test(subject + content)) {
+        throw new HttpsError("internal", "Draft rejected: em/en dash found after retry.");
+      }
     }
 
     await db.collection("outreach_messages").doc(message_id).update({
