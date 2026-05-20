@@ -3,7 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { getGenerationLog, getMessageGenerationHistory } from "@/lib/firestore-api";
 
-export function useGenerationLog(filters?: { provider?: string; prompt_version?: string }) {
+export function useGenerationLog(filters?: { generation_source?: string }) {
   return useQuery({
     queryKey: ["generation-log", filters],
     queryFn: () => getGenerationLog(filters),

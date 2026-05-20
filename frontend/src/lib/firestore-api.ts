@@ -924,14 +924,12 @@ export async function getSommelierConversation(
 // --- Generation Log ---
 
 export async function getGenerationLog(filters?: {
-  provider?: string;
-  prompt_version?: string;
+  generation_source?: string;
   limit?: number;
 }): Promise<GenerationLogEntry[]> {
   const ref = collection(db, "generation_log");
   const constraints: Parameters<typeof query>[1][] = [orderBy("generated_at", "desc")];
-  if (filters?.provider) constraints.push(where("provider", "==", filters.provider));
-  if (filters?.prompt_version) constraints.push(where("prompt_version", "==", filters.prompt_version));
+  if (filters?.generation_source) constraints.push(where("generation_source", "==", filters.generation_source));
   constraints.push(fbLimit(filters?.limit ?? 200));
   const snap = await getDocs(query(ref, ...constraints));
   return snap.docs.map((d) => ({ id: d.id, ...d.data() } as GenerationLogEntry));

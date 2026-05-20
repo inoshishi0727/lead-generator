@@ -7,39 +7,27 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useGenerationLog } from "@/hooks/use-generation-log";
+import type { GenerationLogEntry } from "@/lib/types";
 
-const PROVIDER_LABEL: Record<string, string> = {
+const SOURCE_LABEL: Record<GenerationLogEntry["generation_source"], string> = {
+  v1: "v1",
   claude: "Claude",
   gemini: "Gemini",
+  latest: "Latest prompt",
 };
 
-const PROMPT_LABEL: Record<string, string> = {
-  v1: "v1 (original)",
-  v17: "v1.7 (new prompt)",
-};
-
-const PROVIDER_COLOR: Record<string, string> = {
+const SOURCE_COLOR: Record<GenerationLogEntry["generation_source"], string> = {
+  v1: "bg-muted text-muted-foreground border-border",
   claude: "bg-orange-500/15 text-orange-400 border-orange-500/30",
   gemini: "bg-blue-500/15 text-blue-400 border-blue-500/30",
-};
-
-const PROMPT_COLOR: Record<string, string> = {
-  v1: "bg-muted text-muted-foreground border-border",
-  v17: "bg-purple-500/15 text-purple-400 border-purple-500/30",
-};
-
-const TRIGGER_COLOR: Record<string, string> = {
-  initial: "bg-emerald-500/15 text-emerald-400 border-emerald-500/30",
-  regenerate: "bg-amber-500/15 text-amber-400 border-amber-500/30",
+  latest: "bg-purple-500/15 text-purple-400 border-purple-500/30",
 };
 
 export default function GenerationLogPage() {
-  const [providerFilter, setProviderFilter] = useState<string>("all");
-  const [promptFilter, setPromptFilter] = useState<string>("all");
+  const [sourceFilter, setSourceFilter] = useState<string>("all");
 
   const { data: entries = [], isLoading, refetch } = useGenerationLog({
-    provider: providerFilter === "all" ? undefined : providerFilter,
-    prompt_version: promptFilter === "all" ? undefined : promptFilter,
+    generation_source: sourceFilter === "all" ? undefined : sourceFilter,
   });
 
   return (
@@ -58,29 +46,18 @@ export default function GenerationLogPage() {
         </Button>
       </div>
 
-      <div className="flex gap-3">
-        <Select value={providerFilter} onValueChange={(v) => setProviderFilter(v ?? "all")}>
-          <SelectTrigger className="w-44">
-            <SelectValue placeholder="All models" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All models</SelectItem>
-            <SelectItem value="claude">Claude</SelectItem>
-            <SelectItem value="gemini">Gemini</SelectItem>
-          </SelectContent>
-        </Select>
-
-        <Select value={promptFilter} onValueChange={(v) => setPromptFilter(v ?? "all")}>
-          <SelectTrigger className="w-52">
-            <SelectValue placeholder="All prompts" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All prompts</SelectItem>
-            <SelectItem value="v1">v1 (original)</SelectItem>
-            <SelectItem value="v17">v1.7 (new prompt)</SelectItem>
-          </SelectContent>
-        </Select>
-      </div>
+      <Select value={sourceFilter} onValueChange={(v) => setSourceFilter(v ?? "all")}>
+        <SelectTrigger className="w-52">
+          <SelectValue placeholder="All generations" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="all">All generations</SelectItem>
+          <SelectItem value="v1">v1 (original)</SelectItem>
+          <SelectItem value="claude">Generated with Claude</SelectItem>
+          <SelectItem value="gemini">Generated with Gemini</SelectItem>
+          <SelectItem value="latest">Generated with latest prompt</SelectItem>
+        </SelectContent>
+      </Select>
 
       <Card>
         <CardHeader className="pb-2">
@@ -90,7 +67,9 @@ export default function GenerationLogPage() {
           {isLoading ? (
             <div className="p-6 text-sm text-muted-foreground">Loading...</div>
           ) : entries.length === 0 ? (
-            <div className="p-6 text-sm text-muted-foreground italic">No generation records yet. Records appear after drafts are generated or regenerated.</div>
+            <div className="p-6 text-sm text-muted-foreground italic">
+              No generation records yet. Records appear after drafts are generated or regenerated.
+            </div>
           ) : (
             <div className="divide-y divide-border">
               {entries.map((entry) => (
@@ -110,18 +89,14 @@ export default function GenerationLogPage() {
                       </p>
                     </div>
                     <div className="flex items-center gap-1.5 flex-shrink-0 flex-wrap justify-end">
-                      <Badge variant="outline" className={`text-[10px] ${PROVIDER_COLOR[entry.provider] || ""}`}>
-                        {PROVIDER_LABEL[entry.provider] || entry.provider}
-                      </Badge>
-                      <Badge variant="outline" className={`text-[10px] ${PROMPT_COLOR[entry.prompt_version] || ""}`}>
-                        {PROMPT_LABEL[entry.prompt_version] || entry.prompt_version}
-                      </Badge>
-                      <Badge variant="outline" className={`text-[10px] capitalize ${TRIGGER_COLOR[entry.triggered_by] || ""}`}>
-                        {entry.triggered_by}
+                      <Badge variant="outline" className={`text-[10px] ${SOURCE_COLOR[entry.generation_source] ?? ""}`}>
+                        {SOURCE_LABEL[entry.generation_source] ?? entry.generation_source}
                       </Badge>
                       <span className="text-[10px] text-muted-foreground whitespace-nowrap">
                         {entry.generated_at
-                          ? new Date(entry.generated_at).toLocaleDateString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })
+                          ? new Date(entry.generated_at).toLocaleDateString("en-GB", {
+                              day: "numeric", month: "short", hour: "2-digit", minute: "2-digit",
+                            })
                           : "—"}
                       </span>
                     </div>

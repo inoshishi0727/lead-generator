@@ -963,17 +963,15 @@ const PRODUCT_NAME_V17 = {
   "asterley original": "ASTERLEY ORIGINAL", "rosé": "ROSÉ", "rose": "ROSÉ", "red": "RED",
 };
 
-async function writeGenerationLog(db, { message_id, lead_id, business_name, subject, content, provider, prompt_version, step_number, triggered_by, venue_category }) {
+async function writeGenerationLog(db, { message_id, lead_id, business_name, subject, content, generation_source, step_number, venue_category }) {
   const entry = {
     message_id,
     lead_id,
     business_name: business_name || "",
     subject: subject || "",
     content: content || "",
-    provider: provider || "claude",
-    prompt_version: prompt_version || "v1",
+    generation_source: generation_source || "v1",
     step_number: step_number || 1,
-    triggered_by,
     venue_category: venue_category || null,
     generated_at: new Date().toISOString(),
   };
@@ -1319,10 +1317,8 @@ export const generateDrafts = functions
           business_name: leadDoc.business_name,
           subject,
           content,
-          provider,
-          prompt_version: "v1",
+          generation_source: "v1",
           step_number: 1,
-          triggered_by: "initial",
           venue_category: enrichment.venue_category || null,
         });
 
@@ -1408,23 +1404,22 @@ export const regenerateDraft = functions
       was_edited: false,
       edited_at: null,
       provider: prov,
-      prompt_version: prompt_version || "v1",
+      generation_source: generationSource,
     });
 
+    const generationSource = useV17 ? "latest" : prov === "gemini" ? "gemini" : "claude";
     await writeGenerationLog(db, {
       message_id,
       lead_id,
       business_name: leadDoc.business_name,
       subject,
       content,
-      provider: prov,
-      prompt_version: prompt_version || "v1",
+      generation_source: generationSource,
       step_number: stepNumber,
-      triggered_by: "regenerate",
       venue_category: enrichment.venue_category || null,
     });
 
-    return { message_id, subject, content, provider: prov, prompt_version: prompt_version || "v1" };
+    return { message_id, subject, content, provider: prov, generation_source: generationSource };
   });
 
 /**
