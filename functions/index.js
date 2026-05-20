@@ -1406,6 +1406,8 @@ export const regenerateDraft = functions
       }
     }
 
+    const generationSource = useV17 ? "latest" : prov === "gemini" ? "gemini" : "claude";
+
     await db.collection("outreach_messages").doc(message_id).update({
       subject,
       content,
@@ -1418,8 +1420,6 @@ export const regenerateDraft = functions
       provider: prov,
       generation_source: generationSource,
     });
-
-    const generationSource = useV17 ? "latest" : prov === "gemini" ? "gemini" : "claude";
     await writeGenerationLog(db, {
       message_id,
       lead_id,
