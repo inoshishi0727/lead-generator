@@ -14,8 +14,8 @@ const SERIES = [
   { key: "converted", color: "#d97706", label: "Converted" },
 ] as const;
 
-export function TrendsChart() {
-  const { data, isLoading } = useTrends("week");
+export function TrendsChart({ venueCategory }: { venueCategory?: string | null }) {
+  const { data, isLoading } = useTrends("week", venueCategory ?? null);
   const svgRef = useRef<SVGSVGElement>(null);
 
   useEffect(() => {
@@ -147,7 +147,7 @@ export function TrendsChart() {
   if (isLoading) {
     return (
       <Card>
-        <CardHeader><CardTitle>Weekly Trends</CardTitle></CardHeader>
+        <CardHeader><CardTitle>{venueCategory ? `Weekly Trends — ${venueCategory.replace(/_/g, " ")}` : "Weekly Trends"}</CardTitle></CardHeader>
         <CardContent><Skeleton className="h-72 w-full" /></CardContent>
       </Card>
     );
@@ -156,7 +156,7 @@ export function TrendsChart() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-sm font-medium">Weekly Trends</CardTitle>
+        <CardTitle className="text-sm font-medium">{venueCategory ? `Weekly Trends — ${venueCategory.replace(/_/g, " ")}` : "Weekly Trends"}</CardTitle>
       </CardHeader>
       <CardContent>
         <svg ref={svgRef} className="w-full" />
