@@ -12,6 +12,12 @@ import {
   RefreshCw,
   AlertTriangle,
   Search,
+  Users,
+  TrendingUp,
+  Target,
+  BarChart3,
+  Sparkles,
+  Mail,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -27,13 +33,26 @@ import {
   useGenerateFollowups,
   useApprovedEmailCount,
 } from "@/hooks/use-outreach";
+import { useLeads } from "@/hooks/use-leads";
+import { useOutreachPlan } from "@/hooks/use-outreach-plan";
 import { getOutreachMessages } from "@/lib/firestore-api";
 import { EditReflectionBanner } from "@/components/edit-reflection-banner";
 import { ThreadCard } from "@/components/thread-card";
+import { LeadDetailDialog } from "@/components/lead-detail-dialog";
+import { LeadRow } from "@/components/outreach-plan";
 import { toast } from "sonner";
 import { useReplyNotifications } from "@/hooks/use-notifications";
+import type { Lead } from "@/lib/types";
 
 const STATUS_FILTERS = ["draft", "approved", "scheduled", "sent", "conversations", "rejected", "follow-ups", "clients", "all"] as const;
+
+function stageFor(lead: Lead): "new" | "contacted" | "replied" | "converted" | "rejected" {
+  if (lead.outcome === "converted") return "converted";
+  if (lead.outcome === "lost" || lead.outcome === "not_interested") return "rejected";
+  if ((lead.reply_count ?? 0) > 0) return "replied";
+  if (lead.stage === "contacted" || (lead.open_count ?? 0) > 0) return "contacted";
+  return "new";
+}
 
 const CATEGORY_OPTIONS = [
   { value: "", label: "All Categories" },
@@ -63,16 +82,20 @@ export default function OutreachPage() {
   const { isAdmin, isMember, user } = useAuth();
   const searchParams = useSearchParams();
   const initialTab = searchParams.get("tab");
+  const [mainTab, setMainTab] = useState<"overview" | "messages">("overview");
   const [statusFilter, setStatusFilter] = useState<string>(
     STATUS_FILTERS.includes(initialTab as any) ? initialTab! : "draft"
   );
   const [categoryFilter, setCategoryFilter] = useState<string>("");
+  const [fitFilter, setFitFilter] = useState<string>("");
   const [stepFilter, setStepFilter] = useState<string>("all");
   const [showSendWarning, setShowSendWarning] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const debouncedSearchQuery = useDebounce(searchQuery, 200);
   const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
   const [clientsViewAll, setClientsViewAll] = useState(false);
+  const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
+  const [leadFilter, setLeadFilter] = useState<string | null>(null);
 
   const isThreadView = statusFilter === "conversations" || (statusFilter === "clients" && !clientsViewAll);
 
@@ -110,6 +133,22 @@ export default function OutreachPage() {
   );
   const isLoading = useClientSide ? clientSideLoading : apiLoading;
 
+  const { data: allLeads = [] } = useLeads();
+  const { data: outreachPlan } = useOutreachPlan(10);
+  const leadMap = useMemo(() => {
+    const m = new Map<string, typeof allLeads[0]>();
+    allLeads.forEach((l) => m.set(l.id, l));
+    return m;
+  }, [allLeads]);
+
+  const hotLeads = useMemo(() =>
+    [...allLeads]
+      .filter((l) => stageFor(l) === "new" && (l.score ?? 0) >= 7)
+      .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
+      .slice(0, 10),
+    [allLeads]
+  );
+
   const { replies: inboundReplies, readMap, markLeadRead } = useReplyNotifications();
 
   // Count unread replies per lead using per-lead read timestamps
@@ -127,12 +166,12 @@ export default function OutreachPage() {
   // Only count leads that are actually visible as conversation threads
   const unreadConversations = useMemo(() => {
     const visibleLeadIds = new Set(
-      (messages ?? []).filter((m) => m.has_reply && !m.is_client_campaign).map((m) => m.lead_id)
+      (universalApiMessages ?? []).filter((m) => m.has_reply && !m.is_client_campaign).map((m) => m.lead_id)
     );
     return [...unreadByLead.entries()]
       .filter(([leadId, count]) => count > 0 && visibleLeadIds.has(leadId))
       .length;
-  }, [unreadByLead, messages]);
+  }, [unreadByLead, universalApiMessages]);
 
   const generateMutation = useGenerateDrafts();
   const regenerateAllMutation = useRegenerateAll();
@@ -140,12 +179,14 @@ export default function OutreachPage() {
   const sendMutation = useSendApproved();
   const followupsMutation = useGenerateFollowups();
 
-  // Build set of lead_ids that have a sent step 1 message
-  const leadsWithSentEmail = new Set(
-    (messages ?? [])
+  const universalMessages = (universalApiMessages ?? []).filter((m) => !m.is_client_campaign && m.channel !== "instagram_dm");
+
+  // Build set of lead_ids that have a sent step 1 message (from universal data, not tab-filtered)
+  const leadsWithSentEmail = useMemo(() => new Set(
+    universalMessages
       .filter((m) => m.step_number === 1 && m.status === "sent")
       .map((m) => m.lead_id)
-  );
+  ), [universalMessages]);
 
   const filteredByStatus = statusFilter === "conversations"
     ? (messages ?? []).filter((m) => m.has_reply && !m.is_client_campaign)
@@ -167,16 +208,29 @@ export default function OutreachPage() {
   const filteredByCategory = filteredByStatus.filter(
     (m) => !categoryFilter || m.venue_category === categoryFilter
   );
+  const filteredByFit = useMemo(() => {
+    if (!fitFilter) return filteredByCategory;
+    return filteredByCategory.filter((m) => {
+      const pill = getFitPill(m.lead_id);
+      if (fitFilter === "not_enriched") return pill === null;
+      return pill?.label.toLowerCase().replace(" ", "_") === fitFilter;
+    });
+  }, [filteredByCategory, fitFilter, leadMap]);
+
   const filteredByStep = useMemo(() => {
-    if (stepFilter === "all") return filteredByCategory;
+    if (stepFilter === "all") return filteredByFit;
     const step = stepFilter === "initial" ? 1 : stepFilter === "followup1" ? 2 : stepFilter === "followup2" ? 3 : 4;
-    return filteredByCategory.filter((m) => (m.step_number ?? 1) === step);
-  }, [filteredByCategory, stepFilter]);
+    return filteredByFit.filter((m) => (m.step_number ?? 1) === step);
+  }, [filteredByFit, stepFilter]);
 
   const allMessages = useMemo(() => {
-    if (!debouncedSearchQuery.trim()) return filteredByStep;
+    let result = filteredByStep;
+    if (leadFilter) {
+      result = result.filter((m) => m.lead_id === leadFilter);
+    }
+    if (!debouncedSearchQuery.trim()) return result;
     const q = debouncedSearchQuery.toLowerCase();
-    return filteredByStep.filter(
+    return result.filter(
       (m) =>
         m.business_name?.toLowerCase().includes(q) ||
         m.contact_name?.toLowerCase().includes(q) ||
@@ -184,24 +238,21 @@ export default function OutreachPage() {
         m.subject?.toLowerCase().includes(q) ||
         m.content?.toLowerCase().includes(q)
     );
-  }, [filteredByStep, debouncedSearchQuery]);
+  }, [filteredByStep, debouncedSearchQuery, leadFilter]);
+  function getFitPill(leadId: string): { label: string; color: string } | null {
+    const lead = leadMap.get(leadId);
+    if (!lead) return null;
+    const score = lead.score ?? null;
+    const menuFit = lead.menu_fit ?? null;
+    if (score === null && menuFit === null) return null;
+    if (score !== null && score >= 8 || menuFit === "strong") return { label: "Strong fit", color: "#22c55e" };
+    if (score !== null && score >= 6 || menuFit === "good") return { label: "Good fit", color: "#f59e0b" };
+    return { label: "Weak fit", color: "#ef4444" };
+  }
+
   const { data: approvedEmailCount = 0 } = useApprovedEmailCount();
   const emailCapReached = approvedEmailCount >= 20;
 
-  const dynamicCategoryOptions = useMemo(() => {
-    const counts = new Map<string, number>();
-    filteredByStatus.forEach((m) => {
-      if (m.venue_category) counts.set(m.venue_category, (counts.get(m.venue_category) ?? 0) + 1);
-    });
-    return Array.from(counts.entries())
-      .sort(([, a], [, b]) => b - a)
-      .map(([value, count]) => ({
-        value,
-        count,
-        label: CATEGORY_OPTIONS.find((o) => o.value === value)?.label
-          ?? value.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
-      }));
-  }, [filteredByStatus]);
 
   // A lead/step should have at most one live email (draft or approved). When
   // two or more appear in the current view, mark every offending row so the
@@ -228,11 +279,95 @@ export default function OutreachPage() {
     return ids;
   }, [messages]);
 
-  const universalMessages = (universalApiMessages ?? []).filter((m) => !m.is_client_campaign);
   const draftCount = universalMessages.filter((m) => m.status === "draft").length;
   const approvedCount = universalMessages.filter((m) => m.status === "approved").length;
   const sentCount = universalMessages.filter((m) => m.status === "sent").length;
   const repliedCount = universalMessages.filter((m) => m.has_reply).length;
+
+  const startOfWeek = useMemo(() => {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    d.setDate(d.getDate() - d.getDay() + (d.getDay() === 0 ? -6 : 1));
+    return d.toISOString();
+  }, []);
+
+  const sentThisWeek = universalMessages.filter(
+    (m) => m.status === "sent" && m.sent_at && m.sent_at >= startOfWeek
+  ).length;
+
+  const followupsPending = universalMessages.filter(
+    (m) => (m.step_number ?? 1) > 1 && ["draft", "approved"].includes(m.status ?? "") && leadsWithSentEmail.has(m.lead_id)
+  ).length;
+
+  const scheduledCount = universalMessages.filter(
+    (m) => m.status === "approved" && !!m.scheduled_send_date && !m.is_client_campaign
+  ).length;
+
+  // Filtered stats for Messages tab — reflect venue/fit selection
+  const filteredLeadIds = useMemo(() => {
+    if (!categoryFilter && !fitFilter) return null;
+    return new Set(
+      allLeads
+        .filter((l) => {
+          if (categoryFilter && l.venue_category !== categoryFilter) return false;
+          if (fitFilter) {
+            const pill = getFitPill(l.id);
+            if (fitFilter === "not_enriched") return pill === null;
+            if (pill?.label.toLowerCase().replace(" ", "_") !== fitFilter) return false;
+          }
+          return true;
+        })
+        .map((l) => l.id)
+    );
+  }, [allLeads, categoryFilter, fitFilter]);
+
+  const filteredUniversalMessages = useMemo(() => {
+    if (!filteredLeadIds) return universalMessages;
+    return universalMessages.filter((m) => filteredLeadIds.has(m.lead_id));
+  }, [universalMessages, filteredLeadIds]);
+
+  const filteredLeadsWithSentEmail = useMemo(() => {
+    if (!filteredLeadIds) return leadsWithSentEmail;
+    return new Set(
+      [...leadsWithSentEmail].filter((id) => filteredLeadIds.has(id))
+    );
+  }, [leadsWithSentEmail, filteredLeadIds]);
+
+  const msgDraftCount = filteredUniversalMessages.filter((m) => m.status === "draft").length;
+  const msgApprovedCount = filteredUniversalMessages.filter((m) => m.status === "approved").length;
+  const msgSentCount = filteredUniversalMessages.filter((m) => m.status === "sent").length;
+  const msgRepliedCount = filteredUniversalMessages.filter((m) => m.has_reply).length;
+  const msgSentThisWeek = filteredUniversalMessages.filter(
+    (m) => m.status === "sent" && m.sent_at && m.sent_at >= startOfWeek
+  ).length;
+  const msgFollowupsPending = filteredUniversalMessages.filter(
+    (m) => (m.step_number ?? 1) > 1 && ["draft", "approved"].includes(m.status ?? "") && filteredLeadsWithSentEmail.has(m.lead_id)
+  ).length;
+  const msgScheduledCount = filteredUniversalMessages.filter(
+    (m) => m.status === "approved" && !!m.scheduled_send_date && !m.is_client_campaign
+  ).length;
+
+  const conversionRate = useMemo(() => {
+    const contacted = allLeads.filter((l) => l.stage && l.stage !== "scraped").length;
+    const converted = allLeads.filter((l) => l.outcome === "converted").length;
+    if (!contacted) return 0;
+    return Math.round((converted / contacted) * 100);
+  }, [allLeads]);
+
+  const venueCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    allLeads.forEach((l) => {
+      if (l.venue_category) counts.set(l.venue_category, (counts.get(l.venue_category) ?? 0) + 1);
+    });
+    return Array.from(counts.entries())
+      .sort(([, a], [, b]) => b - a)
+      .map(([value, count]) => ({
+        value,
+        count,
+        label: CATEGORY_OPTIONS.find((o) => o.value === value)?.label
+          ?? value.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
+      }));
+  }, [allLeads]);
   const draftsByStep = useMemo(() => {
     const drafts = universalMessages.filter((m) => m.status === "draft");
     return {
@@ -270,7 +405,7 @@ export default function OutreachPage() {
   useEffect(() => {
     setSelectedMessageId(allMessages[0]?.id ?? null);
     setSelectedLeadId(conversationThreads?.[0]?.leadId ?? null);
-  }, [statusFilter, categoryFilter, stepFilter, debouncedSearchQuery, clientsViewAll]);
+  }, [statusFilter, categoryFilter, stepFilter, debouncedSearchQuery, clientsViewAll, leadFilter]);
 
   // Auto-mark the active conversation thread as read whenever it changes
   useEffect(() => {
@@ -314,6 +449,15 @@ export default function OutreachPage() {
     followupsMutation.mutate();
   }
 
+  function handleEmailLead(lead: Lead) {
+    setSelectedLead(null);
+    setLeadFilter(lead.id);
+    setMainTab("messages");
+    setStatusFilter("draft");
+    setCategoryFilter("");
+    setFitFilter("");
+  }
+
   const STATUS_FILTER_LABELS: Record<string, string> = {
     draft: "Draft", approved: "Approved", scheduled: "Scheduled",
     sent: "Sent", conversations: "Inbox", rejected: "Rejected",
@@ -334,300 +478,585 @@ export default function OutreachPage() {
         background: "var(--sp-bg)",
       }}
     >
-      {/* Page head */}
-      <div className="sp-page-head" style={{ margin: 0, padding: "16px 28px 12px" }}>
-        <div>
-          <h1 className="sp-page-title">Outreach</h1>
-          <div className="sp-page-subtitle">
-            {draftCount} drafts · {approvedCount} approved · {sentCount} sent · {repliedCount} replied
-          </div>
-        </div>
-        <div data-tour="outreach-actions" className="sp-page-actions">
-          <Button onClick={handleGenerate} disabled={generateMutation.isPending}>
-            {generateMutation.isPending
-              ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-              : <FileText className="mr-1.5 h-4 w-4" />}
-            Generate Drafts
-          </Button>
-          <Button variant="outline" onClick={() => regenerateAllMutation.mutate()} disabled={regenerateAllMutation.isPending}>
-            {regenerateAllMutation.isPending
-              ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-              : <RefreshCw className="mr-1.5 h-4 w-4" />}
-            Regenerate All
-          </Button>
-          {draftCount > 0 && (
-            <Button
-              variant="outline"
-              className="border-emerald-500 text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/20"
-              onClick={handleApproveAll}
-              disabled={batchApproveMutation.isPending || emailCapReached}
-            >
-              <CheckCheck className="mr-1.5 h-4 w-4" />
-              Approve All ({draftCount})
-            </Button>
-          )}
-          {(isAdmin || isMember) && approvedCount > 0 && (
-            <Button
-              variant="outline"
-              className="border-blue-500 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/20"
-              onClick={() => handleSend(false)}
-              disabled={sendMutation.isPending}
-            >
-              {sendMutation.isPending
-                ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-                : <Send className="mr-1.5 h-4 w-4" />}
-              Send Approved ({approvedCount})
-            </Button>
-          )}
-        </div>
-      </div>
-
-      {/* Compact alerts */}
-      {emailCapReached && statusFilter !== "sent" && (
-        <div className="flex items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-700 dark:text-amber-400" style={{ flexShrink: 0, margin: "0 28px 4px" }}>
-          <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-          20 emails queued — unapprove or reject some before approving more.
-        </div>
-      )}
-      {showSendWarning && (
-        <div className="flex items-center justify-between rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-700 dark:text-amber-400" style={{ flexShrink: 0, margin: "0 28px 4px" }}>
-          <div className="flex items-center gap-2">
-            <AlertTriangle className="h-3.5 w-3.5" />
-            Outside optimal send window (Tue–Thu, 10am–1pm). Send anyway?
-          </div>
-          <div className="flex gap-2 ml-4">
-            <Button size="sm" variant="outline" className="h-6 text-xs px-2" onClick={() => setShowSendWarning(false)}>Cancel</Button>
-            <Button size="sm" className="h-6 text-xs px-2" onClick={() => { setShowSendWarning(false); handleSend(true); }}>Send Anyway</Button>
-          </div>
-        </div>
-      )}
-      {(generateMutation.isSuccess || (sendMutation.isSuccess && sendMutation.data) || (followupsMutation.isSuccess && followupsMutation.data)) && (
-        <div className="flex items-center gap-3 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-xs text-emerald-700 dark:text-emerald-400" style={{ flexShrink: 0, margin: "0 28px 4px" }}>
-          {generateMutation.isSuccess && <span>Draft generation started.</span>}
-          {sendMutation.isSuccess && sendMutation.data?.status === "completed" && (
-            <span>Sent {sendMutation.data.sent}, failed {sendMutation.data.failed}{sendMutation.data.skipped_scheduled ? `, skipped ${sendMutation.data.skipped_scheduled}` : ""}.</span>
-          )}
-          {sendMutation.isSuccess && sendMutation.data?.status === "pending" && <span>Sending emails…</span>}
-          {followupsMutation.isSuccess && followupsMutation.data && (
-            <span>Follow-ups: {followupsMutation.data.generated} drafted.</span>
-          )}
-        </div>
-      )}
-
-      <EditReflectionBanner />
-
-      {/* Gmail-style split pane */}
-      {/* Full-width status tabs — above split pane, like Gmail's category tabs */}
-      <div className="sp-email-status-bar">
-        {STATUS_FILTERS.map((s) => (
+      {/* Top-level tab bar */}
+      <div style={{ display: "flex", gap: 0, padding: "8px 28px 0", borderBottom: "1px solid var(--sp-line)" }}>
+        {(["overview", "messages"] as const).map((tab) => (
           <button
-            key={s}
-            className={`sp-email-status-tab${statusFilter === s ? " active" : ""}`}
-            onClick={() => { setStatusFilter(s); setSearchQuery(""); }}
+            key={tab}
+            onClick={() => setMainTab(tab)}
+            style={{
+              padding: "8px 20px",
+              fontSize: 13,
+              fontWeight: mainTab === tab ? 600 : 400,
+              color: mainTab === tab ? "var(--sp-ink)" : "var(--sp-ink-3)",
+              borderBottom: mainTab === tab ? "2px solid var(--sp-accent)" : "2px solid transparent",
+              background: "none",
+              borderLeft: "none",
+              borderRight: "none",
+              borderTop: "none",
+              cursor: "pointer",
+              textTransform: "capitalize",
+            }}
           >
-            {STATUS_FILTER_LABELS[s] ?? s}
-            {s === "conversations" && unreadConversations > 0 && (
-              <span style={{
-                display: "inline-flex", alignItems: "center", justifyContent: "center",
-                width: 16, height: 16, borderRadius: "50%",
-                background: "#ef4444", color: "#fff", fontSize: 9, fontWeight: 700,
-              }}>
-                {unreadConversations > 9 ? "9+" : unreadConversations}
-              </span>
-            )}
+            {tab}
           </button>
         ))}
       </div>
 
-      {/* Split pane — flex row, fills remaining height */}
-      <div
-        data-tour="outreach-messages"
-        style={{
-          flex: "1 1 0px",
-          minHeight: 0,
-          display: "flex",
-          flexDirection: "row",
-          border: "1px solid var(--sp-line)",
-          borderRadius: "var(--sp-radius-lg)",
-          overflow: "hidden",
-          background: "var(--sp-bg-paper)",
-          margin: "0 28px 0",
-        }}
-      >
-        {/* LEFT: filter header + scrollable list */}
-        <div style={{
-          width: 340,
-          flexShrink: 0,
-          display: "flex",
-          flexDirection: "column",
-          borderRight: "1px solid var(--sp-line)",
-          overflow: "hidden",
-        }}>
+      {mainTab === "overview" ? (
+        /* ===== TAB 1: OVERVIEW ===== */
+        <div style={{ flex: 1, overflowY: "auto", padding: "16px 28px" }}>
+          {/* Stat cards — global, not venue-filtered */}
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
+            {[
+              { label: "Drafted", value: draftCount },
+              { label: "Sent this week", value: sentThisWeek },
+              { label: "Replied", value: repliedCount },
+              { label: "Follow-ups", value: followupsPending },
+              { label: "Scheduled", value: scheduledCount },
+            ].map(({ label, value }) => (
+              <div key={label} style={{
+                background: "var(--sp-bg-sunken)",
+                border: "1px solid var(--sp-line)",
+                borderRadius: 10,
+                padding: "12px 20px",
+                minWidth: 100,
+                textAlign: "center",
+                flexShrink: 0,
+              }}>
+                <div style={{ fontSize: 22, fontWeight: 600, color: "var(--sp-ink)", lineHeight: 1.2 }}>{value}</div>
+                <div style={{ fontSize: 11, color: "var(--sp-ink-3)", marginTop: 4, whiteSpace: "nowrap" }}>{label}</div>
+              </div>
+            ))}
+          </div>
 
-          {/* Filter header — step chips + category + search */}
-          <div style={{
-            flexShrink: 0,
-            padding: "8px 10px",
-            borderBottom: "1px solid var(--sp-line)",
-            background: "var(--sp-bg-paper)",
-            display: "flex",
-            flexDirection: "column",
-            gap: 5,
-          }}>
-            <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-              {[
-                { value: "all", label: "All" },
-                { value: "initial", label: "Init" },
-                { value: "followup1", label: "FF1" },
-                { value: "followup2", label: "FF2" },
-                { value: "followup3", label: "FF3" },
-              ].map(({ value, label }) => (
-                <button
-                  key={value}
-                  className={`sp-email-filter-step${stepFilter === value ? " active" : ""}`}
-                  onClick={() => setStepFilter(value)}
-                >
-                  {label}
-                </button>
-              ))}
-              <select
-                value={categoryFilter}
-                onChange={(e) => setCategoryFilter(e.target.value)}
-                style={{ marginLeft: "auto", fontSize: 11, border: "1px solid var(--sp-line-strong)", background: "var(--sp-bg-sunken)", color: "var(--sp-ink)", borderRadius: 4, padding: "2px 4px", outline: "none", maxWidth: 80 }}
-              >
-                <option value="">All cat.</option>
-                {dynamicCategoryOptions.map(({ value, label, count }) => (
-                  <option key={value} value={value}>{label} ({count})</option>
+          {/* Weekly target */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 4, paddingLeft: 4, marginBottom: 24, maxWidth: 280 }}>
+            <div style={{ fontSize: 11, color: "var(--sp-ink-3)" }}>Weekly target</div>
+            <div style={{ height: 8, borderRadius: 4, background: "var(--sp-line-strong)", overflow: "hidden" }}>
+              <div style={{ height: "100%", borderRadius: 4, background: "var(--sp-accent)", width: `${Math.min(100, Math.round((sentThisWeek / 100) * 100))}%`, transition: "width 0.3s" }} />
+            </div>
+            <div style={{ fontSize: 11, color: "var(--sp-ink-3)" }}>{sentThisWeek} / 100</div>
+          </div>
+
+          {/* Top 10 Eligible Leads */}
+          <div style={{ marginBottom: 24 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+              <Sparkles className="h-4 w-4 text-purple-400" />
+              <h2 style={{ fontSize: 14, fontWeight: 600, color: "var(--sp-ink)" }}>Top 10 Eligible Leads</h2>
+              <span style={{ fontSize: 11, color: "var(--sp-ink-3)" }}>
+                {outreachPlan?.total_eligible ? `${outreachPlan.total_eligible} total eligible` : ""}
+              </span>
+            </div>
+            {!outreachPlan ? (
+              <div className="p-3 space-y-2">
+                <Skeleton className="h-16 w-full" />
+                <Skeleton className="h-16 w-full" />
+                <Skeleton className="h-16 w-full" />
+              </div>
+            ) : outreachPlan.recommended.length === 0 ? (
+              <p style={{ fontSize: 12, color: "var(--sp-ink-3)" }}>No eligible leads for outreach. Scrape and enrich leads first.</p>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {outreachPlan.recommended.map((lead, i) => (
+                  <div key={lead.lead_id} onClick={() => {
+                    const l = allLeads.find((x) => x.id === lead.lead_id);
+                    if (l) setSelectedLead(l);
+                  }}>
+                    <LeadRow lead={lead} rank={i + 1} />
+                  </div>
                 ))}
-              </select>
-            </div>
-            <div className="sp-email-filter-search">
-              <Search style={{ width: 12, height: 12, flexShrink: 0 }} />
-              <input
-                placeholder="Search…"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-              />
-            </div>
-            {statusFilter === "clients" && (
-              <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                <button
-                  className={`sp-email-filter-step${!clientsViewAll ? " active" : ""}`}
-                  onClick={() => setClientsViewAll(false)}
-                >
-                  Conversations
-                </button>
-                <button
-                  className={`sp-email-filter-step${clientsViewAll ? " active" : ""}`}
-                  onClick={() => setClientsViewAll(true)}
-                >
-                  All messages
-                </button>
               </div>
             )}
           </div>
 
-          {/* Scrollable email list */}
-          <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
-            {isLoading ? (
-              <div className="p-3 space-y-2">
-                <Skeleton className="h-14 w-full" />
-                <Skeleton className="h-14 w-full" />
-                <Skeleton className="h-14 w-full" />
-              </div>
-            ) : allMessages.length === 0 && (!isThreadView || !conversationThreads?.length) ? (
-              <div className="p-8 text-center" style={{ color: "var(--sp-ink-3)" }}>
-                <FileText style={{ width: 28, height: 28, margin: "0 auto 8px", opacity: 0.3 }} />
-                <p style={{ fontSize: 12 }}>No messages in this view.</p>
-              </div>
-            ) : isThreadView ? (
-              (conversationThreads ?? []).map(({ leadId, businessName, messages: msgs }) => (
-                <div
-                  key={leadId}
-                  className={`sp-email-item${selectedLeadId === leadId || (!selectedLeadId && conversationThreads?.[0]?.leadId === leadId) ? " selected" : ""}`}
-                  onClick={() => { setSelectedLeadId(leadId); markLeadRead(leadId); }}
+          {/* Hot New Leads */}
+          <div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+              <Target className="h-4 w-4 text-amber-400" />
+              <h2 style={{ fontSize: 14, fontWeight: 600, color: "var(--sp-ink)" }}>Hot New Leads</h2>
+              <span style={{ fontSize: 11, color: "var(--sp-ink-3)" }}>Score ≥ 7 · awaiting first contact</span>
+            </div>
+            {hotLeads.length === 0 ? (
+              <p style={{ fontSize: 12, color: "var(--sp-ink-3)" }}>No high-score new leads yet.</p>
+            ) : (
+              <table className="sp-tbl">
+                <thead>
+                  <tr>
+                    <th>Venue</th>
+                    <th>Category</th>
+                    <th>Postcode</th>
+                    <th>Score</th>
+                    <th>Assigned</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {hotLeads.map((l) => (
+                    <tr key={l.id} onClick={() => setSelectedLead(l)} style={{ cursor: "pointer" }}>
+                      <td className="col-name">
+                        <span style={{ color: "var(--sp-ink-4)", fontFamily: "var(--font-mono, monospace)", fontSize: 11, marginRight: 8 }}>
+                          {l.id.slice(-4)}
+                        </span>
+                        {l.business_name}
+                      </td>
+                      <td style={{ color: "var(--sp-ink-2)" }}>
+                        {l.venue_category?.replace(/_/g, " ") ?? "—"}
+                      </td>
+                      <td className="sp-mono" style={{ color: "var(--sp-ink-2)" }}>
+                        {l.location_postcode ?? "—"}
+                      </td>
+                      <td>
+                        <span style={{
+                          display: "inline-flex", alignItems: "center", gap: 4,
+                          padding: "2px 8px", borderRadius: 9999, fontSize: 11, fontWeight: 600,
+                          background: (l.score ?? 0) >= 8 ? "rgba(34,197,94,0.15)" : (l.score ?? 0) >= 6 ? "rgba(245,158,11,0.15)" : "rgba(239,68,68,0.15)",
+                          color: (l.score ?? 0) >= 8 ? "#22c55e" : (l.score ?? 0) >= 6 ? "#f59e0b" : "#ef4444",
+                        }}>
+                          {l.score ?? 0}
+                        </span>
+                      </td>
+                      <td>
+                        {l.assigned_to_name ? (
+                          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                            <div style={{
+                              width: 20, height: 20, borderRadius: "50%",
+                              background: "var(--sp-line-strong)", display: "flex", alignItems: "center", justifyContent: "center",
+                              fontSize: 10, fontWeight: 600, color: "var(--sp-ink-2)",
+                            }}>
+                              {l.assigned_to_name.charAt(0).toUpperCase()}
+                            </div>
+                            <span style={{ fontSize: 12 }}>{l.assigned_to_name}</span>
+                          </div>
+                        ) : (
+                          <span style={{ fontSize: 12, color: "var(--sp-ink-3)" }}>Unassigned</span>
+                        )}
+                      </td>
+                      <td style={{ textAlign: "right" }}>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          style={{ fontSize: 11, height: 24, padding: "0 10px" }}
+                          onClick={(e) => { e.stopPropagation(); handleEmailLead(l); }}
+                        >
+                          <Mail className="h-3 w-3 mr-1" />
+                          Email
+                        </Button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+               )}
+              {leadFilter && (
+                <Button
+                  variant="outline"
+                  className="border-purple-500 text-purple-600 hover:bg-purple-50 dark:hover:bg-purple-950/20"
+                  onClick={() => generateMutation.mutate([leadFilter])}
+                  disabled={generateMutation.isPending}
                 >
-                  <div className="sp-email-item-top">
-                    <span className="sp-email-item-recip">{businessName}</span>
-                    {unreadByLead.get(leadId) ? (
-                      <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 16, height: 16, borderRadius: "50%", background: "#ef4444", color: "#fff", fontSize: 9, fontWeight: 700, flexShrink: 0 }}>
-                        {unreadByLead.get(leadId)}
-                      </span>
-                    ) : (
-                      <span className="sp-email-item-time">{msgs.length} msg</span>
-                    )}
-                  </div>
-                  <div className="sp-email-item-prev">
-                    {msgs[0]?.subject || msgs[0]?.content?.split("\n").filter(Boolean)[0]}
-                  </div>
-                </div>
-              ))
-            ) : (
-              allMessages.map((msg) => {
-                const isSelected = msg.id === (selectedMessage?.id ?? allMessages[0]?.id);
-                return (
-                  <div
-                    key={msg.id}
-                    className={`sp-email-item${isSelected ? " selected" : ""}`}
-                    onClick={() => setSelectedMessageId(msg.id)}
-                  >
-                    <div className="sp-email-item-top">
-                      <span className="sp-email-item-recip">{msg.business_name}</span>
-                      <span
-                        className="sp-email-item-time"
-                        style={{
-                          color: msg.status === "approved" ? "var(--sp-good)"
-                            : msg.status === "sent" ? "var(--sp-accent)"
-                            : msg.status === "rejected" ? "var(--sp-bad)"
-                            : "var(--sp-warn)",
-                        }}
-                      >
-                        {msg.status}
-                      </span>
-                    </div>
-                    {msg.subject && <div className="sp-email-item-subj">{msg.subject}</div>}
-                    <div className="sp-email-item-prev">
-                      {msg.content?.split("\n").filter(Boolean)[0]}
-                    </div>
-                  </div>
-                );
-              })
-            )}
-          </div>{/* end scrollable list */}
-        </div>{/* end left panel */}
-
-        {/* RIGHT: email detail — scrolls independently */}
-        <div style={{ flex: 1, minWidth: 0, overflowY: "auto" }}>
-          {isThreadView ? (
-            selectedThread ? (
-              <ThreadCard
-                leadId={selectedThread.leadId}
-                businessName={selectedThread.businessName}
-                messages={selectedThread.messages}
-                unreadReplies={unreadByLead.get(selectedThread.leadId) ?? 0}
-                onOpen={() => markLeadRead(selectedThread.leadId)}
-              />
-            ) : (
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "var(--sp-ink-4)", fontSize: 13 }}>
-                Select a conversation
+                  {generateMutation.isPending
+                    ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                    : <FileText className="mr-1.5 h-4 w-4" />}
+                  Generate Draft
+                </Button>
+              )}
               </div>
-            )
-          ) : selectedMessage ? (
-            <MessageCard
-              key={selectedMessage.id}
-              message={selectedMessage}
-              emailCapReached={emailCapReached}
-              isDuplicate={duplicateIds.has(selectedMessage.id)}
-              defaultExpanded
-            />
-          ) : (
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "var(--sp-ink-4)", fontSize: 13 }}>
-              Select a message
+            </div>
+      ) : (
+        /* ===== TAB 2: MESSAGES ===== */
+        <>
+          {/* Page head */}
+          <div className="sp-page-head" style={{ margin: 0, padding: "16px 28px 8px", flexDirection: "column", alignItems: "stretch", gap: 10 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <h1 className="sp-page-title">Outreach</h1>
+              <div data-tour="outreach-actions" className="sp-page-actions">
+              <Button onClick={handleGenerate} disabled={generateMutation.isPending}>
+                {generateMutation.isPending
+                  ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                  : <FileText className="mr-1.5 h-4 w-4" />}
+                Generate Drafts
+              </Button>
+              <Button variant="outline" onClick={() => regenerateAllMutation.mutate()} disabled={regenerateAllMutation.isPending}>
+                {regenerateAllMutation.isPending
+                  ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                  : <RefreshCw className="mr-1.5 h-4 w-4" />}
+                Regenerate All
+              </Button>
+              {msgDraftCount > 0 && (
+                <Button
+                  variant="outline"
+                  className="border-emerald-500 text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/20"
+                  onClick={handleApproveAll}
+                  disabled={batchApproveMutation.isPending || emailCapReached}
+                >
+                  <CheckCheck className="mr-1.5 h-4 w-4" />
+                  Approve All ({msgDraftCount})
+                </Button>
+              )}
+              {(isAdmin || isMember) && msgApprovedCount > 0 && (
+                <Button
+                  variant="outline"
+                  className="border-blue-500 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/20"
+                  onClick={() => handleSend(false)}
+                  disabled={sendMutation.isPending}
+                >
+                  {sendMutation.isPending
+                    ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                    : <Send className="mr-1.5 h-4 w-4" />}
+                  Send Approved ({msgApprovedCount})
+                </Button>
+              )}
+              </div>
+            </div>
+
+            {/* Stat cards — venue/fit filtered */}
+            <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+              {[
+                { label: "Drafted", value: msgDraftCount },
+                { label: "Sent this week", value: msgSentThisWeek },
+                { label: "Replied", value: msgRepliedCount },
+                { label: "Follow-ups", value: msgFollowupsPending },
+                { label: "Scheduled", value: msgScheduledCount },
+              ].map(({ label, value }) => (
+                <div key={label} style={{
+                  background: "var(--sp-bg-sunken)",
+                  border: "1px solid var(--sp-line)",
+                  borderRadius: 10,
+                  padding: "12px 20px",
+                  minWidth: 100,
+                  textAlign: "center",
+                  flexShrink: 0,
+                }}>
+                  <div style={{ fontSize: 22, fontWeight: 600, color: "var(--sp-ink)", lineHeight: 1.2 }}>{value}</div>
+                  <div style={{ fontSize: 11, color: "var(--sp-ink-3)", marginTop: 4, whiteSpace: "nowrap" }}>{label}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Venue + Fit filters */}
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <label style={{ fontSize: 11, color: "var(--sp-ink-3)", whiteSpace: "nowrap" }}>Venue</label>
+                <select
+                  value={categoryFilter}
+                  onChange={(e) => setCategoryFilter(e.target.value)}
+                  style={{
+                    fontSize: 12, padding: "4px 8px", borderRadius: 6, cursor: "pointer",
+                    border: "1px solid var(--sp-line-strong)",
+                    background: "var(--sp-bg-sunken)",
+                    color: "var(--sp-ink-2)",
+                    minWidth: 180,
+                  }}
+                >
+                  <option value="">All venues</option>
+                  {venueCounts.map(({ value, label, count }) => (
+                    <option key={value} value={value}>{label} ({count})</option>
+                  ))}
+                </select>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <label style={{ fontSize: 11, color: "var(--sp-ink-3)", whiteSpace: "nowrap" }}>Fit</label>
+                <select
+                  value={fitFilter}
+                  onChange={(e) => setFitFilter(e.target.value)}
+                  style={{
+                    fontSize: 12, padding: "4px 8px", borderRadius: 6, cursor: "pointer",
+                    border: `1px solid ${fitFilter ? "var(--sp-accent)" : "var(--sp-line-strong)"}`,
+                    background: "var(--sp-bg-sunken)",
+                    color: fitFilter ? "var(--sp-accent)" : "var(--sp-ink-2)",
+                    minWidth: 140,
+                  }}
+                >
+                  <option value="">All fits</option>
+                  <option value="strong_fit">Strong fit</option>
+                  <option value="good_fit">Good fit</option>
+                  <option value="weak_fit">Weak fit</option>
+                  <option value="not_enriched">Not enriched</option>
+                </select>
+              </div>
+              {leadFilter && (() => {
+                const lead = allLeads.find((l) => l.id === leadFilter);
+                return lead ? (
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <label style={{ fontSize: 11, color: "var(--sp-ink-3)", whiteSpace: "nowrap" }}>Lead</label>
+                    <span style={{
+                      fontSize: 12, padding: "4px 10px", borderRadius: 6,
+                      background: "var(--sp-accent)", color: "#fff", fontWeight: 500,
+                    }}>
+                      {lead.business_name}
+                    </span>
+                    <button
+                      onClick={() => setLeadFilter(null)}
+                      style={{
+                        fontSize: 11, color: "var(--sp-ink-3)", cursor: "pointer",
+                        background: "none", border: "none", padding: 0,
+                      }}
+                    >
+                      Clear
+                    </button>
+                  </div>
+                ) : null;
+              })()}
+            </div>
+          </div>
+
+          {/* Compact alerts */}
+          {emailCapReached && statusFilter !== "sent" && (
+            <div className="flex items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-700 dark:text-amber-400" style={{ flexShrink: 0, margin: "0 28px 4px" }}>
+              <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+              20 emails queued — unapprove or reject some before approving more.
             </div>
           )}
-        </div>{/* end right panel */}
+          {showSendWarning && (
+            <div className="flex items-center justify-between rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-700 dark:text-amber-400" style={{ flexShrink: 0, margin: "0 28px 4px" }}>
+              <div className="flex items-center gap-2">
+                <AlertTriangle className="h-3.5 w-3.5" />
+                Outside optimal send window (Tue–Thu, 10am–1pm). Send anyway?
+              </div>
+              <div className="flex gap-2 ml-4">
+                <Button size="sm" variant="outline" className="h-6 text-xs px-2" onClick={() => setShowSendWarning(false)}>Cancel</Button>
+                <Button size="sm" className="h-6 text-xs px-2" onClick={() => { setShowSendWarning(false); handleSend(true); }}>Send Anyway</Button>
+              </div>
+            </div>
+          )}
+          {(generateMutation.isSuccess || (sendMutation.isSuccess && sendMutation.data) || (followupsMutation.isSuccess && followupsMutation.data)) && (
+            <div className="flex items-center gap-3 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-xs text-emerald-700 dark:text-emerald-400" style={{ flexShrink: 0, margin: "0 28px 4px" }}>
+              {generateMutation.isSuccess && <span>Draft generation started.</span>}
+              {sendMutation.isSuccess && sendMutation.data?.status === "completed" && (
+                <span>Sent {sendMutation.data.sent}, failed {sendMutation.data.failed}{sendMutation.data.skipped_scheduled ? `, skipped ${sendMutation.data.skipped_scheduled}` : ""}.</span>
+              )}
+              {sendMutation.isSuccess && sendMutation.data?.status === "pending" && <span>Sending emails…</span>}
+              {followupsMutation.isSuccess && followupsMutation.data && (
+                <span>Follow-ups: {followupsMutation.data.generated} drafted.</span>
+              )}
+            </div>
+          )}
 
-      </div>{/* end split pane */}
+          <EditReflectionBanner />
+
+          {/* Gmail-style split pane */}
+          {/* Full-width status tabs — above split pane, like Gmail's category tabs */}
+          <div className="sp-email-status-bar">
+            {STATUS_FILTERS.map((s) => (
+              <button
+                key={s}
+                className={`sp-email-status-tab${statusFilter === s ? " active" : ""}`}
+                onClick={() => { setStatusFilter(s); setSearchQuery(""); }}
+              >
+                {STATUS_FILTER_LABELS[s] ?? s}
+                {s === "conversations" && unreadConversations > 0 && (
+                  <span style={{
+                    display: "inline-flex", alignItems: "center", justifyContent: "center",
+                    width: 16, height: 16, borderRadius: "50%",
+                    background: "#ef4444", color: "#fff", fontSize: 9, fontWeight: 700,
+                  }}>
+                    {unreadConversations > 9 ? "9+" : unreadConversations}
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
+
+          {/* Split pane — flex row, fills remaining height */}
+          <div
+            data-tour="outreach-messages"
+            style={{
+              flex: "1 1 0px",
+              minHeight: 0,
+              display: "flex",
+              flexDirection: "row",
+              border: "1px solid var(--sp-line)",
+              borderRadius: "var(--sp-radius-lg)",
+              overflow: "hidden",
+              background: "var(--sp-bg-paper)",
+              margin: "0 28px 0",
+            }}
+          >
+            {/* LEFT: filter header + scrollable list */}
+            <div style={{
+              width: 340,
+              flexShrink: 0,
+              display: "flex",
+              flexDirection: "column",
+              borderRight: "1px solid var(--sp-line)",
+              overflow: "hidden",
+            }}>
+
+              {/* Filter header — step chips + category + search */}
+              <div style={{
+                flexShrink: 0,
+                padding: "8px 10px",
+                borderBottom: "1px solid var(--sp-line)",
+                background: "var(--sp-bg-paper)",
+                display: "flex",
+                flexDirection: "column",
+                gap: 5,
+              }}>
+                <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                  {[
+                    { value: "all", label: "All" },
+                    { value: "initial", label: "Init" },
+                    { value: "followup1", label: "FF1" },
+                    { value: "followup2", label: "FF2" },
+                    { value: "followup3", label: "FF3" },
+                  ].map(({ value, label }) => (
+                    <button
+                      key={value}
+                      className={`sp-email-filter-step${stepFilter === value ? " active" : ""}`}
+                      onClick={() => setStepFilter(value)}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <div className="sp-email-filter-search">
+                  <Search style={{ width: 12, height: 12, flexShrink: 0 }} />
+                  <input
+                    placeholder="Search…"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                  />
+                </div>
+                {statusFilter === "clients" && (
+                  <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                    <button
+                      className={`sp-email-filter-step${!clientsViewAll ? " active" : ""}`}
+                      onClick={() => setClientsViewAll(false)}
+                    >
+                      Conversations
+                    </button>
+                    <button
+                      className={`sp-email-filter-step${clientsViewAll ? " active" : ""}`}
+                      onClick={() => setClientsViewAll(true)}
+                    >
+                      All messages
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Scrollable email list */}
+              <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
+                {isLoading ? (
+                  <div className="p-3 space-y-2">
+                    <Skeleton className="h-14 w-full" />
+                    <Skeleton className="h-14 w-full" />
+                    <Skeleton className="h-14 w-full" />
+                  </div>
+                ) : allMessages.length === 0 && (!isThreadView || !conversationThreads?.length) ? (
+                  <div className="p-8 text-center" style={{ color: "var(--sp-ink-3)" }}>
+                    <FileText style={{ width: 28, height: 28, margin: "0 auto 8px", opacity: 0.3 }} />
+                    <p style={{ fontSize: 12 }}>No messages in this view.</p>
+                  </div>
+                ) : isThreadView ? (
+                  (conversationThreads ?? []).map(({ leadId, businessName, messages: msgs }) => (
+                    <div
+                      key={leadId}
+                      className={`sp-email-item${selectedLeadId === leadId || (!selectedLeadId && conversationThreads?.[0]?.leadId === leadId) ? " selected" : ""}`}
+                      onClick={() => { setSelectedLeadId(leadId); markLeadRead(leadId); }}
+                    >
+                      <div className="sp-email-item-top">
+                        <span className="sp-email-item-recip">{businessName}</span>
+                        {unreadByLead.get(leadId) ? (
+                          <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 16, height: 16, borderRadius: "50%", background: "#ef4444", color: "#fff", fontSize: 9, fontWeight: 700, flexShrink: 0 }}>
+                            {unreadByLead.get(leadId)}
+                          </span>
+                        ) : (
+                          <span className="sp-email-item-time">{msgs.length} msg</span>
+                        )}
+                      </div>
+                      <div className="sp-email-item-prev">
+                        {msgs[0]?.subject || msgs[0]?.content?.split("\n").filter(Boolean)[0]}
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  allMessages.map((msg) => {
+                    const isSelected = msg.id === (selectedMessage?.id ?? allMessages[0]?.id);
+                    return (
+                      <div
+                        key={msg.id}
+                        className={`sp-email-item${isSelected ? " selected" : ""}`}
+                        onClick={() => setSelectedMessageId(msg.id)}
+                      >
+                        <div className="sp-email-item-top">
+                          <span className="sp-email-item-recip">{msg.business_name}</span>
+                          <span
+                            className="sp-email-item-time"
+                            style={{
+                              color: msg.status === "approved" ? "var(--sp-good)"
+                                : msg.status === "sent" ? "var(--sp-accent)"
+                                : msg.status === "rejected" ? "var(--sp-bad)"
+                                : "var(--sp-warn)",
+                            }}
+                          >
+                            {msg.status}
+                          </span>
+                        </div>
+                        {(() => {
+                          const fit = getFitPill(msg.lead_id);
+                          return fit ? (
+                            <div style={{ display: "flex", alignItems: "center", gap: 3, marginTop: 1 }}>
+                              <span style={{ width: 6, height: 6, borderRadius: "50%", background: fit.color, flexShrink: 0, display: "inline-block" }} />
+                              <span style={{ fontSize: 10, color: fit.color, fontWeight: 500 }}>{fit.label}</span>
+                            </div>
+                          ) : null;
+                        })()}
+                        {msg.subject && <div className="sp-email-item-subj">{msg.subject}</div>}
+                        <div className="sp-email-item-prev">
+                          {msg.content?.split("\n").filter(Boolean)[0]}
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>{/* end scrollable list */}
+            </div>{/* end left panel */}
+
+            {/* RIGHT: email detail — scrolls independently */}
+            <div style={{ flex: 1, minWidth: 0, overflowY: "auto" }}>
+              {isThreadView ? (
+                selectedThread ? (
+                  <ThreadCard
+                    leadId={selectedThread.leadId}
+                    businessName={selectedThread.businessName}
+                    messages={selectedThread.messages}
+                    unreadReplies={unreadByLead.get(selectedThread.leadId) ?? 0}
+                    onOpen={() => markLeadRead(selectedThread.leadId)}
+                  />
+                ) : (
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "var(--sp-ink-4)", fontSize: 13 }}>
+                    Select a conversation
+                  </div>
+                )
+              ) : selectedMessage ? (
+                <MessageCard
+                  key={selectedMessage.id}
+                  message={selectedMessage}
+                  emailCapReached={emailCapReached}
+                  isDuplicate={duplicateIds.has(selectedMessage.id)}
+                  defaultExpanded
+                  fitLabel={getFitPill(selectedMessage.lead_id)?.label}
+                  fitColor={getFitPill(selectedMessage.lead_id)?.color}
+                />
+              ) : (
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "var(--sp-ink-4)", fontSize: 13 }}>
+                  Select a message
+                </div>
+              )}
+            </div>{/* end right panel */}
+
+          </div>{/* end split pane */}
+        </>
+      )}
+
+      {/* Lead Detail Dialog */}
+      <LeadDetailDialog
+        lead={selectedLead}
+        onClose={() => setSelectedLead(null)}
+        onEmail={selectedLead ? handleEmailLead : undefined}
+      />
     </div>
   );
 }

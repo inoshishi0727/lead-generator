@@ -35,7 +35,7 @@ const FIT_COLORS: Record<string, string> = {
   unknown: "text-zinc-600",
 };
 
-function LeadRow({ lead, rank, onClick }: { lead: OutreachLead; rank: number; onClick?: () => void }) {
+export function LeadRow({ lead, rank, onClick }: { lead: OutreachLead; rank: number; onClick?: () => void }) {
   return (
     <div className="flex items-start gap-3 rounded-lg border border-border/40 bg-muted/10 p-3 transition-colors hover:bg-muted/20 cursor-pointer" onClick={onClick}>
       <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[11px] font-bold text-primary">
