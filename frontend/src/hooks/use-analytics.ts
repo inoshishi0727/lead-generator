@@ -48,13 +48,13 @@ export function useRatios() {
   });
 }
 
-export function useTrends(period: string = "week") {
+export function useTrends(period: string = "week", venueCategory: string | null = null) {
   return useQuery({
-    queryKey: ["analytics", "trends", period],
+    queryKey: ["analytics", "trends", period, venueCategory],
     queryFn: () =>
       hasBackend
-        ? api.get<{ series: TrendPoint[] }>(`/api/analytics/trends?period=${period}`)
-        : getTrends(period),
+        ? api.get<{ series: TrendPoint[] }>(`/api/analytics/trends?period=${period}${venueCategory ? `&venue=${venueCategory}` : ""}`)
+        : getTrends(period, 12, venueCategory),
   });
 }
 
