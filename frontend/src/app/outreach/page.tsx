@@ -15,7 +15,6 @@ import {
   Users,
   TrendingUp,
   Target,
-  BarChart3,
   Sparkles,
   Mail,
 } from "lucide-react";
@@ -39,10 +38,11 @@ import { getOutreachMessages } from "@/lib/firestore-api";
 import { EditReflectionBanner } from "@/components/edit-reflection-banner";
 import { ThreadCard } from "@/components/thread-card";
 import { LeadDetailDialog } from "@/components/lead-detail-dialog";
-import { LeadRow } from "@/components/outreach-plan";
+import { ActionableLeadCard } from "@/components/actionable-lead-card";
 import { toast } from "sonner";
 import { useReplyNotifications } from "@/hooks/use-notifications";
-import type { Lead } from "@/lib/types";
+import type { Lead, OutreachMessage } from "@/lib/types";
+import type { OutreachLead } from "@/hooks/use-outreach-plan";
 
 const STATUS_FILTERS = ["draft", "approved", "scheduled", "sent", "conversations", "rejected", "follow-ups", "clients", "all"] as const;
 
@@ -96,6 +96,8 @@ export default function OutreachPage() {
   const [clientsViewAll, setClientsViewAll] = useState(false);
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
   const [leadFilter, setLeadFilter] = useState<string | null>(null);
+  const [actionPendingLead, setActionPendingLead] = useState<string | null>(null);
+  const [overviewVenueFilter, setOverviewVenueFilter] = useState<string>("");
 
   const isThreadView = statusFilter === "conversations" || (statusFilter === "clients" && !clientsViewAll);
 
@@ -143,10 +145,14 @@ export default function OutreachPage() {
 
   const hotLeads = useMemo(() =>
     [...allLeads]
-      .filter((l) => stageFor(l) === "new" && (l.score ?? 0) >= 7)
+      .filter((l) => {
+        if (stageFor(l) !== "new" || (l.score ?? 0) < 7) return false;
+        if (overviewVenueFilter && l.venue_category !== overviewVenueFilter) return false;
+        return true;
+      })
       .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
       .slice(0, 10),
-    [allLeads]
+    [allLeads, overviewVenueFilter]
   );
 
   const { replies: inboundReplies, readMap, markLeadRead } = useReplyNotifications();
@@ -228,6 +234,17 @@ export default function OutreachPage() {
     if (leadFilter) {
       result = result.filter((m) => m.lead_id === leadFilter);
     }
+    if (statusFilter === "draft" && outreachPlan) {
+      const priorityMap = new Map<string, number>();
+      outreachPlan.recommended.forEach((l, i) => priorityMap.set(l.lead_id, i));
+      if (priorityMap.size > 0) {
+        result = [...result].sort((a, b) => {
+          const aRank = priorityMap.get(a.lead_id) ?? Infinity;
+          const bRank = priorityMap.get(b.lead_id) ?? Infinity;
+          return aRank - bRank;
+        });
+      }
+    }
     if (!debouncedSearchQuery.trim()) return result;
     const q = debouncedSearchQuery.toLowerCase();
     return result.filter(
@@ -238,7 +255,7 @@ export default function OutreachPage() {
         m.subject?.toLowerCase().includes(q) ||
         m.content?.toLowerCase().includes(q)
     );
-  }, [filteredByStep, debouncedSearchQuery, leadFilter]);
+  }, [filteredByStep, debouncedSearchQuery, leadFilter, statusFilter, outreachPlan]);
   function getFitPill(leadId: string): { label: string; color: string } | null {
     const lead = leadMap.get(leadId);
     if (!lead) return null;
@@ -458,6 +475,79 @@ export default function OutreachPage() {
     setFitFilter("");
   }
 
+  // Determine action for each recommended lead
+  const actionableLeads = useMemo(() => {
+    if (!outreachPlan?.recommended.length) return [];
+    const msgMap = new Map<string, OutreachMessage>();
+    for (const m of universalApiMessages ?? []) {
+      if (!msgMap.has(m.lead_id)) msgMap.set(m.lead_id, m);
+    }
+    const results: { lead: OutreachLead; action: "generate" | "send" | null; messageId?: string }[] = [];
+    for (const lead of outreachPlan.recommended) {
+      if (overviewVenueFilter && lead.venue_category !== overviewVenueFilter) continue;
+      const msg = msgMap.get(lead.lead_id);
+      if (!msg) {
+        results.push({ lead, action: "generate" });
+      } else if (msg.status === "draft" || msg.status === "approved") {
+        results.push({ lead, action: "send", messageId: msg.id });
+      }
+      // If already sent/contacted, skip (not actionable)
+    }
+    return results.slice(0, 10);
+  }, [outreachPlan, universalApiMessages, overviewVenueFilter]);
+
+  // Actionable hot leads
+  const actionableHotLeads = useMemo(() => {
+    const msgMap = new Map<string, OutreachMessage>();
+    for (const m of universalApiMessages ?? []) {
+      if (!msgMap.has(m.lead_id)) msgMap.set(m.lead_id, m);
+    }
+    const results: { lead: Lead; action: "generate" | "send" | null; messageId?: string }[] = [];
+    for (const lead of hotLeads) {
+      const msg = msgMap.get(lead.id);
+      if (!msg) {
+        results.push({ lead, action: "generate" });
+      } else if (msg.status === "draft" || msg.status === "approved") {
+        results.push({ lead, action: "send", messageId: msg.id });
+      }
+    }
+    return results.slice(0, 10);
+  }, [hotLeads, universalApiMessages]);
+
+  function handleHotLeadAction(lead: Lead, action: "generate" | "send", messageId?: string) {
+    setActionPendingLead(lead.id);
+    setSelectedLead(null);
+    setLeadFilter(lead.id);
+    setMainTab("messages");
+    if (action === "generate") {
+      setStatusFilter("draft");
+      generateMutation.mutate([lead.id], {
+        onSettled: () => setActionPendingLead(null),
+      });
+    } else {
+      const msg = universalApiMessages?.find(m => m.id === messageId);
+      setStatusFilter(msg?.status === "approved" ? "approved" : "draft");
+      setActionPendingLead(null);
+    }
+  }
+
+  function handleAction(lead: OutreachLead, action: "generate" | "send", messageId?: string) {
+    setActionPendingLead(lead.lead_id);
+    setSelectedLead(null);
+    setLeadFilter(lead.lead_id);
+    setMainTab("messages");
+    if (action === "generate") {
+      setStatusFilter("draft");
+      generateMutation.mutate([lead.lead_id], {
+        onSettled: () => setActionPendingLead(null),
+      });
+    } else {
+      const msg = universalApiMessages?.find(m => m.id === messageId);
+      setStatusFilter(msg?.status === "approved" ? "approved" : "draft");
+      setActionPendingLead(null);
+    }
+  }
+
   const STATUS_FILTER_LABELS: Record<string, string> = {
     draft: "Draft", approved: "Approved", scheduled: "Scheduled",
     sent: "Sent", conversations: "Inbox", rejected: "Rejected",
@@ -531,12 +621,33 @@ export default function OutreachPage() {
           </div>
 
           {/* Weekly target */}
-          <div style={{ display: "flex", flexDirection: "column", gap: 4, paddingLeft: 4, marginBottom: 24, maxWidth: 280 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 4, paddingLeft: 4, marginBottom: 16, maxWidth: 280 }}>
             <div style={{ fontSize: 11, color: "var(--sp-ink-3)" }}>Weekly target</div>
             <div style={{ height: 8, borderRadius: 4, background: "var(--sp-line-strong)", overflow: "hidden" }}>
               <div style={{ height: "100%", borderRadius: 4, background: "var(--sp-accent)", width: `${Math.min(100, Math.round((sentThisWeek / 100) * 100))}%`, transition: "width 0.3s" }} />
             </div>
             <div style={{ fontSize: 11, color: "var(--sp-ink-3)" }}>{sentThisWeek} / 100</div>
+          </div>
+
+          {/* Venue filter for Overview */}
+          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 24 }}>
+            <label style={{ fontSize: 11, color: "var(--sp-ink-3)", whiteSpace: "nowrap" }}>Venue</label>
+            <select
+              value={overviewVenueFilter}
+              onChange={(e) => setOverviewVenueFilter(e.target.value)}
+              style={{
+                fontSize: 12, padding: "4px 8px", borderRadius: 6, cursor: "pointer",
+                border: "1px solid var(--sp-line-strong)",
+                background: "var(--sp-bg-sunken)",
+                color: "var(--sp-ink-2)",
+                minWidth: 180,
+              }}
+            >
+              <option value="">All venues</option>
+              {venueCounts.map(({ value, label }) => (
+                <option key={value} value={value}>{label}</option>
+              ))}
+            </select>
           </div>
 
           {/* Top 10 Eligible Leads */}
@@ -554,17 +665,24 @@ export default function OutreachPage() {
                 <Skeleton className="h-16 w-full" />
                 <Skeleton className="h-16 w-full" />
               </div>
-            ) : outreachPlan.recommended.length === 0 ? (
+            ) : actionableLeads.length === 0 ? (
               <p style={{ fontSize: 12, color: "var(--sp-ink-3)" }}>No eligible leads for outreach. Scrape and enrich leads first.</p>
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                {outreachPlan.recommended.map((lead, i) => (
-                  <div key={lead.lead_id} onClick={() => {
-                    const l = allLeads.find((x) => x.id === lead.lead_id);
-                    if (l) setSelectedLead(l);
-                  }}>
-                    <LeadRow lead={lead} rank={i + 1} />
-                  </div>
+                {actionableLeads.map(({ lead, action, messageId }, i) => (
+                  <ActionableLeadCard
+                    key={lead.lead_id}
+                    lead={lead}
+                    rank={i + 1}
+                    action={action}
+                    messageId={messageId}
+                    onAction={handleAction}
+                    onLeadClick={(l) => {
+                      const fullLead = allLeads.find((x) => x.id === l.lead_id);
+                      if (fullLead) setSelectedLead(fullLead);
+                    }}
+                    isPending={actionPendingLead === lead.lead_id}
+                  />
                 ))}
               </div>
             )}
@@ -577,92 +695,83 @@ export default function OutreachPage() {
               <h2 style={{ fontSize: 14, fontWeight: 600, color: "var(--sp-ink)" }}>Hot New Leads</h2>
               <span style={{ fontSize: 11, color: "var(--sp-ink-3)" }}>Score ≥ 7 · awaiting first contact</span>
             </div>
-            {hotLeads.length === 0 ? (
+            {actionableHotLeads.length === 0 ? (
               <p style={{ fontSize: 12, color: "var(--sp-ink-3)" }}>No high-score new leads yet.</p>
             ) : (
-              <table className="sp-tbl">
-                <thead>
-                  <tr>
-                    <th>Venue</th>
-                    <th>Category</th>
-                    <th>Postcode</th>
-                    <th>Score</th>
-                    <th>Assigned</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {hotLeads.map((l) => (
-                    <tr key={l.id} onClick={() => setSelectedLead(l)} style={{ cursor: "pointer" }}>
-                      <td className="col-name">
-                        <span style={{ color: "var(--sp-ink-4)", fontFamily: "var(--font-mono, monospace)", fontSize: 11, marginRight: 8 }}>
-                          {l.id.slice(-4)}
-                        </span>
-                        {l.business_name}
-                      </td>
-                      <td style={{ color: "var(--sp-ink-2)" }}>
-                        {l.venue_category?.replace(/_/g, " ") ?? "—"}
-                      </td>
-                      <td className="sp-mono" style={{ color: "var(--sp-ink-2)" }}>
-                        {l.location_postcode ?? "—"}
-                      </td>
-                      <td>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {actionableHotLeads.map(({ lead, action, messageId }, i) => (
+                  <div key={lead.id} className="flex items-start gap-3 rounded-lg border border-border/40 bg-muted/10 p-3 transition-colors hover:bg-muted/20">
+                    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-amber-500/10 text-[11px] font-bold text-amber-500">
+                      {i + 1}
+                    </span>
+                    <div className="flex-1 min-w-0 space-y-1 cursor-pointer" onClick={() => setSelectedLead(lead)}>
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium truncate">{lead.business_name}</span>
+                        <Badge variant="secondary" className="text-[10px] capitalize shrink-0">
+                          {lead.venue_category?.replace(/_/g, " ") ?? "—"}
+                        </Badge>
                         <span style={{
                           display: "inline-flex", alignItems: "center", gap: 4,
-                          padding: "2px 8px", borderRadius: 9999, fontSize: 11, fontWeight: 600,
-                          background: (l.score ?? 0) >= 8 ? "rgba(34,197,94,0.15)" : (l.score ?? 0) >= 6 ? "rgba(245,158,11,0.15)" : "rgba(239,68,68,0.15)",
-                          color: (l.score ?? 0) >= 8 ? "#22c55e" : (l.score ?? 0) >= 6 ? "#f59e0b" : "#ef4444",
+                          padding: "1px 6px", borderRadius: 9999, fontSize: 10, fontWeight: 600,
+                          background: (lead.score ?? 0) >= 8 ? "rgba(34,197,94,0.15)" : "rgba(245,158,11,0.15)",
+                          color: (lead.score ?? 0) >= 8 ? "#22c55e" : "#f59e0b",
                         }}>
-                          {l.score ?? 0}
+                          {lead.score ?? 0}
                         </span>
-                      </td>
-                      <td>
-                        {l.assigned_to_name ? (
-                          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                            <div style={{
-                              width: 20, height: 20, borderRadius: "50%",
-                              background: "var(--sp-line-strong)", display: "flex", alignItems: "center", justifyContent: "center",
-                              fontSize: 10, fontWeight: 600, color: "var(--sp-ink-2)",
-                            }}>
-                              {l.assigned_to_name.charAt(0).toUpperCase()}
-                            </div>
-                            <span style={{ fontSize: 12 }}>{l.assigned_to_name}</span>
+                      </div>
+                      {lead.location_postcode && (
+                        <p className="text-[10px] text-muted-foreground">{lead.location_postcode}</p>
+                      )}
+                    </div>
+                    <div className="shrink-0 flex flex-col items-end gap-1">
+                      {lead.assigned_to_name ? (
+                        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                          <div style={{
+                            width: 16, height: 16, borderRadius: "50%",
+                            background: "var(--sp-line-strong)", display: "flex", alignItems: "center", justifyContent: "center",
+                            fontSize: 8, fontWeight: 600, color: "var(--sp-ink-2)",
+                          }}>
+                            {lead.assigned_to_name.charAt(0).toUpperCase()}
                           </div>
-                        ) : (
-                          <span style={{ fontSize: 12, color: "var(--sp-ink-3)" }}>Unassigned</span>
-                        )}
-                      </td>
-                      <td style={{ textAlign: "right" }}>
+                          <span className="text-[10px] text-muted-foreground">{lead.assigned_to_name}</span>
+                        </div>
+                      ) : (
+                        <span className="text-[10px] text-zinc-500">Unassigned</span>
+                      )}
+                      {action && (
                         <Button
                           size="sm"
-                          variant="outline"
-                          style={{ fontSize: 11, height: 24, padding: "0 10px" }}
-                          onClick={(e) => { e.stopPropagation(); handleEmailLead(l); }}
+                          variant={action === "generate" ? "default" : "outline"}
+                          className={`h-7 text-[11px] px-2 shrink-0 ${
+                            action === "generate"
+                              ? "bg-primary hover:bg-primary/90"
+                              : "border-emerald-500/30 text-emerald-500 hover:bg-emerald-500/10"
+                          }`}
+                          disabled={actionPendingLead === lead.id}
+                          onClick={(e) => { e.stopPropagation(); handleHotLeadAction(lead, action, messageId); }}
                         >
-                          <Mail className="h-3 w-3 mr-1" />
-                          Email
+                          {actionPendingLead === lead.id ? (
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                          ) : action === "generate" ? (
+                            <>
+                              <FileText className="h-3 w-3 mr-1" />
+                              Generate Draft
+                            </>
+                          ) : (
+                            <>
+                              <Send className="h-3 w-3 mr-1" />
+                              Send Email
+                            </>
+                          )}
                         </Button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-               )}
-              {leadFilter && (
-                <Button
-                  variant="outline"
-                  className="border-purple-500 text-purple-600 hover:bg-purple-50 dark:hover:bg-purple-950/20"
-                  onClick={() => generateMutation.mutate([leadFilter])}
-                  disabled={generateMutation.isPending}
-                >
-                  {generateMutation.isPending
-                    ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-                    : <FileText className="mr-1.5 h-4 w-4" />}
-                  Generate Draft
-                </Button>
-              )}
+                      )}
+                    </div>
+                  </div>
+                ))}
               </div>
-            </div>
+            )}
+          </div>
+        </div>
       ) : (
         /* ===== TAB 2: MESSAGES ===== */
         <>

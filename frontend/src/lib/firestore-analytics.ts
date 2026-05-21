@@ -117,9 +117,14 @@ export async function getRatios(): Promise<{ ratios: RatioComparison[] }> {
   return { ratios };
 }
 
-export async function getTrends(period: string = "week", lookback: number = 12): Promise<{ series: TrendPoint[] }> {
+export async function getTrends(period: string = "week", lookback: number = 12, venueCategory: string | null = null): Promise<{ series: TrendPoint[] }> {
   const docs = await getAllLeads();
   if (!docs.length) return { series: [] };
+
+  const filtered = venueCategory
+    ? docs.filter((d) => (d.enrichment?.venue_category || d.category || "other") === venueCategory)
+    : docs;
+  if (!filtered.length) return { series: [] };
 
   const now = new Date();
   const deltaMs = period === "week" ? 7 * 24 * 60 * 60 * 1000 : 30 * 24 * 60 * 60 * 1000;
@@ -134,7 +139,7 @@ export async function getTrends(period: string = "week", lookback: number = 12):
     buckets[key] = { scraped: 0, enriched: 0, scored: 0, sent: 0, converted: 0 };
   }
 
-  for (const doc of docs) {
+  for (const doc of filtered) {
     const scrapedAt = doc.scraped_at;
     if (!scrapedAt) continue;
 
