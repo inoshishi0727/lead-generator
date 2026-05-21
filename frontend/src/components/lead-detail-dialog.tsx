@@ -31,6 +31,7 @@ import type { Lead } from "@/lib/types";
 interface Props {
   lead: Lead | null;
   onClose: () => void;
+  onEmail?: (lead: Lead) => void;
 }
 
 const FIT_COLORS: Record<string, string> = {
@@ -142,7 +143,7 @@ function EmployeeRow({ emp }: { emp: import("@/lib/types").LinkedInEmployee }) {
   );
 }
 
-export function LeadDetailDialog({ lead, onClose }: Props) {
+export function LeadDetailDialog({ lead, onClose, onEmail }: Props) {
   const enrichMutation = useEnrichLeads();
   const [enrichDone, setEnrichDone] = useState(false);
   const [editingMenuUrl, setEditingMenuUrl] = useState(false);
@@ -507,11 +508,23 @@ export function LeadDetailDialog({ lead, onClose }: Props) {
 
         <div className="border-t" />
 
-        {/* Re-enrich footer */}
-        <div className="flex items-center justify-between p-4">
-          <p className="text-xs text-muted-foreground">
-            Re-enriching captures a fresh menu URL and updates the drinks programme.
-          </p>
+        {/* Footer */}
+        <div className="flex items-center justify-between p-4 border-t">
+          <div className="flex items-center gap-3">
+            {onEmail && lead?.email && (
+              <Button
+                size="sm"
+                onClick={() => onEmail(lead)}
+                className="shrink-0"
+              >
+                <Mail className="mr-1.5 h-3.5 w-3.5" />
+                Email
+              </Button>
+            )}
+            <p className="text-xs text-muted-foreground">
+              Re-enriching captures a fresh menu URL and updates the drinks programme.
+            </p>
+          </div>
           <Button
             size="sm"
             variant="outline"

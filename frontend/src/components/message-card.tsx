@@ -76,6 +76,8 @@ interface Props {
   emailCapReached?: boolean;
   isDuplicate?: boolean;
   defaultExpanded?: boolean;
+  fitLabel?: string;
+  fitColor?: string;
 }
 
 const statusColors: Record<string, string> = {
@@ -120,7 +122,7 @@ function rejectionLabel(reason: string): string {
   return REJECTION_LABELS[reason] ?? "rejected";
 }
 
-export function MessageCard({ message, inConversation, emailCapReached, isDuplicate, defaultExpanded }: Props) {
+export function MessageCard({ message, inConversation, emailCapReached, isDuplicate, defaultExpanded, fitLabel, fitColor }: Props) {
   const [showTimeline, setShowTimeline] = useState(false);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
@@ -352,6 +354,12 @@ export function MessageCard({ message, inConversation, emailCapReached, isDuplic
             <Badge variant="secondary" className="capitalize">
               {message.venue_category.replace(/_/g, " ")}
             </Badge>
+          )}
+          {fitLabel && fitColor && (
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, fontWeight: 500, color: fitColor }}>
+              <span style={{ width: 7, height: 7, borderRadius: "50%", background: fitColor, flexShrink: 0, display: "inline-block" }} />
+              {fitLabel}
+            </span>
           )}
           {message.follow_up_label && message.follow_up_label !== "initial" && (
             <Badge variant="secondary" className="text-xs bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400">
