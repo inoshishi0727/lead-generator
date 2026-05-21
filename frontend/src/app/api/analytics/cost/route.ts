@@ -50,7 +50,7 @@ export async function GET(req: NextRequest) {
     }
 
     const base = adminDb.collection("sommelier_usage");
-    const snap = await (since ? base.where("createdAt", ">=", since).get() : base.get());
+    const snap = await base.get();
 
     let totalInput = 0;
     let totalOutput = 0;
@@ -74,6 +74,7 @@ export async function GET(req: NextRequest) {
       const d = doc.data();
       const created = tsToDate(d.createdAt);
       if (!created) continue;
+      if (since && created < since) continue;
 
       const r = {
         inputTokens: d.inputTokens ?? 0,
