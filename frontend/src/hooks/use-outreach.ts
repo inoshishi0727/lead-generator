@@ -53,6 +53,7 @@ export function useGenerateDrafts() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["outreach"] });
+      qc.invalidateQueries({ queryKey: ["recommendations", "outreach-plan"] });
     },
   });
 }
@@ -76,6 +77,7 @@ export function useRegenerateAll() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["outreach"] });
+      qc.invalidateQueries({ queryKey: ["recommendations", "outreach-plan"] });
     },
   });
 }
@@ -131,6 +133,7 @@ export function useUpdateMessage() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["outreach"] });
+      qc.invalidateQueries({ queryKey: ["recommendations", "outreach-plan"] });
     },
   });
 }
@@ -171,6 +174,7 @@ export function useRegenerateMessage() {
     onSuccess: (data) => {
       if (!("preview" in data) || !data.preview) {
         qc.invalidateQueries({ queryKey: ["outreach"] });
+      qc.invalidateQueries({ queryKey: ["recommendations", "outreach-plan"] });
       }
     },
   });
@@ -240,6 +244,7 @@ export function useBatchApprove() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["outreach"] });
+      qc.invalidateQueries({ queryKey: ["recommendations", "outreach-plan"] });
     },
   });
 }
@@ -270,6 +275,7 @@ export function useSendApproved() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["outreach"] });
+      qc.invalidateQueries({ queryKey: ["recommendations", "outreach-plan"] });
     },
   });
 }
@@ -287,6 +293,7 @@ export function useSendMessage() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["outreach"] });
+      qc.invalidateQueries({ queryKey: ["recommendations", "outreach-plan"] });
     },
   });
 }
@@ -304,6 +311,7 @@ export function useSendMessages() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["outreach"] });
+      qc.invalidateQueries({ queryKey: ["recommendations", "outreach-plan"] });
       qc.invalidateQueries({ queryKey: ["campaigns"] });
     },
   });
@@ -328,6 +336,7 @@ export function useGenerateFollowups() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["outreach"] });
+      qc.invalidateQueries({ queryKey: ["recommendations", "outreach-plan"] });
     },
   });
 }
@@ -345,6 +354,7 @@ export function useGenerateFollowupForLead() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["outreach"] });
+      qc.invalidateQueries({ queryKey: ["recommendations", "outreach-plan"] });
     },
   });
 }
@@ -364,6 +374,7 @@ export function useLogReply() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["outreach"] });
+      qc.invalidateQueries({ queryKey: ["recommendations", "outreach-plan"] });
       qc.invalidateQueries({ queryKey: ["inbound-replies"] });
     },
   });
@@ -382,6 +393,7 @@ export function useUpdateLeadOutcome() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["outreach"] });
+      qc.invalidateQueries({ queryKey: ["recommendations", "outreach-plan"] });
       qc.invalidateQueries({ queryKey: ["leads"] });
     },
   });
@@ -401,6 +413,7 @@ export function useAssignReply() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["inbound-replies"] });
       qc.invalidateQueries({ queryKey: ["outreach"] });
+      qc.invalidateQueries({ queryKey: ["recommendations", "outreach-plan"] });
     },
   });
 }
@@ -434,6 +447,7 @@ export function useSendReply() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["inbound-replies"] });
       qc.invalidateQueries({ queryKey: ["outreach"] });
+      qc.invalidateQueries({ queryKey: ["recommendations", "outreach-plan"] });
     },
   });
 }
@@ -444,6 +458,7 @@ export function useDeleteMessage() {
     mutationFn: (messageId: string) => deleteOutreachMessage(messageId),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["outreach"] });
+      qc.invalidateQueries({ queryKey: ["recommendations", "outreach-plan"] });
     },
   });
 }
@@ -465,6 +480,7 @@ export function useGenerateClientDrafts() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["outreach"] });
+      qc.invalidateQueries({ queryKey: ["recommendations", "outreach-plan"] });
     },
   });
 }
@@ -556,6 +572,7 @@ export function useScheduleCampaignDrafts() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["outreach"] });
+      qc.invalidateQueries({ queryKey: ["recommendations", "outreach-plan"] });
     },
   });
 }
@@ -583,6 +600,7 @@ export function useDeleteReply() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["inbound-replies"] });
       qc.invalidateQueries({ queryKey: ["outreach"] });
+      qc.invalidateQueries({ queryKey: ["recommendations", "outreach-plan"] });
     },
   });
 }

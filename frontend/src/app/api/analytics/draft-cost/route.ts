@@ -14,6 +14,11 @@ const PRICING = {
   },
 };
 
+// generation_source → billing provider
+function sourceToProvider(source: string): "claude" | "gemini" {
+  return source === "gemini" ? "gemini" : "claude";
+}
+
 function tsToDate(value: unknown): Date | null {
   if (!value) return null;
   if (typeof value === "object" && value !== null && "toDate" in value && typeof (value as { toDate: () => Date }).toDate === "function") {
@@ -39,7 +44,7 @@ function rowCost(provider: string, inputTokens: number, outputTokens: number): n
   return (inputTokens / 1_000_000) * p.inputPerMTok + (outputTokens / 1_000_000) * p.outputPerMTok;
 }
 
-type Window = 7 | 30 | 90 | "all";
+const SYSTEM_PROMPT_TOKEN_ESTIMATE = 2000;
 
 export async function GET(req: NextRequest) {
   try {
@@ -54,17 +59,18 @@ export async function GET(req: NextRequest) {
       since.setUTCHours(0, 0, 0, 0);
     }
 
-    const base = adminDb.collection("outreach_messages");
-    const snap = await base.get();
+    // generation_log captures every generation call including regenerations,
+    // unlike outreach_messages which only has one doc per message.
+    const snap = await adminDb.collection("generation_log").get();
 
     let totalInput = 0;
     let totalOutput = 0;
     let totalCost = 0;
-    let totalDrafts = 0;
-    const byProvider = new Map<string, { drafts: number; inputTokens: number; outputTokens: number; cost: number }>();
+    let totalGenerations = 0;
+    const byProvider = new Map<string, { generations: number; inputTokens: number; outputTokens: number; cost: number }>();
     const byDay = new Map<string, {
       date: string;
-      drafts: number;
+      generations: number;
       inputTokens: number;
       outputTokens: number;
       cost: number;
@@ -72,36 +78,34 @@ export async function GET(req: NextRequest) {
 
     for (const doc of snap.docs) {
       const d = doc.data();
-      if (d.status !== "draft" && d.status !== "sent" && d.status !== "approved" && d.status !== "rejected") continue;
 
-      const created = tsToDate(d.created_at);
+      const created = tsToDate(d.generated_at);
       if (!created) continue;
       if (since && created < since) continue;
 
-      const provider = d.provider || "claude";
+      const provider = sourceToProvider(d.generation_source || "claude");
       const content = d.content || "";
       const subject = d.subject || "";
-      const systemPromptEstimate = 2000;
 
-      const inputTokens = estimateTokens(subject + content) + systemPromptEstimate;
+      const inputTokens = estimateTokens(subject + content) + SYSTEM_PROMPT_TOKEN_ESTIMATE;
       const outputTokens = estimateTokens(content);
       const cost = rowCost(provider, inputTokens, outputTokens);
 
       totalInput += inputTokens;
       totalOutput += outputTokens;
       totalCost += cost;
-      totalDrafts += 1;
+      totalGenerations += 1;
 
-      const provEntry = byProvider.get(provider) ?? { drafts: 0, inputTokens: 0, outputTokens: 0, cost: 0 };
-      provEntry.drafts += 1;
+      const provEntry = byProvider.get(provider) ?? { generations: 0, inputTokens: 0, outputTokens: 0, cost: 0 };
+      provEntry.generations += 1;
       provEntry.inputTokens += inputTokens;
       provEntry.outputTokens += outputTokens;
       provEntry.cost += cost;
       byProvider.set(provider, provEntry);
 
       const key = dayKey(created);
-      const existing = byDay.get(key) ?? { date: key, drafts: 0, inputTokens: 0, outputTokens: 0, cost: 0 };
-      existing.drafts += 1;
+      const existing = byDay.get(key) ?? { date: key, generations: 0, inputTokens: 0, outputTokens: 0, cost: 0 };
+      existing.generations += 1;
       existing.inputTokens += inputTokens;
       existing.outputTokens += outputTokens;
       existing.cost += cost;
@@ -109,7 +113,7 @@ export async function GET(req: NextRequest) {
     }
 
     const daily = Array.from(byDay.values()).sort((a, b) => a.date.localeCompare(b.date));
-    const avgCostPerDraft = totalDrafts > 0 ? totalCost / totalDrafts : 0;
+    const avgCostPerGeneration = totalGenerations > 0 ? totalCost / totalGenerations : 0;
 
     return NextResponse.json({
       windowDays: all ? null : days,
@@ -120,8 +124,8 @@ export async function GET(req: NextRequest) {
         inputTokens: totalInput,
         outputTokens: totalOutput,
         cost: totalCost,
-        drafts: totalDrafts,
-        avgCostPerDraft,
+        drafts: totalGenerations,
+        avgCostPerDraft: avgCostPerGeneration,
         byProvider: Object.fromEntries(byProvider),
       },
       daily,
