@@ -16,7 +16,7 @@ const FIT_COLORS: Record<string, string> = {
 interface Props {
   lead: OutreachLead;
   rank: number;
-  action: "generate" | "send" | null;
+  action: "generate" | "send" | "contacted";
   messageId?: string;
   onAction: (lead: OutreachLead, action: "generate" | "send", messageId?: string) => void;
   onLeadClick?: (lead: OutreachLead) => void;
@@ -65,7 +65,9 @@ export function ActionableLeadCard({ lead, rank, action, messageId, onAction, on
         ) : (
           <span className="text-[10px] text-zinc-500">No email</span>
         )}
-        {action && (
+        {action === "contacted" ? (
+          <span className="text-[10px] text-muted-foreground px-2 py-1">Contacted</span>
+        ) : action ? (
           <Button
             size="sm"
             variant={action === "generate" ? "default" : "outline"}
@@ -91,7 +93,7 @@ export function ActionableLeadCard({ lead, rank, action, messageId, onAction, on
               </>
             )}
           </Button>
-        )}
+        ) : null}
       </div>
     </div>
   );

@@ -183,12 +183,12 @@ export default function CostAnalyticsPage() {
                 />
                 <StatCard
                   icon={FileText}
-                  label="Drafts generated"
+                  label="Generation calls"
                   value={fmtNum(data.totals.drafts)}
                 />
                 <StatCard
                   icon={TrendingUp}
-                  label="Avg cost / draft"
+                  label="Avg cost / generation"
                   value={fmtUsd(data.totals.avgCostPerDraft)}
                 />
                 <StatCard
@@ -209,7 +209,7 @@ export default function CostAnalyticsPage() {
                     key={provider}
                     icon={Bot}
                     label={`${data.pricing[provider]?.model || provider}`}
-                    value={`${fmtNum(stats.drafts)} drafts · ${fmtUsd(stats.cost)}`}
+                    value={`${fmtNum(stats.generations ?? stats.drafts)} gens · ${fmtUsd(stats.cost)}`}
                   />
                 ))}
               </div>
@@ -243,7 +243,7 @@ export default function CostAnalyticsPage() {
                       <span className="w-20 text-right tabular-nums">{fmtUsd(d.cost)}</span>
                       <span className="w-16 text-right tabular-nums text-muted-foreground">
                         {tab === "drafts"
-                          ? `${d.drafts ?? 0} draft${(d.drafts ?? 0) === 1 ? "" : "s"}`
+                          ? `${d.generations ?? d.drafts ?? 0} gen${(d.generations ?? d.drafts ?? 0) === 1 ? "" : "s"}`
                           : `${d.calls ?? 0} call${(d.calls ?? 0) === 1 ? "" : "s"}`
                         }
                       </span>
