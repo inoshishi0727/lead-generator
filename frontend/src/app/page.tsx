@@ -2,7 +2,9 @@
 
 import { useState, useRef, useMemo } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ScrapeControl } from "@/components/scrape-control";
 import { ScrapeHistory } from "@/components/scrape-history";
@@ -10,20 +12,20 @@ import { ScrapeStatus } from "@/components/scrape-status";
 import { UpcomingScrapeReview } from "@/components/upcoming-scrape-review";
 import { OutreachPlan } from "@/components/outreach-plan";
 import { LeadDetailDialog } from "@/components/lead-detail-dialog";
+import { ActionableLeadCard } from "@/components/actionable-lead-card";
 import { useScrape } from "@/hooks/use-scrape";
 import { useLeads } from "@/hooks/use-leads";
-import { useMessages } from "@/hooks/use-outreach";
-import { Upload, Download, RefreshCw } from "lucide-react";
+import { useMessages, useGenerateDrafts } from "@/hooks/use-outreach";
+import { useOutreachPlan, type OutreachLead } from "@/hooks/use-outreach-plan";
+import { Upload, Download, RefreshCw, Sparkles, Target, FileText, Send, Loader2 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { EditReflectionBanner } from "@/components/edit-reflection-banner";
 import { ScrapeRunningBanner } from "@/components/pipeline-activity";
 import { useImportQueries, type SearchQueries } from "@/hooks/use-search-queries";
 import { toast } from "sonner";
 import { Sparkline } from "@/components/ui/sparkline";
-import { FitScore } from "@/components/ui/fit-score";
 import { StageChip } from "@/components/ui/stage-chip";
-import { PersonAvatar } from "@/components/ui/person-avatar";
-import type { Lead } from "@/lib/types";
+import type { Lead, OutreachMessage } from "@/lib/types";
 
 const SOURCE_KEYS: (keyof SearchQueries)[] = [
   "google_maps", "google_search", "bing_search", "directory",
@@ -63,11 +65,15 @@ function stageFor(lead: Lead): "new" | "contacted" | "replied" | "converted" | "
 
 export default function DashboardPage() {
   const { isAdmin, isMember, user } = useAuth();
+  const router = useRouter();
   const { startScrape, isStarting, status } = useScrape();
   const assignedTo = isMember ? user?.uid : undefined;
   const { data: leads, isLoading: leadsLoading } = useLeads({ assignedTo });
   const { data: messages } = useMessages({ assignedTo } as any);
+  const { data: outreachPlan } = useOutreachPlan(10);
+  const generateMutation = useGenerateDrafts();
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
+  const [actionPendingLead, setActionPendingLead] = useState<string | null>(null);
   const importMutation = useImportQueries();
   const csvInputRef = useRef<HTMLInputElement>(null);
   const [uploadedQueries, setUploadedQueries] = useState<Record<string, string[]> | null>(null);
@@ -97,9 +103,80 @@ export default function DashboardPage() {
     [...allLeads]
       .filter((l) => stageFor(l) === "new" && (l.score ?? 0) >= 7)
       .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
-      .slice(0, 5),
+      .slice(0, 10),
     [allLeads]
   );
+
+  // Join the eligible plan against the latest message per lead to decide whether
+  // each row needs "generate" / "send" / "contacted" — same logic as Outreach overview.
+  const actionableLeads = useMemo(() => {
+    if (!outreachPlan) return [];
+    const msgMap = new Map<string, OutreachMessage>();
+    for (const m of allMessages) {
+      if (!msgMap.has(m.lead_id)) msgMap.set(m.lead_id, m);
+    }
+    const results: { lead: OutreachLead; action: "generate" | "send" | "contacted"; messageId?: string }[] = [];
+    for (const lead of outreachPlan.recommended) {
+      const msg = msgMap.get(lead.lead_id);
+      if (!msg) {
+        results.push({ lead, action: "generate" });
+      } else if (msg.status === "draft" || msg.status === "approved") {
+        results.push({ lead, action: "send", messageId: msg.id });
+      } else {
+        results.push({ lead, action: "contacted" });
+      }
+    }
+    return results.slice(0, 10);
+  }, [outreachPlan, allMessages]);
+
+  const actionableHotLeads = useMemo(() => {
+    const msgMap = new Map<string, OutreachMessage>();
+    for (const m of allMessages) {
+      if (!msgMap.has(m.lead_id)) msgMap.set(m.lead_id, m);
+    }
+    const results: { lead: Lead; action: "generate" | "send" | "contacted"; messageId?: string }[] = [];
+    for (const lead of hotLeads) {
+      const msg = msgMap.get(lead.id);
+      if (!msg) {
+        results.push({ lead, action: "generate" });
+      } else if (msg.status === "draft" || msg.status === "approved") {
+        results.push({ lead, action: "send", messageId: msg.id });
+      } else {
+        results.push({ lead, action: "contacted" });
+      }
+    }
+    return results.slice(0, 10);
+  }, [hotLeads, allMessages]);
+
+  function gotoOutreach(leadId: string, status: "draft" | "approved") {
+    router.push(`/outreach?tab=${status}&lead=${leadId}`);
+  }
+
+  function handleEligibleAction(lead: OutreachLead, action: "generate" | "send", messageId?: string) {
+    if (action === "generate") {
+      setActionPendingLead(lead.lead_id);
+      generateMutation.mutate([lead.lead_id], {
+        onSettled: () => setActionPendingLead(null),
+        onSuccess: () => gotoOutreach(lead.lead_id, "draft"),
+      });
+    } else {
+      const msg = allMessages.find((m) => m.id === messageId);
+      gotoOutreach(lead.lead_id, msg?.status === "approved" ? "approved" : "draft");
+    }
+  }
+
+  function handleHotAction(lead: Lead, action: "generate" | "send", messageId?: string) {
+    if (action === "generate") {
+      setActionPendingLead(lead.id);
+      generateMutation.mutate([lead.id], {
+        onSettled: () => setActionPendingLead(null),
+        onSuccess: () => gotoOutreach(lead.id, "draft"),
+      });
+    } else {
+      const msg = allMessages.find((m) => m.id === messageId);
+      gotoOutreach(lead.id, msg?.status === "approved" ? "approved" : "draft");
+    }
+  }
 
   function handleCsvUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -336,80 +413,168 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Hot new leads */}
+      {/* Top 10 Eligible Leads */}
       <div className="sp-card" style={{ marginBottom: 16 }}>
         <div className="sp-card-head">
-          <span className="sp-card-title">Hot new leads</span>
-          <span className="sp-card-subtitle">Highest scores · awaiting first contact</span>
+          <span className="sp-card-title" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+            <Sparkles className="h-4 w-4 text-purple-400" />
+            Top 10 Eligible Leads
+          </span>
+          <span className="sp-card-subtitle">
+            {outreachPlan?.total_eligible ? `${outreachPlan.total_eligible} total eligible` : "Highest-priority leads ready for outreach"}
+          </span>
+          <span className="sp-spacer" />
+          <Link href="/outreach?tab=overview">
+            <button className="sp-btn sm ghost">Open Outreach →</button>
+          </Link>
+        </div>
+        <div style={{ padding: 12 }}>
+          {!outreachPlan ? (
+            <div className="p-3 space-y-2">
+              <Skeleton className="h-16 w-full" />
+              <Skeleton className="h-16 w-full" />
+              <Skeleton className="h-16 w-full" />
+            </div>
+          ) : actionableLeads.length === 0 ? (
+            <p style={{ fontSize: 12, color: "var(--sp-ink-3)", padding: "12px 4px" }}>
+              No eligible leads for outreach. Scrape and enrich leads first.
+            </p>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {actionableLeads.map(({ lead, action, messageId }, i) => (
+                <ActionableLeadCard
+                  key={lead.lead_id}
+                  lead={lead}
+                  rank={i + 1}
+                  action={action}
+                  messageId={messageId}
+                  onAction={handleEligibleAction}
+                  onLeadClick={(l) => {
+                    const fullLead = allLeads.find((x) => x.id === l.lead_id);
+                    if (fullLead) setSelectedLead(fullLead);
+                  }}
+                  isPending={actionPendingLead === lead.lead_id}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Top 10 Hot New Leads */}
+      <div className="sp-card" style={{ marginBottom: 16 }}>
+        <div className="sp-card-head">
+          <span className="sp-card-title" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+            <Target className="h-4 w-4 text-amber-400" />
+            Top 10 Hot New Leads
+          </span>
+          <span className="sp-card-subtitle">Score ≥ 7 · awaiting first contact</span>
           <span className="sp-spacer" />
           <Link href="/leads">
             <button className="sp-btn sm ghost">All leads →</button>
           </Link>
         </div>
-        <table className="sp-tbl">
-          <thead>
-            <tr>
-              <th>Venue</th>
-              <th>Category</th>
-              <th>Postcode</th>
-              <th>Score</th>
-              <th>Assigned</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {leadsLoading ? (
-              <tr>
-                <td colSpan={6} style={{ padding: 20, textAlign: "center", color: "var(--sp-ink-3)" }}>
-                  Loading…
-                </td>
-              </tr>
-            ) : hotLeads.length === 0 ? (
-              <tr>
-                <td colSpan={6} style={{ padding: 20, textAlign: "center", color: "var(--sp-ink-3)" }}>
-                  No high-score new leads yet.
-                </td>
-              </tr>
-            ) : (
-              hotLeads.map((l) => (
-                <tr key={l.id} onClick={() => setSelectedLead(l)}>
-                  <td className="col-name">
-                    <span style={{ color: "var(--sp-ink-4)", fontFamily: "var(--font-mono, monospace)", fontSize: 11, marginRight: 8 }}>
-                      {l.id.slice(-4)}
-                    </span>
-                    {l.business_name}
-                  </td>
-                  <td style={{ color: "var(--sp-ink-2)" }}>
-                    {l.venue_category?.replace(/_/g, " ") ?? "—"}
-                  </td>
-                  <td className="sp-mono" style={{ color: "var(--sp-ink-2)" }}>
-                    {l.location_postcode ?? "—"}
-                  </td>
-                  <td>
-                    <FitScore score={l.score ?? 0} />
-                  </td>
-                  <td>
-                    {l.assigned_to_name ? (
-                      <div className="sp-row" style={{ gap: 6 }}>
-                        <PersonAvatar name={l.assigned_to_name} size={20} />
-                        {l.assigned_to_name}
+        <div style={{ padding: 12 }}>
+          {leadsLoading ? (
+            <div className="p-3 space-y-2">
+              <Skeleton className="h-14 w-full" />
+              <Skeleton className="h-14 w-full" />
+              <Skeleton className="h-14 w-full" />
+            </div>
+          ) : actionableHotLeads.length === 0 ? (
+            <p style={{ fontSize: 12, color: "var(--sp-ink-3)", padding: "12px 4px" }}>
+              No high-score new leads yet.
+            </p>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {actionableHotLeads.map(({ lead, action, messageId }, i) => (
+                <div
+                  key={lead.id}
+                  className="flex items-start gap-3 rounded-lg border border-border/40 bg-muted/10 p-3 transition-colors hover:bg-muted/20"
+                >
+                  <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-amber-500/10 text-[11px] font-bold text-amber-500">
+                    {i + 1}
+                  </span>
+                  <div
+                    className="flex-1 min-w-0 space-y-1 cursor-pointer"
+                    onClick={() => setSelectedLead(lead)}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium truncate">{lead.business_name}</span>
+                      <Badge variant="secondary" className="text-[10px] capitalize shrink-0">
+                        {lead.venue_category?.replace(/_/g, " ") ?? "—"}
+                      </Badge>
+                      <span
+                        style={{
+                          display: "inline-flex", alignItems: "center", gap: 4,
+                          padding: "1px 6px", borderRadius: 9999, fontSize: 10, fontWeight: 600,
+                          background: (lead.score ?? 0) >= 8 ? "rgba(34,197,94,0.15)" : "rgba(245,158,11,0.15)",
+                          color: (lead.score ?? 0) >= 8 ? "#22c55e" : "#f59e0b",
+                        }}
+                      >
+                        {lead.score ?? 0}
+                      </span>
+                    </div>
+                    {lead.location_postcode && (
+                      <p className="text-[10px] text-muted-foreground">{lead.location_postcode}</p>
+                    )}
+                  </div>
+                  <div className="shrink-0 flex flex-col items-end gap-1">
+                    {lead.assigned_to_name ? (
+                      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                        <div
+                          style={{
+                            width: 16, height: 16, borderRadius: "50%",
+                            background: "var(--sp-line-strong)", display: "flex",
+                            alignItems: "center", justifyContent: "center",
+                            fontSize: 8, fontWeight: 600, color: "var(--sp-ink-2)",
+                          }}
+                        >
+                          {lead.assigned_to_name.charAt(0).toUpperCase()}
+                        </div>
+                        <span className="text-[10px] text-muted-foreground">{lead.assigned_to_name}</span>
                       </div>
                     ) : (
-                      <span className="sp-muted">Unassigned</span>
+                      <span className="text-[10px] text-zinc-500">Unassigned</span>
                     )}
-                  </td>
-                  <td style={{ textAlign: "right" }}>
-                    <Link href="/outreach">
-                      <button className="sp-btn sm" onClick={(e) => e.stopPropagation()}>
-                        Draft email
-                      </button>
-                    </Link>
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
+                    {action === "contacted" ? (
+                      <span className="text-[10px] text-muted-foreground px-2 py-1">Contacted</span>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant={action === "generate" ? "default" : "outline"}
+                        className={`h-7 text-[11px] px-2 shrink-0 ${
+                          action === "generate"
+                            ? "bg-primary hover:bg-primary/90"
+                            : "border-emerald-500/30 text-emerald-500 hover:bg-emerald-500/10"
+                        }`}
+                        disabled={actionPendingLead === lead.id}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleHotAction(lead, action as "generate" | "send", messageId);
+                        }}
+                      >
+                        {actionPendingLead === lead.id ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : action === "generate" ? (
+                          <>
+                            <FileText className="h-3 w-3 mr-1" />
+                            Generate Draft
+                          </>
+                        ) : (
+                          <>
+                            <Send className="h-3 w-3 mr-1" />
+                            Send Email
+                          </>
+                        )}
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Admin: Scrape Controls */}

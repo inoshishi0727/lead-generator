@@ -482,7 +482,7 @@ export default function OutreachPage() {
     for (const m of universalApiMessages ?? []) {
       if (!msgMap.has(m.lead_id)) msgMap.set(m.lead_id, m);
     }
-    const results: { lead: OutreachLead; action: "generate" | "send" | null; messageId?: string }[] = [];
+    const results: { lead: OutreachLead; action: "generate" | "send" | "contacted"; messageId?: string }[] = [];
     for (const lead of outreachPlan.recommended) {
       if (overviewVenueFilter && lead.venue_category !== overviewVenueFilter) continue;
       const msg = msgMap.get(lead.lead_id);
@@ -490,8 +490,9 @@ export default function OutreachPage() {
         results.push({ lead, action: "generate" });
       } else if (msg.status === "draft" || msg.status === "approved") {
         results.push({ lead, action: "send", messageId: msg.id });
+      } else {
+        results.push({ lead, action: "contacted" });
       }
-      // If already sent/contacted, skip (not actionable)
     }
     return results.slice(0, 10);
   }, [outreachPlan, universalApiMessages, overviewVenueFilter]);
@@ -502,13 +503,15 @@ export default function OutreachPage() {
     for (const m of universalApiMessages ?? []) {
       if (!msgMap.has(m.lead_id)) msgMap.set(m.lead_id, m);
     }
-    const results: { lead: Lead; action: "generate" | "send" | null; messageId?: string }[] = [];
+    const results: { lead: Lead; action: "generate" | "send" | "contacted"; messageId?: string }[] = [];
     for (const lead of hotLeads) {
       const msg = msgMap.get(lead.id);
       if (!msg) {
         results.push({ lead, action: "generate" });
       } else if (msg.status === "draft" || msg.status === "approved") {
         results.push({ lead, action: "send", messageId: msg.id });
+      } else {
+        results.push({ lead, action: "contacted" });
       }
     }
     return results.slice(0, 10);
@@ -738,7 +741,9 @@ export default function OutreachPage() {
                       ) : (
                         <span className="text-[10px] text-zinc-500">Unassigned</span>
                       )}
-                      {action && (
+                      {action === "contacted" ? (
+                        <span className="text-[10px] text-muted-foreground px-2 py-1">Contacted</span>
+                      ) : (
                         <Button
                           size="sm"
                           variant={action === "generate" ? "default" : "outline"}
@@ -748,7 +753,7 @@ export default function OutreachPage() {
                               : "border-emerald-500/30 text-emerald-500 hover:bg-emerald-500/10"
                           }`}
                           disabled={actionPendingLead === lead.id}
-                          onClick={(e) => { e.stopPropagation(); handleHotLeadAction(lead, action, messageId); }}
+                          onClick={(e) => { e.stopPropagation(); handleHotLeadAction(lead, action as "generate" | "send", messageId); }}
                         >
                           {actionPendingLead === lead.id ? (
                             <Loader2 className="h-3 w-3 animate-spin" />
