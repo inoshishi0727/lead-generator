@@ -54,8 +54,22 @@ def get_known_dedup_keys(source: str = "google_maps") -> set[str]:
 def save_lead_immediate(lead: Lead) -> bool:
     """Atomically check-and-insert a single lead. Returns True if inserted.
 
-    Used by parallel scrapers to save each lead the moment it's extracted,
-    preventing duplicates across concurrent workers.
+    Uses a dedup-claim doc with a deterministic ID = sha1(universal_key) in
+    the `dedup_claims` collection. The claim acts as a unique constraint:
+    if two concurrent writers race on the same venue, only one's create()
+    succeeds — the loser sees AlreadyExists and skips, so we never end up
+    with two `leads` documents for the same venue.
+
+    The lead doc itself keeps its UUID-based ID for backwards compatibility
+    with every callsite that does `db.collection("leads").doc(lead.id)`.
+
+    Returns:
+      True  if this call performed the insert
+      False if the venue already existed (any source) or Firestore is down
+
+    Raises:
+      The underlying Firestore exception on transient errors (network, etc),
+      so the orchestrator's retry layer can kick in.
     """
     from src.db import cache
 
@@ -64,31 +78,47 @@ def save_lead_immediate(lead: Lead) -> bool:
         log.debug("save_lead_immediate_skipped_no_firestore", lead=lead.business_name)
         return False
 
+    from hashlib import sha1
+    from src.db.dedup import build_universal_key
+
+    key = _dedup_key(lead)
+    universal = build_universal_key(
+        lead.business_name,
+        lead.website or lead.address,
+    )
+    name_lower = lead.business_name.strip().lower()
+    collection = db.collection("leads")
+
+    # ---- Step 0: legacy check (pre-claim-era leads have no claim doc) ---
+    existing_legacy = collection.where(
+        filter=FieldFilter("dedup_key", "==", key)
+    ).limit(1).get()
+    if existing_legacy:
+        log.debug("lead_already_exists_legacy", business_name=lead.business_name, key=key)
+        return False
+
+    # ---- Step 1: claim the venue atomically -----------------------------
+    # sha1(universal) is the claim doc ID. .create() raises AlreadyExists
+    # if a parallel writer beat us to it — that's our atomic guarantee.
+    claim_id = sha1(universal.encode("utf-8")).hexdigest()
+    claim_ref = db.collection("dedup_claims").document(claim_id)
+
     try:
-        from src.db.dedup import build_universal_key
+        try:
+            claim_ref.create({
+                "universal_dedup_key": universal,
+                "dedup_key": key,
+                "business_name": lead.business_name,
+                "claimed_at": lead.scraped_at.isoformat() if getattr(lead, "scraped_at", None) else None,
+            })
+        except Exception as claim_exc:
+            # AlreadyExists from Firestore — duplicate; don't write the lead.
+            if "AlreadyExists" in type(claim_exc).__name__ or "already exists" in str(claim_exc).lower():
+                log.debug("lead_already_claimed", business_name=lead.business_name, key=key)
+                return False
+            raise
 
-        key = _dedup_key(lead)
-        universal = build_universal_key(
-            lead.business_name,
-            lead.website or lead.address,
-        )
-        collection = db.collection("leads")
-
-        # Check by exact dedup key (same source)
-        existing = collection.where(filter=FieldFilter("dedup_key", "==", key)).limit(1).get()
-        if existing:
-            log.debug("lead_already_exists", business_name=lead.business_name, key=key)
-            return False
-
-        # Check by universal key (cross-source: same name already in any source)
-        name_lower = lead.business_name.strip().lower()
-        name_matches = collection.where(
-            filter=FieldFilter("business_name_lower", "==", name_lower)
-        ).limit(1).get()
-        if name_matches:
-            log.debug("lead_exists_other_source", business_name=lead.business_name)
-            return False
-
+        # ---- Step 2: write the lead doc itself --------------------------
         doc_ref = collection.document(str(lead.id))
         doc_data = lead.model_dump(mode="json")
         doc_data["dedup_key"] = key
@@ -100,7 +130,12 @@ def save_lead_immediate(lead: Lead) -> bool:
         return True
     except Exception as exc:
         log.warning("save_lead_immediate_failed", lead=lead.business_name, error=str(exc))
-        return False
+        # Best-effort rollback of the claim so the next attempt can retry.
+        try:
+            claim_ref.delete()
+        except Exception:
+            pass
+        raise
 
 
 def save_leads(leads: list[Lead]) -> int:
