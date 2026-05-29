@@ -444,6 +444,13 @@ async def scrape_one(req: ScrapeOneRequest) -> ScrapeOneResponse:
             error=result.error or "Could not extract venue details.",
         )
 
+    enrichment = result.lead.enrichment
+    venue_category = (
+        enrichment.venue_category.value
+        if enrichment and enrichment.venue_category
+        else None
+    )
+
     return ScrapeOneResponse(
         ok=True,
         is_new=result.is_new,
@@ -453,6 +460,10 @@ async def scrape_one(req: ScrapeOneRequest) -> ScrapeOneResponse:
         address=result.lead.address,
         phone=result.lead.phone,
         website=result.lead.website,
+        score=result.lead.score,
+        enriched=result.enriched,
+        scored=result.scored,
+        venue_category=venue_category,
     )
 
 

@@ -39,7 +39,12 @@ class ScrapeOneRequest(BaseModel):
 
 
 class ScrapeOneResponse(BaseModel):
-    """Result of a single-venue scrape. `is_new` is False if Fix H dedup skipped the write."""
+    """Result of a single-venue scrape + enrich.
+
+    `is_new` is False if Fix H dedup skipped the lead write.
+    `enriched` / `scored` indicate whether those downstream steps succeeded —
+    they're best-effort, so a False here doesn't mean the whole call failed.
+    """
     ok: bool
     is_new: bool
     detected_kind: str  # gmaps_url | website_url | name
@@ -48,6 +53,10 @@ class ScrapeOneResponse(BaseModel):
     address: Optional[str] = None
     phone: Optional[str] = None
     website: Optional[str] = None
+    score: Optional[int] = None
+    enriched: bool = False
+    scored: bool = False
+    venue_category: Optional[str] = None
     error: Optional[str] = None
 
 

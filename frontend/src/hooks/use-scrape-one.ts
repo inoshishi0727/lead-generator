@@ -10,6 +10,10 @@ export interface ScrapeOneResponse {
   address?: string;
   phone?: string;
   website?: string;
+  score?: number;
+  enriched?: boolean;
+  scored?: boolean;
+  venue_category?: string;
   error?: string;
 }
 
@@ -30,14 +34,19 @@ export function useScrapeOne() {
       return data;
     },
     onSuccess: (data) => {
+      const bits: string[] = [];
+      if (data.address) bits.push(data.address);
+      if (data.venue_category) bits.push(data.venue_category.replace(/_/g, " "));
+      if (typeof data.score === "number") bits.push(`score ${data.score}`);
+      if (data.enriched === false) bits.push("enrichment skipped");
+      const description = bits.length ? bits.join(" · ") : undefined;
+
       if (data.is_new) {
-        toast.success(`Added: ${data.business_name}`, {
-          description: data.address ?? undefined,
-        });
-        // Refresh leads list so the new venue shows up.
+        toast.success(`Added: ${data.business_name}`, { description });
         queryClient.invalidateQueries({ queryKey: ["leads"] });
       } else {
-        toast.info(`Already in your leads: ${data.business_name}`);
+        toast.info(`Already in your leads: ${data.business_name}`, { description });
+        queryClient.invalidateQueries({ queryKey: ["leads"] });
       }
     },
     onError: (err: Error) => {
