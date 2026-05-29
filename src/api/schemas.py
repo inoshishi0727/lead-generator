@@ -33,6 +33,33 @@ class ConfigResponse(BaseModel):
     search_queries: list[str]
 
 
+class ScrapeOneRequest(BaseModel):
+    """Input for single-venue scrape: a Google Maps URL, website URL, or plain name."""
+    input: str = Field(min_length=1, max_length=2000)
+
+
+class ScrapeOneResponse(BaseModel):
+    """Result of a single-venue scrape + enrich.
+
+    `is_new` is False if Fix H dedup skipped the lead write.
+    `enriched` / `scored` indicate whether those downstream steps succeeded —
+    they're best-effort, so a False here doesn't mean the whole call failed.
+    """
+    ok: bool
+    is_new: bool
+    detected_kind: str  # gmaps_url | website_url | name
+    lead_id: Optional[str] = None
+    business_name: Optional[str] = None
+    address: Optional[str] = None
+    phone: Optional[str] = None
+    website: Optional[str] = None
+    score: Optional[int] = None
+    enriched: bool = False
+    scored: bool = False
+    venue_category: Optional[str] = None
+    error: Optional[str] = None
+
+
 class LeadResponse(BaseModel):
     id: str
     business_name: str

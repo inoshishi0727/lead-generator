@@ -202,6 +202,7 @@ const VENUE_PRODUCT_MAP = {
   grocery: { products: ["Asterley Original", "Schofield's"], tone: "b2b_commercial" },
   pub: { products: ["RED", "Estate"], tone: "bartender_casual" },
   brewery_taproom: { products: ["Asterley Original", "Dispense"], tone: "bartender_casual" },
+  wholesaler: { products: ["Dispense", "Asterley Original", "Schofield's"], tone: "b2b_commercial" },
 };
 
 const TONE_CONFIG = {

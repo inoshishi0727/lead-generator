@@ -40,7 +40,7 @@ Asterley Bros products: SCHOFIELD'S (English Dry Vermouth, for Martinis), ESTATE
 Return a JSON object with ALL of these fields:
 
 {
-  "venue_category": one of ["cocktail_bar", "wine_bar", "italian_restaurant", "gastropub", "hotel_bar", "bottle_shop", "deli_farm_shop", "events_catering", "rtd", "restaurant_groups", "festival_operators", "cookery_schools", "corporate_gifting", "membership_clubs", "airlines_trains", "subscription_boxes", "film_tv_theatre", "yacht_charter", "luxury_food_retail", "grocery"],
+  "venue_category": one of ["cocktail_bar", "wine_bar", "italian_restaurant", "gastropub", "hotel_bar", "bottle_shop", "deli_farm_shop", "events_catering", "rtd", "restaurant_groups", "festival_operators", "cookery_schools", "corporate_gifting", "membership_clubs", "airlines_trains", "subscription_boxes", "film_tv_theatre", "yacht_charter", "luxury_food_retail", "grocery", "wholesaler"],
   "business_summary": "MAX 20 words. What they are + what they do.",
   "location_area": "neighbourhood name only, e.g. 'Shoreditch' or 'Peckham' or null",
   "menu_fit": one of ["strong", "moderate", "weak", "unknown"],

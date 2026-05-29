@@ -15,6 +15,7 @@ const VENUE_CATEGORIES = [
   "italian_restaurant", "hotel_bar", "restaurant_groups", "bottle_shop",
   "deli", "farm_shop", "events_catering", "festival", "cookery_school",
   "corporate_gifting", "membership_club", "airline", "luxury_retail", "grocery",
+  "wholesaler",
 ];
 
 const FIELD_LABELS: Record<string, string> = {
