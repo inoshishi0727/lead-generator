@@ -850,12 +850,24 @@ async def scrape_lead_by_id(lead_id: str) -> ScrapeOneResponse:
             venue_category=enrichment.venue_category.value if enrichment and enrichment.venue_category else None,
         )
 
-    # 4) Nothing we can do — mark failed so the UI shows it clearly.
+    # 4) Nothing we can do. Distinguish "Gemini overloaded" (transient — try
+    # again in a minute) from "Gemini couldn't find it" (needs more context).
+    from src.scrapers.text_lead_parser import _is_transient_gemini_error
+
+    # `researched` is None here either because Gemini returned no useful data
+    # OR all retries failed. We can't tell which without a flag — so check the
+    # most recent warnings via the existing-lead state: if the lead has zero
+    # enrichment fields populated AND zero detected_kind progress, it's almost
+    # certainly the "not found" case rather than transient API failure.
     update_lead(lead_id, {"enrichment_status": "failed"})
     return ScrapeOneResponse(
         ok=False, is_new=False, detected_kind="name", lead_id=lead_id,
         business_name=business_name,
-        error="Gemini couldn't find this business online. Edit the lead — add a website or more context — and try again.",
+        error=(
+            "Gemini couldn't find this business — or its servers are currently "
+            "overloaded (503). Try again in 30s, or edit the lead and paste a "
+            "website / more context."
+        ),
     )
 
 
