@@ -19,14 +19,23 @@ import structlog
 log = structlog.get_logger()
 
 
-_RESEARCH_PROMPT = """You are a sales-ops research assistant. The user just added a single lead with very little info — only a name (and possibly a hint of region or business type). Your job is to research this business online using Google Search and return a structured summary.
+_RESEARCH_PROMPT = """You are a sales-ops research assistant for Asterley Bros, a premium British drinks brand whose portfolio includes:
+- Dispense (Modern British Amaro)
+- Schofield's (botanical gin)
+- Estate (English vermouth)
+- Rosé (rosé vermouth)
+- Asterley Original (aperitif)
+- Britannica (London Fernet)
+- RED (red bitter aperitif)
+
+The user just added a single lead with very little info — usually just a name and possibly a region or business-type hint. Your job is to research this business online using Google Search and return a structured summary plus an assessment of how the Asterley portfolio fits them.
 
 Lead seed:
 {seed}
 
-Use Google Search to find what this business does, where it is, and how to contact them. Acceptable sources: their own website, Google Maps listing, LinkedIn company page, Companies House, news articles, trade press, social media, Crunchbase, Yelp. If multiple distinct businesses match the name, choose the one most likely matching the seed hint; otherwise pick the most plausible UK match.
+Use Google Search to find what this business does, where it is, how to contact them, and what they currently stock or pour. Acceptable sources: their own website, Google Maps listing, LinkedIn company page, Companies House, news articles, trade press, social media, Crunchbase, Yelp. If multiple distinct businesses match the name, choose the one most likely matching the seed hint; otherwise pick the most plausible UK match.
 
-Return ONLY a valid JSON object with these fields (use null for anything you cannot find — do NOT invent):
+Return ONLY a valid JSON object with these fields (use null for anything you cannot find — do NOT invent URLs, addresses or phone numbers):
 {{
   "business_name": "the canonical name",
   "website": "https://... or null if no real site exists",
@@ -36,9 +45,18 @@ Return ONLY a valid JSON object with these fields (use null for anything you can
   "location_postcode": "UK postcode or null",
   "venue_category": "one of [cocktail_bar, wine_bar, italian_restaurant, gastropub, hotel_bar, bottle_shop, deli_farm_shop, events_catering, rtd, restaurant_groups, festival_operators, cookery_schools, corporate_gifting, membership_clubs, airlines_trains, subscription_boxes, film_tv_theatre, yacht_charter, luxury_food_retail, grocery, wholesaler] or null",
   "business_summary": "MAX 25 words: what they do, where, who they serve",
-  "drinks_programme": "any cocktails / wines / spirits they're known for, semicolon separated, or null",
-  "notes": "concrete details: founding story, target customers, region served, news mentions — null if nothing useful",
-  "menu_fit": "one of [strong, moderate, weak, unknown] — strong = obvious cocktail/spirits-led on-trade venue or premium spirits buyer; weak = unrelated category"
+  "drinks_programme": "actual cocktails / wines / spirits they're known for, semicolon separated, or null",
+  "menu_fit": "one of [strong, moderate, weak, unknown] — strong = obvious cocktail/spirits-led on-trade venue or premium spirits buyer; weak = unrelated category",
+  "menu_fit_signals": ["short bullet-point evidence for the fit score, max 4 items"],
+  "why_asterley_fits": "MAX 20 words. Concrete reason why this account fits Asterley's portfolio. e.g. 'Stocks Italian amari like Cynar — Dispense slots straight in as a British amaro alternative.'",
+  "lead_products": ["1–3 of the Asterley portfolio names most relevant for this venue (use exact spellings above)"],
+  "tone_tier": "one of [bartender_casual, warm_professional, b2b_commercial, corporate_formal] — pick how a first email should read for this account",
+  "opening_hours_summary": "brief one-line summary like 'Mon-Sat 5pm-midnight, closed Sun' or null",
+  "price_tier": "one of [budget, mid, premium, luxury] or null",
+  "contact_name": "decision-maker name if findable (owner / GM / head bartender / buyer) — null otherwise",
+  "contact_role": "their role title or null",
+  "contact_email": "verified email if findable from website / Linkedin — null otherwise",
+  "notes": "concrete details: founding story, target customers, region served, news mentions, recent menu changes — null if nothing useful"
 }}
 
 Important: if you genuinely cannot find this business, return {{"business_name": null}} and null for everything else. Don't fabricate."""
@@ -77,13 +95,25 @@ Return ONLY a valid JSON array. Examples:
 If nothing useful found, return []."""
 
 
+_RESEARCH_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash"]
+_RETRY_DELAYS_S = [2, 5, 10]
+
+
+def _is_transient_gemini_error(exc: Exception) -> bool:
+    """503 (UNAVAILABLE), 429 (quota), 'overloaded', 'high demand' — all worth retrying."""
+    msg = str(exc).lower()
+    return any(token in msg for token in (
+        "503", "unavailable", "high demand", "overloaded",
+        "429", "quota", "rate limit", "rate_limit_exceeded",
+    ))
+
+
 def research_lead_via_gemini(seed: str) -> dict[str, Any] | None:
     """Research a single business using Gemini + Google Search grounding.
 
-    Pass any text the user has typed (name + optional context). Gemini uses
-    its Google Search tool to find the business and returns a structured
-    dict matching our enrichment schema. Returns None if the model can't
-    find anything (or Gemini is unavailable).
+    Retries on transient Gemini errors (503/429/overloaded) up to 3 attempts
+    with exponential backoff. Falls back to gemini-2.0-flash if 2.5-flash
+    stays unavailable. Returns None only after all attempts genuinely fail.
     """
     seed = (seed or "").strip()
     if not seed:
@@ -94,57 +124,89 @@ def research_lead_via_gemini(seed: str) -> dict[str, Any] | None:
         log.warning("research_no_api_key")
         return None
 
+    import time as _time
     try:
         from google import genai
         from google.genai import types
-
-        client = genai.Client(api_key=api_key)
-        prompt = _RESEARCH_PROMPT.format(seed=seed[:1000])
-
-        # Enable Google Search as a grounding tool so the model can fetch
-        # real web pages instead of relying on training data alone.
-        config = types.GenerateContentConfig(
-            tools=[types.Tool(google_search=types.GoogleSearch())],
-            temperature=0.1,
-            max_output_tokens=2048,
-        )
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt,
-            config=config,
-        )
-
-        raw = (response.text or "").strip()
-        raw = re.sub(r"```json\s*", "", raw)
-        raw = raw.replace("```", "").strip()
-
-        start = raw.find("{")
-        end = raw.rfind("}")
-        if start < 0 or end <= start:
-            log.warning("research_no_json", raw=raw[:300])
-            return None
-
-        data = json.loads(raw[start:end + 1])
-        if not isinstance(data, dict):
-            return None
-
-        # If the model returned an "I couldn't find this" payload, give up.
-        if not data.get("business_name") and not data.get("website"):
-            log.info("research_not_found", seed=seed[:80])
-            return None
-
-        # Normalise URL fields.
-        for url_field in ("website",):
-            v = data.get(url_field)
-            if v and isinstance(v, str) and not re.match(r"^https?://", v, re.IGNORECASE):
-                data[url_field] = "https://" + v.lstrip("/")
-
-        log.info("research_done", seed=seed[:80], name=data.get("business_name"),
-                 has_website=bool(data.get("website")))
-        return data
     except Exception as exc:
-        log.warning("research_failed", error=str(exc), seed=seed[:80])
+        log.warning("research_genai_import_failed", error=str(exc))
         return None
+
+    client = genai.Client(api_key=api_key)
+    prompt = _RESEARCH_PROMPT.format(seed=seed[:1000])
+    config = types.GenerateContentConfig(
+        tools=[types.Tool(google_search=types.GoogleSearch())],
+        temperature=0.1,
+        max_output_tokens=2048,
+    )
+
+    last_error: Exception | None = None
+
+    for model_name in _RESEARCH_MODELS:
+        for attempt in range(1, 4):
+            try:
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                    config=config,
+                )
+                raw = (response.text or "").strip()
+                raw = re.sub(r"```json\s*", "", raw)
+                raw = raw.replace("```", "").strip()
+
+                start = raw.find("{")
+                end = raw.rfind("}")
+                if start < 0 or end <= start:
+                    log.warning("research_no_json", model=model_name, raw=raw[:300])
+                    return None
+
+                data = json.loads(raw[start:end + 1])
+                if not isinstance(data, dict):
+                    return None
+
+                # Model honestly said "I couldn't find it" — don't retry.
+                if not data.get("business_name") and not data.get("website"):
+                    log.info("research_not_found", seed=seed[:80], model=model_name)
+                    return None
+
+                # Normalise URL fields.
+                for url_field in ("website",):
+                    v = data.get(url_field)
+                    if v and isinstance(v, str) and not re.match(r"^https?://", v, re.IGNORECASE):
+                        data[url_field] = "https://" + v.lstrip("/")
+
+                log.info(
+                    "research_done",
+                    seed=seed[:80],
+                    model=model_name,
+                    attempt=attempt,
+                    name=data.get("business_name"),
+                    has_website=bool(data.get("website")),
+                )
+                return data
+
+            except Exception as exc:
+                last_error = exc
+                transient = _is_transient_gemini_error(exc)
+                log.warning(
+                    "research_attempt_failed",
+                    model=model_name,
+                    attempt=attempt,
+                    transient=transient,
+                    error=str(exc)[:200],
+                )
+                if not transient:
+                    # Non-transient — bail and don't try the fallback model.
+                    return None
+                if attempt < 3:
+                    _time.sleep(_RETRY_DELAYS_S[attempt - 1])
+                    continue
+                # Out of retries on this model — break to try the next one.
+                break
+
+    log.warning("research_all_models_failed", seed=seed[:80],
+                last_error=str(last_error)[:200] if last_error else None)
+    return None
 
 
 def parse_leads_from_text(text: str) -> list[dict[str, Any]]:
