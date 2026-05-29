@@ -24,6 +24,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useEnrichLeads } from "@/hooks/use-leads";
+import { useScrapeLeadNow } from "@/hooks/use-scrape-leads";
 import { useLinkedInEmployees } from "@/hooks/use-linkedin-employees";
 import { updateLeadFields } from "@/lib/firestore-api";
 import { useQueryClient } from "@tanstack/react-query";
@@ -147,6 +148,7 @@ function EmployeeRow({ emp }: { emp: import("@/lib/types").LinkedInEmployee }) {
 
 export function LeadDetailDialog({ lead, onClose, onEmail }: Props) {
   const enrichMutation = useEnrichLeads();
+  const scrapeLead = useScrapeLeadNow();
   const [enrichDone, setEnrichDone] = useState(false);
   const queryClient = useQueryClient();
   const [editingMenuUrl, setEditingMenuUrl] = useState(false);
@@ -231,10 +233,16 @@ export function LeadDetailDialog({ lead, onClose, onEmail }: Props) {
   function handleReEnrich() {
     if (!lead) return;
     setEnrichDone(false);
-    enrichMutation.mutate(
-      { lead_ids: [lead.id] },
-      { onSuccess: () => setEnrichDone(true) },
-    );
+    // Route through scrape-now so we get the full Gemini+grounding pipeline
+    // synchronously (45-120s) and the dialog refreshes when it returns.
+    scrapeLead.mutate(lead.id, {
+      onSuccess: () => {
+        setEnrichDone(true);
+        // Auto-revert the "Done!" label after a short delay so the button
+        // is reusable for another retry.
+        window.setTimeout(() => setEnrichDone(false), 2500);
+      },
+    });
   }
 
   if (!lead) return null;
@@ -661,18 +669,20 @@ export function LeadDetailDialog({ lead, onClose, onEmail }: Props) {
               </Button>
             )}
             <p className="text-xs text-muted-foreground">
-              Re-enriching captures a fresh menu URL and updates the drinks programme.
+              Re-enrich runs the full research pipeline: Gemini searches the web
+              for this business, then enriches from any website / Maps listing it
+              finds. Takes 30–90 s.
             </p>
           </div>
           <Button
             size="sm"
             variant="outline"
             onClick={handleReEnrich}
-            disabled={enrichMutation.isPending}
+            disabled={scrapeLead.isPending}
             className="shrink-0 ml-3"
           >
-            <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${enrichMutation.isPending ? "animate-spin" : ""}`} />
-            {enrichMutation.isPending ? "Enriching..." : enrichDone ? "Done!" : "Re-enrich"}
+            <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${scrapeLead.isPending ? "animate-spin" : ""}`} />
+            {scrapeLead.isPending ? "Researching…" : enrichDone ? "Done!" : "Re-enrich"}
           </Button>
         </div>
       </div>
