@@ -10,10 +10,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Missing or empty 'input'" }, { status: 400 });
   }
 
-  // Single-venue scrape is synchronous on the VPS and can take 15-45s.
-  // Bump the fetch timeout well past that to avoid premature aborts.
+  // Single-venue scrape + enrich is synchronous on the VPS and can take
+  // 45-120s end-to-end (scrape 15-45s, then enrichment 30-75s). Give the
+  // fetch a generous timeout to avoid premature aborts mid-enrichment.
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 120_000);
+  const timer = setTimeout(() => ctrl.abort(), 180_000);
 
   try {
     const vpsRes = await fetch(`${VPS}/api/scrape-one`, {
@@ -28,7 +29,7 @@ export async function POST(req: NextRequest) {
     const msg = err instanceof Error ? err.message : String(err);
     const aborted = msg.toLowerCase().includes("abort");
     return NextResponse.json(
-      { error: aborted ? "Scrape timed out after 120s" : msg },
+      { error: aborted ? "Scrape timed out after 180s" : msg },
       { status: 504 },
     );
   } finally {

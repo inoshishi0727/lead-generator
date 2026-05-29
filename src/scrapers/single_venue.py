@@ -27,6 +27,9 @@ from src.db.models import Lead, LeadSource, PipelineStage
 from src.scrapers.gmaps import GoogleMapsScraper
 from src.scrapers.humanize.timing import human_pause
 
+# Enrichment + scoring are imported lazily inside the helper so the module
+# load cost is only paid for /scrape-one calls (not other API paths).
+
 log = structlog.get_logger()
 
 
@@ -36,6 +39,8 @@ class SingleVenueResult:
     lead: Optional[Lead]
     is_new: bool
     detected_kind: str  # "gmaps_url" | "website_url" | "name"
+    enriched: bool = False
+    scored: bool = False
     error: Optional[str] = None
 
 
@@ -96,9 +101,25 @@ async def scrape_single_venue(raw_input: str) -> SingleVenueResult:
             return SingleVenueResult(lead=None, is_new=False, detected_kind=kind,
                                      error="Could not extract venue details from the input.")
 
+        # Persist immediately so a downstream enrichment failure doesn't lose the
+        # base record. is_new=False on duplicate; we still try to enrich.
         is_new = save_lead_immediate(lead)
-        log.info("scrape_one_done", kind=kind, business=lead.business_name, is_new=is_new)
-        return SingleVenueResult(lead=lead, is_new=is_new, detected_kind=kind)
+        log.info("scrape_one_saved", kind=kind, business=lead.business_name, is_new=is_new)
+
+        # Enrich + score in the same request. Failures here are non-fatal — the
+        # base lead is already saved.
+        enriched, scored = await _enrich_and_score(lead, log_prefix=lead.business_name)
+        if enriched or scored:
+            try:
+                from src.db.firestore import update_lead as _update_lead
+                _update_lead(str(lead.id), lead.model_dump(mode="json", exclude_none=True))
+            except Exception as exc:
+                log.warning("scrape_one_update_failed", error=str(exc))
+
+        return SingleVenueResult(
+            lead=lead, is_new=is_new, detected_kind=kind,
+            enriched=enriched, scored=scored,
+        )
 
     except Exception as exc:
         log.exception("scrape_one_failed", kind=kind)
@@ -194,6 +215,36 @@ async def _scrape_from_website(scraper: GoogleMapsScraper, page, raw_url: str) -
 
 
 # ----------------------------------------------------- Mapping
+
+
+async def _enrich_and_score(lead: Lead, log_prefix: str = "") -> tuple[bool, bool]:
+    """Run enrichment then scoring on a single lead, in-place.
+
+    Returns (enriched, scored) flags. Both are best-effort: an exception in
+    either stage is logged and swallowed so the saved Lead survives.
+    """
+    enriched = False
+    scored = False
+
+    try:
+        from src.enrichment.engine import EnrichmentEngine
+        engine = EnrichmentEngine()
+        await engine.enrich_lead(lead)
+        enriched = True
+        log.info("scrape_one_enriched", business=log_prefix)
+    except Exception as exc:
+        log.warning("scrape_one_enrich_failed", business=log_prefix, error=str(exc))
+
+    try:
+        from src.scoring.engine import ScoringEngine
+        scoring = ScoringEngine()
+        scoring.score_leads([lead])
+        scored = True
+        log.info("scrape_one_scored", business=log_prefix, score=lead.score)
+    except Exception as exc:
+        log.warning("scrape_one_score_failed", business=log_prefix, error=str(exc))
+
+    return enriched, scored
 
 
 def _detail_to_lead(detail: dict, source: LeadSource) -> Optional[Lead]:

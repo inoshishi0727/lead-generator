@@ -30,7 +30,7 @@ export function AddSpecificVenue() {
     <form onSubmit={onSubmit} className="sp-add-venue">
       <input
         type="text"
-        placeholder="Paste a Google Maps link, website, or venue name"
+        placeholder="Add venue: paste Maps link, website, or name (auto-enriches)"
         value={value}
         onChange={(e) => setValue(e.target.value)}
         disabled={busy}
