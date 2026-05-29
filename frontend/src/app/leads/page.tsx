@@ -9,6 +9,7 @@ import { useDebounce } from "@/hooks/use-debounce";
 import { QuickAddLeadDialog } from "@/components/quick-add-lead-dialog";
 import { SearchQueryManager } from "@/components/search-query-manager";
 import { AssignLeadsDialog } from "@/components/assign-leads-dialog";
+import { BulkScrapeSelectedButton } from "@/components/bulk-scrape-selected-button";
 import { AssignRandomButton } from "@/components/assign-random-button";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -475,6 +476,10 @@ function LeadsPageInner() {
           <span className="text-sm text-muted-foreground">
             {selectedLeadIds.length} selected
           </span>
+          <BulkScrapeSelectedButton
+            leadIds={selectedLeadIds}
+            onDone={() => setSelectedLeadIds([])}
+          />
           <AssignLeadsDialog
             leadIds={selectedLeadIds}
             leads={leads}
