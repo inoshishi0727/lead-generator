@@ -281,13 +281,13 @@ export function LeadsTable({ leads, isLoading, selectable, selectedIds = [], onS
                 )}
                 <TableHead className="w-20"></TableHead>
                 <TableHead className="w-[18%]">Business</TableHead>
-                <TableHead className="w-[14%]">Category</TableHead>
-                <TableHead className="w-[7%]">Fit</TableHead>
-                <TableHead className="w-[22%]">Email</TableHead>
-                <TableHead className="w-[14%]">Postcode</TableHead>
-                <TableHead className="w-[6%] text-right">Score</TableHead>
-                {selectable && <TableHead className="w-[10%]">Assigned</TableHead>}
-                <TableHead className="w-[8%] text-center">Actions</TableHead>
+                <TableHead className="w-[12%]">Category</TableHead>
+                <TableHead className="w-[6%]">Fit</TableHead>
+                <TableHead className="w-[20%]">Email</TableHead>
+                <TableHead className="w-[12%]">Postcode</TableHead>
+                <TableHead className="w-[5%] text-right">Score</TableHead>
+                {selectable && <TableHead className="w-[9%]">Assigned</TableHead>}
+                <TableHead className="w-[120px] text-center">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -417,8 +417,8 @@ export function LeadsTable({ leads, isLoading, selectable, selectedIds = [], onS
                     </TableCell>
                   )}
                   {/* Actions */}
-                  <TableCell className="text-center">
-                    <div className="flex items-center justify-center gap-1" onClick={(e) => e.stopPropagation()}>
+                  <TableCell className="px-1 text-center">
+                    <div className="flex items-center justify-center gap-0.5" onClick={(e) => e.stopPropagation()}>
                       {pendingLeads.has(lead.id) ? (
                         <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
                       ) : (
@@ -433,7 +433,7 @@ export function LeadsTable({ leads, isLoading, selectable, selectedIds = [], onS
                             return (
                               <button
                                 disabled={isThisScraping || otherScraping}
-                                className={`rounded p-1.5 transition-colors disabled:opacity-40 ${
+                                className={`rounded p-1 transition-colors disabled:opacity-40 ${
                                   needsScrape
                                     ? "bg-indigo-500/20 text-indigo-400 hover:bg-indigo-500/30"
                                     : "text-muted-foreground hover:text-indigo-400 hover:bg-indigo-500/10"
@@ -456,7 +456,7 @@ export function LeadsTable({ leads, isLoading, selectable, selectedIds = [], onS
                             );
                           })()}
                           <button
-                            className={`rounded p-1.5 transition-colors ${
+                            className={`rounded p-1 transition-colors ${
                               lead.client_status === "approved"
                                 ? "bg-emerald-500/20 text-emerald-400"
                                 : "text-muted-foreground hover:text-emerald-400 hover:bg-emerald-500/10"
@@ -467,7 +467,7 @@ export function LeadsTable({ leads, isLoading, selectable, selectedIds = [], onS
                             <ThumbsUp className="h-3.5 w-3.5" />
                           </button>
                           <button
-                            className={`rounded p-1.5 transition-colors ${
+                            className={`rounded p-1 transition-colors ${
                               lead.client_status === "current_account" || (lead.client_status === "rejected" && lead.rejection_reason === "current_account")
                                 ? "bg-purple-500/20 text-purple-400"
                                 : "text-muted-foreground hover:text-purple-400 hover:bg-purple-500/10"
@@ -478,7 +478,7 @@ export function LeadsTable({ leads, isLoading, selectable, selectedIds = [], onS
                             <Building2 className="h-3.5 w-3.5" />
                           </button>
                           <button
-                            className={`rounded p-1.5 transition-colors ${
+                            className={`rounded p-1 transition-colors ${
                               lead.client_status === "rejected" && lead.rejection_reason !== "current_account"
                                 ? "bg-red-500/20 text-red-400"
                                 : rejectingLeadId === lead.id
