@@ -38,6 +38,27 @@ class ScrapeOneRequest(BaseModel):
     input: str = Field(min_length=1, max_length=2000)
 
 
+class QuickAddRequest(BaseModel):
+    """Add a batch of leads from pasted text without scraping or enriching.
+
+    Each input becomes one lead with business_name = normalised input. They
+    sit at stage=scraped/enrichment_status=pending until the user explicitly
+    scrapes them from the leads table.
+    """
+    inputs: list[str] = Field(min_length=1, max_length=500)
+
+
+class QuickAddResponse(BaseModel):
+    added: int
+    duplicate: int
+    lead_ids: list[str] = []
+
+
+class ScrapeSelectedRequest(BaseModel):
+    """Scrape + enrich an existing batch of leads identified by lead_id."""
+    lead_ids: list[str] = Field(min_length=1, max_length=200)
+
+
 class ScrapeBatchRequest(BaseModel):
     """Input for bulk single-venue scrape: a list of pasted strings,
     each independently detected (URL/name/website)."""

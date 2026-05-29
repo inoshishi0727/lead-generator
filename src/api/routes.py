@@ -24,12 +24,15 @@ from src.api.schemas import (
     LinkedInScrapeStatusResponse,
     RatioUpdateRequest,
     ScoreStatusResponse,
+    QuickAddRequest,
+    QuickAddResponse,
     ScrapeBatchItem,
     ScrapeBatchRequest,
     ScrapeBatchStatusResponse,
     ScrapeOneRequest,
     ScrapeOneResponse,
     ScrapeRequest,
+    ScrapeSelectedRequest,
     ScrapeStatusResponse,
 )
 from src.config.loader import load_config
@@ -606,6 +609,257 @@ def _batch_state_to_response(batch_id: str) -> ScrapeBatchStatusResponse:
             completed_at=b.get("completed_at"),
             items=items,
         )
+
+
+# ---------------------------------------------------------------------------
+# Quick-add (skeleton leads, no scrape)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/leads/quick-add", response_model=QuickAddResponse)
+async def quick_add_leads(req: QuickAddRequest) -> QuickAddResponse:
+    """Insert pasted strings as skeleton leads. No scraping or enrichment —
+    the user triggers that later from the leads table.
+
+    Each input becomes one lead with:
+      - business_name = normalised input
+      - source = manual
+      - stage = scraped (so it appears in default lead lists)
+      - enrichment_status = pending (so the UI knows it still needs work)
+    """
+    from src.db.firestore import save_lead_immediate
+    from src.db.models import EnrichmentData, Lead, LeadSource, PipelineStage
+    from src.scrapers.single_venue import _normalize_input
+
+    added = 0
+    duplicate = 0
+    lead_ids: list[str] = []
+
+    for raw in req.inputs:
+        if not isinstance(raw, str):
+            continue
+        cleaned = _normalize_input(raw)
+        if not cleaned:
+            continue
+
+        lead = Lead(
+            source=LeadSource.MANUAL,
+            business_name=cleaned,
+            stage=PipelineStage.SCRAPED,
+            enrichment=EnrichmentData(
+                enrichment_status="pending",
+            ) if hasattr(EnrichmentData, "enrichment_status") else None,
+        )
+        try:
+            is_new = save_lead_immediate(lead)
+        except Exception as exc:
+            log.warning("quick_add_save_failed", input=cleaned, error=str(exc))
+            continue
+
+        if is_new:
+            added += 1
+        else:
+            duplicate += 1
+        lead_ids.append(str(lead.id))
+
+    log.info("quick_add_done", total=len(req.inputs), added=added, duplicate=duplicate)
+    return QuickAddResponse(added=added, duplicate=duplicate, lead_ids=lead_ids)
+
+
+# ---------------------------------------------------------------------------
+# Scrape an existing skeleton lead (or re-scrape a real one) by lead_id
+# ---------------------------------------------------------------------------
+
+
+@router.post("/leads/{lead_id}/scrape-now", response_model=ScrapeOneResponse)
+async def scrape_lead_by_id(lead_id: str) -> ScrapeOneResponse:
+    """Run scrape + enrich + score against an existing lead's business_name.
+
+    Lookup the stored business_name (or website if present), feed it through
+    single_venue.scrape_single_venue, then merge the fresh data onto the
+    existing Lead doc — preserving the lead_id so external references survive.
+    """
+    from src.db.firestore import get_lead_by_id, update_lead
+    from src.scrapers.single_venue import scrape_single_venue
+
+    existing = get_lead_by_id(lead_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Lead not found")
+
+    # Prefer the stored website (best match), fall back to name.
+    seed = existing.get("website") or existing.get("business_name") or ""
+    if not seed:
+        raise HTTPException(status_code=400, detail="Lead has no website or business_name to scrape.")
+
+    result = await scrape_single_venue(seed)
+
+    if not result.lead:
+        return ScrapeOneResponse(
+            ok=False, is_new=False, detected_kind=result.detected_kind,
+            lead_id=lead_id, error=result.error or "Could not extract venue details.",
+        )
+
+    # Merge fresh fields back onto the existing doc instead of creating a duplicate.
+    updates = {
+        k: v for k, v in result.lead.model_dump(mode="json", exclude_none=True).items()
+        if k not in ("id", "scraped_at", "stage")  # preserve original id, stamp, stage progress
+    }
+    updates["enrichment_status"] = "success" if result.enriched else (
+        existing.get("enrichment_status") or "pending"
+    )
+    try:
+        update_lead(lead_id, updates)
+    except Exception as exc:
+        log.warning("scrape_now_update_failed", lead_id=lead_id, error=str(exc))
+
+    enrichment = result.lead.enrichment
+    venue_category = (
+        enrichment.venue_category.value if enrichment and enrichment.venue_category else None
+    )
+
+    return ScrapeOneResponse(
+        ok=True,
+        is_new=False,  # not a brand-new lead — we updated an existing one
+        detected_kind=result.detected_kind,
+        lead_id=lead_id,
+        business_name=result.lead.business_name,
+        address=result.lead.address,
+        phone=result.lead.phone,
+        website=result.lead.website,
+        score=result.lead.score,
+        enriched=result.enriched,
+        scored=result.scored,
+        venue_category=venue_category,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Bulk scrape selected leads (by ID)
+# ---------------------------------------------------------------------------
+
+
+def _run_lead_scrape_batch(batch_id: str, lead_ids: list[str]) -> None:
+    """Background worker: scrape+enrich each existing lead one at a time."""
+    from src.db.firestore import get_lead_by_id, update_lead
+    from src.scrapers.single_venue import scrape_single_venue
+
+    def _update(**fields):
+        with _scrape_batch_lock:
+            _scrape_batches[batch_id].update(fields)
+
+    def _set_item(idx: int, **fields):
+        with _scrape_batch_lock:
+            _scrape_batches[batch_id]["items"][idx].update(fields)
+
+    _update(status="running")
+
+    for idx, lid in enumerate(lead_ids):
+        _set_item(idx, status="running")
+        existing = None
+        try:
+            existing = get_lead_by_id(lid)
+        except Exception as exc:
+            log.warning("batch_lead_lookup_failed", lead_id=lid, error=str(exc))
+
+        if not existing:
+            _set_item(idx, status="error", error="Lead not found")
+            with _scrape_batch_lock:
+                _scrape_batches[batch_id]["failed"] += 1
+                _scrape_batches[batch_id]["completed"] += 1
+            continue
+
+        seed = existing.get("website") or existing.get("business_name") or ""
+        if not seed:
+            _set_item(idx, status="error", business_name=existing.get("business_name"),
+                      error="Lead has no website or business_name to scrape.")
+            with _scrape_batch_lock:
+                _scrape_batches[batch_id]["failed"] += 1
+                _scrape_batches[batch_id]["completed"] += 1
+            continue
+
+        try:
+            result = asyncio.run(scrape_single_venue(seed))
+        except Exception as exc:
+            log.exception("batch_lead_scrape_failed", lead_id=lid)
+            _set_item(idx, status="error", business_name=existing.get("business_name"), error=str(exc))
+            with _scrape_batch_lock:
+                _scrape_batches[batch_id]["failed"] += 1
+                _scrape_batches[batch_id]["completed"] += 1
+            continue
+
+        if not result.lead:
+            _set_item(idx, status="error",
+                      business_name=existing.get("business_name"),
+                      detected_kind=result.detected_kind,
+                      error=result.error or "Could not extract venue details.")
+            with _scrape_batch_lock:
+                _scrape_batches[batch_id]["failed"] += 1
+                _scrape_batches[batch_id]["completed"] += 1
+            continue
+
+        # Merge onto existing doc (preserve lead_id).
+        try:
+            updates = {
+                k: v for k, v in result.lead.model_dump(mode="json", exclude_none=True).items()
+                if k not in ("id", "scraped_at", "stage")
+            }
+            updates["enrichment_status"] = "success" if result.enriched else (
+                existing.get("enrichment_status") or "pending"
+            )
+            update_lead(lid, updates)
+        except Exception as exc:
+            log.warning("batch_lead_update_failed", lead_id=lid, error=str(exc))
+
+        _set_item(idx, status="added",
+                  business_name=result.lead.business_name,
+                  detected_kind=result.detected_kind,
+                  lead_id=lid)
+        with _scrape_batch_lock:
+            _scrape_batches[batch_id]["added"] += 1
+            _scrape_batches[batch_id]["completed"] += 1
+
+    _update(status="completed", completed_at=datetime.now().isoformat())
+    log.info("batch_lead_scrape_done", batch_id=batch_id, total=len(lead_ids))
+
+
+@router.post("/leads/scrape-selected", response_model=ScrapeBatchStatusResponse)
+async def scrape_selected_leads(req: ScrapeSelectedRequest) -> ScrapeBatchStatusResponse:
+    """Kick off a serial bulk re-scrape of existing leads by lead_id.
+
+    Reuses the same in-memory batch tracker the /scrape-batch endpoint uses.
+    """
+    ids = [s for s in req.lead_ids if isinstance(s, str) and s.strip()]
+    if not ids:
+        raise HTTPException(status_code=400, detail="No lead_ids supplied.")
+
+    batch_id = str(uuid4())
+    started_at = datetime.now().isoformat()
+
+    with _scrape_batch_lock:
+        _scrape_batches[batch_id] = {
+            "batch_id": batch_id,
+            "status": "pending",
+            "total": len(ids),
+            "completed": 0,
+            "added": 0,
+            "duplicate": 0,
+            "failed": 0,
+            "started_at": started_at,
+            "completed_at": None,
+            "items": [
+                {"input": lid, "status": "pending", "business_name": None,
+                 "detected_kind": None, "lead_id": lid, "error": None}
+                for lid in ids
+            ],
+        }
+
+    threading.Thread(
+        target=_run_lead_scrape_batch,
+        args=(batch_id, ids),
+        daemon=True,
+    ).start()
+
+    return _batch_state_to_response(batch_id)
 
 
 def _send_linkedin_alert(subject: str, body: str) -> None:
