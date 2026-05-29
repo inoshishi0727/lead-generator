@@ -14,6 +14,7 @@ import { OutreachPlan } from "@/components/outreach-plan";
 import { LeadDetailDialog } from "@/components/lead-detail-dialog";
 import { ActionableLeadCard } from "@/components/actionable-lead-card";
 import { AddSpecificVenue } from "@/components/add-specific-venue";
+import { BulkAddVenues } from "@/components/bulk-add-venues";
 import { useScrape } from "@/hooks/use-scrape";
 import { useLeads } from "@/hooks/use-leads";
 import { useMessages, useGenerateDrafts } from "@/hooks/use-outreach";
@@ -80,6 +81,7 @@ export default function DashboardPage() {
   const [uploadedQueries, setUploadedQueries] = useState<Record<string, string[]> | null>(null);
   const [scrapeProgress, setScrapeProgress] = useState(0);
   const [isScraping, setIsScraping] = useState(false);
+  const [bulkAddOpen, setBulkAddOpen] = useState(false);
 
   const isRunning = status?.status === "pending" || status?.status === "running";
 
@@ -296,6 +298,17 @@ export default function DashboardPage() {
             </Link>
           )}
           {isAdmin && <AddSpecificVenue />}
+          {isAdmin && (
+            <button
+              type="button"
+              className="sp-btn"
+              onClick={() => setBulkAddOpen(true)}
+              title="Add a list of venues at once"
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+              Bulk add
+            </button>
+          )}
           {isAdmin && (
             <button
               className={`sp-btn${isRunning || isScraping ? "" : " primary"}`}
@@ -641,6 +654,8 @@ export default function DashboardPage() {
         lead={selectedLead}
         onClose={() => setSelectedLead(null)}
       />
+
+      <BulkAddVenues open={bulkAddOpen} onClose={() => setBulkAddOpen(false)} />
     </div>
   );
 }
