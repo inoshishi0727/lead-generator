@@ -50,14 +50,41 @@ class SingleVenueResult:
 _GMAPS_HOSTS = {"google.com", "www.google.com", "maps.google.com", "goo.gl", "maps.app.goo.gl"}
 
 
+_LIST_PREFIX_RE = re.compile(r"^\s*(?:\d+\s*[\.\):]\s*|[\-\*•]\s+|\*\*)+\s*")
+
+
+def _normalize_input(raw: str) -> str:
+    """Strip list-style prefixes a user might paste from notes / emails.
+
+    Examples that should all map to "Best Wines (London)":
+      "3. Best Wines (London)"
+      "- Best Wines (London)"
+      "  • Best Wines (London) "
+      "**Best Wines (London)**"
+    """
+    s = raw.strip()
+    # Strip leading "3. ", "- ", "• ", "**" etc.
+    s = _LIST_PREFIX_RE.sub("", s)
+    # Markdown bold markers are never part of a venue name; drop them everywhere.
+    s = s.replace("**", "")
+    # Drop a stray leading "." like ". BWH Drinks"
+    s = re.sub(r"^\.\s+", "", s).strip()
+    return s
+
+
 def _detect_input_kind(raw: str) -> str:
     """Return one of: gmaps_url | website_url | name."""
     s = raw.strip()
     if not s:
         return "name"
 
-    # Bare URL or "https://..." form
-    parsed = urlparse(s if "://" in s else f"https://{s}")
+    # Must look enough like a URL to bother parsing.
+    has_scheme = "://" in s
+    looks_like_host = bool(re.match(r"^[a-z0-9][a-z0-9\-]*(?:\.[a-z0-9][a-z0-9\-]*)+(?:/|$)", s, re.IGNORECASE))
+    if not has_scheme and not looks_like_host:
+        return "name"
+
+    parsed = urlparse(s if has_scheme else f"https://{s}")
     host = (parsed.netloc or "").lower()
     path = parsed.path or ""
 
@@ -86,14 +113,22 @@ def _is_unsupported_gmaps_path(url: str) -> Optional[str]:
 
 
 def _shorten_name_for_search(raw: str) -> str:
-    """Trim a long pasted address down to a searchable venue name.
+    """Clean and trim a venue name for Google Maps search.
 
-    Google Maps handles "Severn Valley Railway" fine; "Severn Valley
-    Railway - Kidderminster station, Station Dr, ... DY10 1QX, United Kingdom"
-    chokes the typed search. Keep the first comma-delimited chunk and cap length.
+    - First chops at comma so long pasted addresses don't get typed in full.
+    - Removes parenthesised disambiguation that often confuses Google
+      Maps's search ranking ("Best Wines (London)" → "Best Wines London").
+    - Caps length at 80 chars.
     """
     first = raw.split(",")[0].strip()
-    return first[:80] if len(first) > 80 else first
+    # Pull parenthetical content out and append as plain words so we don't
+    # lose the locality hint, e.g. "Best Wines (London)" → "Best Wines London"
+    paren_bits = re.findall(r"\(([^)]+)\)", first)
+    cleaned = re.sub(r"\s*\([^)]*\)", "", first).strip()
+    if paren_bits:
+        cleaned = (cleaned + " " + " ".join(paren_bits)).strip()
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return cleaned[:80] if len(cleaned) > 80 else cleaned
 
 
 # ----------------------------------------------------- Scrape one
@@ -104,12 +139,17 @@ async def scrape_single_venue(raw_input: str) -> SingleVenueResult:
 
     Keeps a single Camoufox process for the run; closes it before return.
     """
-    kind = _detect_input_kind(raw_input)
-    log.info("scrape_one_start", kind=kind, input=raw_input[:200])
+    cleaned_input = _normalize_input(raw_input)
+    if not cleaned_input:
+        return SingleVenueResult(lead=None, is_new=False, detected_kind="name",
+                                 error="Input is empty after cleanup.")
+
+    kind = _detect_input_kind(cleaned_input)
+    log.info("scrape_one_start", kind=kind, raw=raw_input[:120], cleaned=cleaned_input[:120])
 
     # Reject Google Maps URLs we can't extract from before launching a browser.
     if kind == "gmaps_url":
-        unsupported = _is_unsupported_gmaps_path(raw_input)
+        unsupported = _is_unsupported_gmaps_path(cleaned_input)
         if unsupported:
             return SingleVenueResult(lead=None, is_new=False, detected_kind=kind, error=unsupported)
 
@@ -120,11 +160,11 @@ async def scrape_single_venue(raw_input: str) -> SingleVenueResult:
         page = await ctx.new_page()
 
         if kind == "gmaps_url":
-            lead = await _scrape_from_gmaps_url(scraper, page, raw_input)
+            lead = await _scrape_from_gmaps_url(scraper, page, cleaned_input)
         elif kind == "name":
-            lead = await _scrape_from_name(scraper, page, raw_input)
+            lead = await _scrape_from_name(scraper, page, cleaned_input)
         else:
-            lead = await _scrape_from_website(scraper, page, raw_input)
+            lead = await _scrape_from_website(scraper, page, cleaned_input)
 
         if not lead:
             return SingleVenueResult(lead=None, is_new=False, detected_kind=kind,
