@@ -92,7 +92,7 @@ Return a JSON object with ALL of these fields:
 "gastropub", "hotel_bar", "bottle_shop", "deli_farm_shop", "events_catering", \
 "rtd", "restaurant_groups", "festival_operators", "cookery_schools", \
 "corporate_gifting", "membership_clubs", "airlines_trains", "subscription_boxes", \
-"film_tv_theatre", "yacht_charter", "luxury_food_retail", "grocery"],
+"film_tv_theatre", "yacht_charter", "luxury_food_retail", "grocery", "wholesaler"],
   "business_summary": "MAX 20 words. What they are + what they do. e.g. 'Premium cocktail bar in Shoreditch specialising in classic serves and seasonal menus.'",
   "location_area": "neighbourhood name only, e.g. 'Shoreditch' or 'Peckham' or null",
   "menu_fit": one of ["strong", "moderate", "weak", "unknown"],
