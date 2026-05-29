@@ -326,6 +326,32 @@
   justify-content: flex-end;
 }
 
+/* Single-venue add input (next to "Run venue scrape") */
+.sp-add-venue {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.sp-add-venue-input {
+  width: 280px;
+  max-width: 100%;
+  padding: 6px 10px;
+  font-size: 13px;
+  color: var(--sp-ink-1);
+  background: var(--sp-bg-paper);
+  border: 1px solid var(--sp-line);
+  border-radius: 6px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.sp-add-venue-input:focus {
+  border-color: var(--sp-ink-3);
+}
+.sp-add-venue-input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 /* ---------- Filter pills ---------- */
 .sp-filter-bar {
   display: flex;

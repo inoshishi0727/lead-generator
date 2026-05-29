@@ -13,6 +13,7 @@ import { UpcomingScrapeReview } from "@/components/upcoming-scrape-review";
 import { OutreachPlan } from "@/components/outreach-plan";
 import { LeadDetailDialog } from "@/components/lead-detail-dialog";
 import { ActionableLeadCard } from "@/components/actionable-lead-card";
+import { AddSpecificVenue } from "@/components/add-specific-venue";
 import { useScrape } from "@/hooks/use-scrape";
 import { useLeads } from "@/hooks/use-leads";
 import { useMessages, useGenerateDrafts } from "@/hooks/use-outreach";
@@ -294,6 +295,7 @@ export default function DashboardPage() {
               </button>
             </Link>
           )}
+          {isAdmin && <AddSpecificVenue />}
           {isAdmin && (
             <button
               className={`sp-btn${isRunning || isScraping ? "" : " primary"}`}

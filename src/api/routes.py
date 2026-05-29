@@ -24,6 +24,8 @@ from src.api.schemas import (
     LinkedInScrapeStatusResponse,
     RatioUpdateRequest,
     ScoreStatusResponse,
+    ScrapeOneRequest,
+    ScrapeOneResponse,
     ScrapeRequest,
     ScrapeStatusResponse,
 )
@@ -421,6 +423,48 @@ async def scrape_status(run_id: str) -> ScrapeStatusResponse:
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
     return ScrapeStatusResponse(run_id=run_id, **run)
+
+
+@router.post("/scrape-one", response_model=ScrapeOneResponse)
+async def scrape_one(req: ScrapeOneRequest) -> ScrapeOneResponse:
+    """Scrape a single venue from a user-supplied input (gmaps URL / website / name).
+
+    Synchronous: returns when the lead is extracted and saved (~15-45 s).
+    Reuses the same dedup_claims atomic save as bulk scrapes.
+    """
+    from src.scrapers.single_venue import scrape_single_venue
+
+    result = await scrape_single_venue(req.input)
+
+    if not result.lead:
+        return ScrapeOneResponse(
+            ok=False,
+            is_new=False,
+            detected_kind=result.detected_kind,
+            error=result.error or "Could not extract venue details.",
+        )
+
+    enrichment = result.lead.enrichment
+    venue_category = (
+        enrichment.venue_category.value
+        if enrichment and enrichment.venue_category
+        else None
+    )
+
+    return ScrapeOneResponse(
+        ok=True,
+        is_new=result.is_new,
+        detected_kind=result.detected_kind,
+        lead_id=str(result.lead.id),
+        business_name=result.lead.business_name,
+        address=result.lead.address,
+        phone=result.lead.phone,
+        website=result.lead.website,
+        score=result.lead.score,
+        enriched=result.enriched,
+        scored=result.scored,
+        venue_category=venue_category,
+    )
 
 
 def _send_linkedin_alert(subject: str, body: str) -> None:
