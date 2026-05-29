@@ -23,7 +23,9 @@ import {
   ThumbsDown,
   Loader2,
   Eye,
+  Zap,
 } from "lucide-react";
+import { useScrapeLeadNow } from "@/hooks/use-scrape-leads";
 import { Badge } from "@/components/ui/badge";
 import { LeadDetailDialog } from "@/components/lead-detail-dialog";
 import { updateLeadFields } from "@/lib/firestore-api";
@@ -67,6 +69,8 @@ const rejectionColors: Record<string, string> = {
 
 export function LeadsTable({ leads, isLoading, selectable, selectedIds = [], onSelectionChange, openLeadId, onLeadOpened }: Props) {
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
+  const scrapeLeadNow = useScrapeLeadNow();
+  const [scrapingLeadId, setScrapingLeadId] = useState<string | null>(null);
 
   React.useEffect(() => {
     if (openLeadId && leads.length > 0) {
@@ -419,6 +423,38 @@ export function LeadsTable({ leads, isLoading, selectable, selectedIds = [], onS
                         <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
                       ) : (
                         <>
+                          {/* Scrape-now button: prominent for unscraped manual leads, subtle otherwise */}
+                          {(() => {
+                            const needsScrape =
+                              lead.source === "manual" &&
+                              lead.enrichment_status !== "success";
+                            const isThisScraping = scrapingLeadId === lead.id;
+                            const otherScraping = !!scrapingLeadId && scrapingLeadId !== lead.id;
+                            return (
+                              <button
+                                disabled={isThisScraping || otherScraping}
+                                className={`rounded p-1.5 transition-colors disabled:opacity-40 ${
+                                  needsScrape
+                                    ? "bg-indigo-500/20 text-indigo-400 hover:bg-indigo-500/30"
+                                    : "text-muted-foreground hover:text-indigo-400 hover:bg-indigo-500/10"
+                                }`}
+                                title={needsScrape ? "Scrape this lead" : "Re-scrape this lead"}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setScrapingLeadId(lead.id);
+                                  scrapeLeadNow.mutate(lead.id, {
+                                    onSettled: () => setScrapingLeadId(null),
+                                  });
+                                }}
+                              >
+                                {isThisScraping ? (
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                ) : (
+                                  <Zap className="h-3.5 w-3.5" />
+                                )}
+                              </button>
+                            );
+                          })()}
                           <button
                             className={`rounded p-1.5 transition-colors ${
                               lead.client_status === "approved"
