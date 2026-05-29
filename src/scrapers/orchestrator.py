@@ -11,6 +11,7 @@ from src.config.loader import AppConfig, load_config, load_search_queries
 from src.db.dedup import SharedDedupSet, get_all_dedup_keys
 from src.db.exclusions import ExclusionSet, load_exclusion_set
 from src.db.models import Lead
+from src.scrapers.base import TransientScraperError
 from src.scrapers.bing import BingSearchScraper
 from src.scrapers.directory import DirectoryScraper
 from src.scrapers.gmaps import GoogleMapsScraper
@@ -19,6 +20,65 @@ from src.scrapers.industry import IndustrySiteScraper
 from src.scrapers.instagram import InstagramScraper
 
 log = structlog.get_logger()
+
+
+# Patterns in exception messages that indicate a worth-retrying failure.
+# A more structured fix (custom exception classes everywhere) is tracked
+# separately; this pattern match closes the gap for now without rewriting
+# every scraper's error handling.
+_TRANSIENT_MARKERS = (
+    "timeout",
+    "navigation failed",
+    "connection reset",
+    "connection aborted",
+    "temporarily unavailable",
+    "net::err_",
+    "playwright._impl._errors.timeouterror",
+)
+
+
+def _is_transient(exc: BaseException) -> bool:
+    """Return True if the exception looks like a retryable transient glitch."""
+    if isinstance(exc, TransientScraperError):
+        return True
+    msg = str(exc).lower()
+    return any(marker in msg for marker in _TRANSIENT_MARKERS)
+
+
+async def _run_worker_with_retry(label: str, worker_fn, *, max_attempts: int = 3) -> "list[Lead]":
+    """Invoke a no-arg coroutine factory with retries on transient errors.
+
+    `worker_fn` is a parameter-less callable that returns the coroutine to
+    await on each attempt (so retries get a fresh scraper instance / browser).
+    Permanent errors raise immediately.
+    """
+    last_exc: BaseException | None = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return await worker_fn()
+        except Exception as exc:
+            last_exc = exc
+            if not _is_transient(exc) or attempt == max_attempts:
+                log.error(
+                    "worker_retry_giving_up",
+                    label=label,
+                    attempts=attempt,
+                    transient=_is_transient(exc),
+                    error=str(exc),
+                )
+                raise
+            backoff_s = 5 * (2 ** (attempt - 1))  # 5s, 10s, 20s
+            log.warning(
+                "worker_retry",
+                label=label,
+                attempt=attempt,
+                next_delay_s=backoff_s,
+                error=str(exc),
+            )
+            await asyncio.sleep(backoff_s)
+    if last_exc:
+        raise last_exc
+    return []
 
 
 class ParallelScrapeOrchestrator:
@@ -82,29 +142,24 @@ class ParallelScrapeOrchestrator:
         async def _worker(query: str) -> list[Lead]:
             async with semaphore:
                 log.info("gmaps_worker_start", query=query)
-                worker_config = self.config.model_copy(deep=True)
-                worker_config.scraping.google_maps.search_queries = [query]
 
-                scraper = GoogleMapsScraper(
-                    config=worker_config,
-                    on_progress=self._on_progress,
-                    shared_dedup=shared_dedup,
-                    skip_gmaps_types=self._skip_gmaps_types,
-                )
-                try:
-                    leads = await scraper.run()
-                    log.info(
-                        "gmaps_worker_done",
-                        query=query,
-                        leads=len(leads),
+                async def _attempt() -> list[Lead]:
+                    worker_config = self.config.model_copy(deep=True)
+                    worker_config.scraping.google_maps.search_queries = [query]
+                    scraper = GoogleMapsScraper(
+                        config=worker_config,
+                        on_progress=self._on_progress,
+                        shared_dedup=shared_dedup,
+                        skip_gmaps_types=self._skip_gmaps_types,
                     )
+                    return await scraper.run()
+
+                try:
+                    leads = await _run_worker_with_retry(f"gmaps:{query}", _attempt)
+                    log.info("gmaps_worker_done", query=query, leads=len(leads))
                     return leads
                 except Exception as exc:
-                    log.error(
-                        "gmaps_worker_failed",
-                        query=query,
-                        error=str(exc),
-                    )
+                    log.error("gmaps_worker_failed", query=query, error=str(exc))
                     raise
 
         tasks = [_worker(q) for q in queries]
@@ -151,28 +206,23 @@ class ParallelScrapeOrchestrator:
         async def _worker(query: str) -> list[Lead]:
             async with semaphore:
                 log.info("gsearch_worker_start", query=query)
-                worker_config = self.config.model_copy(deep=True)
-                worker_config.scraping.google_search.search_queries = [query]
 
-                scraper = GoogleSearchScraper(
-                    config=worker_config,
-                    on_progress=self._on_progress,
-                    shared_dedup=shared_dedup,
-                )
-                try:
-                    leads = await scraper.run()
-                    log.info(
-                        "gsearch_worker_done",
-                        query=query,
-                        leads=len(leads),
+                async def _attempt() -> list[Lead]:
+                    worker_config = self.config.model_copy(deep=True)
+                    worker_config.scraping.google_search.search_queries = [query]
+                    scraper = GoogleSearchScraper(
+                        config=worker_config,
+                        on_progress=self._on_progress,
+                        shared_dedup=shared_dedup,
                     )
+                    return await scraper.run()
+
+                try:
+                    leads = await _run_worker_with_retry(f"gsearch:{query}", _attempt)
+                    log.info("gsearch_worker_done", query=query, leads=len(leads))
                     return leads
                 except Exception as exc:
-                    log.error(
-                        "gsearch_worker_failed",
-                        query=query,
-                        error=str(exc),
-                    )
+                    log.error("gsearch_worker_failed", query=query, error=str(exc))
                     raise
 
         tasks = [_worker(q) for q in queries]
@@ -218,16 +268,19 @@ class ParallelScrapeOrchestrator:
         async def _worker(query: str) -> list[Lead]:
             async with semaphore:
                 log.info("bing_worker_start", query=query)
-                worker_config = self.config.model_copy(deep=True)
-                worker_config.scraping.bing_search.search_queries = [query]
 
-                scraper = BingSearchScraper(
-                    config=worker_config,
-                    on_progress=self._on_progress,
-                    shared_dedup=shared_dedup,
-                )
+                async def _attempt() -> list[Lead]:
+                    worker_config = self.config.model_copy(deep=True)
+                    worker_config.scraping.bing_search.search_queries = [query]
+                    scraper = BingSearchScraper(
+                        config=worker_config,
+                        on_progress=self._on_progress,
+                        shared_dedup=shared_dedup,
+                    )
+                    return await scraper.run()
+
                 try:
-                    leads = await scraper.run()
+                    leads = await _run_worker_with_retry(f"bing:{query}", _attempt)
                     log.info("bing_worker_done", query=query, leads=len(leads))
                     return leads
                 except Exception as exc:
@@ -276,16 +329,19 @@ class ParallelScrapeOrchestrator:
         async def _worker(url: str) -> list[Lead]:
             async with semaphore:
                 log.info("directory_worker_start", url=url)
-                worker_config = self.config.model_copy(deep=True)
-                worker_config.scraping.directory.category_urls = [url]
 
-                scraper = DirectoryScraper(
-                    config=worker_config,
-                    on_progress=self._on_progress,
-                    shared_dedup=shared_dedup,
-                )
+                async def _attempt() -> list[Lead]:
+                    worker_config = self.config.model_copy(deep=True)
+                    worker_config.scraping.directory.category_urls = [url]
+                    scraper = DirectoryScraper(
+                        config=worker_config,
+                        on_progress=self._on_progress,
+                        shared_dedup=shared_dedup,
+                    )
+                    return await scraper.run()
+
                 try:
-                    leads = await scraper.run()
+                    leads = await _run_worker_with_retry(f"directory:{url}", _attempt)
                     log.info("directory_worker_done", url=url, leads=len(leads))
                     return leads
                 except Exception as exc:
@@ -328,16 +384,19 @@ class ParallelScrapeOrchestrator:
         async def _worker(site_entry) -> list[Lead]:
             async with semaphore:
                 log.info("industry_worker_start", site=site_entry.name)
-                worker_config = self.config.model_copy(deep=True)
-                worker_config.scraping.industry_sites.sites = [site_entry]
 
-                scraper = IndustrySiteScraper(
-                    config=worker_config,
-                    on_progress=self._on_progress,
-                    shared_dedup=shared_dedup,
-                )
+                async def _attempt() -> list[Lead]:
+                    worker_config = self.config.model_copy(deep=True)
+                    worker_config.scraping.industry_sites.sites = [site_entry]
+                    scraper = IndustrySiteScraper(
+                        config=worker_config,
+                        on_progress=self._on_progress,
+                        shared_dedup=shared_dedup,
+                    )
+                    return await scraper.run()
+
                 try:
-                    leads = await scraper.run()
+                    leads = await _run_worker_with_retry(f"industry:{site_entry.name}", _attempt)
                     log.info("industry_worker_done", site=site_entry.name, leads=len(leads))
                     return leads
                 except Exception as exc:
@@ -381,27 +440,22 @@ class ParallelScrapeOrchestrator:
         async def _worker(hashtag: str) -> list[Lead]:
             async with semaphore:
                 log.info("ig_worker_start", hashtag=hashtag)
-                worker_config = self.config.model_copy(deep=True)
-                worker_config.scraping.instagram.hashtags = [hashtag]
 
-                scraper = InstagramScraper(
-                    config=worker_config,
-                    shared_dedup=shared_dedup,
-                )
-                try:
-                    leads = await scraper.run()
-                    log.info(
-                        "ig_worker_done",
-                        hashtag=hashtag,
-                        leads=len(leads),
+                async def _attempt() -> list[Lead]:
+                    worker_config = self.config.model_copy(deep=True)
+                    worker_config.scraping.instagram.hashtags = [hashtag]
+                    scraper = InstagramScraper(
+                        config=worker_config,
+                        shared_dedup=shared_dedup,
                     )
+                    return await scraper.run()
+
+                try:
+                    leads = await _run_worker_with_retry(f"instagram:{hashtag}", _attempt)
+                    log.info("ig_worker_done", hashtag=hashtag, leads=len(leads))
                     return leads
                 except Exception as exc:
-                    log.error(
-                        "ig_worker_failed",
-                        hashtag=hashtag,
-                        error=str(exc),
-                    )
+                    log.error("ig_worker_failed", hashtag=hashtag, error=str(exc))
                     raise
 
         tasks = [_worker(h) for h in hashtags]

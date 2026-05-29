@@ -34,6 +34,15 @@ class ScraperError(Exception):
     """Base exception for scraper errors."""
 
 
+class TransientScraperError(ScraperError):
+    """Retryable scraper failure — network glitches, slow pages, transient blocks.
+
+    Workers that raise this are retried by the orchestrator. Permanent errors
+    (auth expired, hard ban, config invalid) should raise ScraperError or a
+    more specific subclass instead so the orchestrator skips them.
+    """
+
+
 class BaseScraper(abc.ABC):
     """Abstract base class for all scrapers."""
 
