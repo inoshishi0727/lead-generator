@@ -26,6 +26,8 @@ import { Button } from "@/components/ui/button";
 import { useEnrichLeads } from "@/hooks/use-leads";
 import { useLinkedInEmployees } from "@/hooks/use-linkedin-employees";
 import { updateLeadFields } from "@/lib/firestore-api";
+import { useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import type { Lead } from "@/lib/types";
 
 interface Props {
@@ -146,12 +148,16 @@ function EmployeeRow({ emp }: { emp: import("@/lib/types").LinkedInEmployee }) {
 export function LeadDetailDialog({ lead, onClose, onEmail }: Props) {
   const enrichMutation = useEnrichLeads();
   const [enrichDone, setEnrichDone] = useState(false);
+  const queryClient = useQueryClient();
   const [editingMenuUrl, setEditingMenuUrl] = useState(false);
   const [menuUrlDraft, setMenuUrlDraft] = useState("");
   const [savingMenuUrl, setSavingMenuUrl] = useState(false);
   const [editingWebsite, setEditingWebsite] = useState(false);
   const [websiteDraft, setWebsiteDraft] = useState("");
   const [savingWebsite, setSavingWebsite] = useState(false);
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState("");
+  const [savingName, setSavingName] = useState(false);
 
   async function handleSaveMenuUrl() {
     if (!lead) return;
@@ -159,6 +165,12 @@ export function LeadDetailDialog({ lead, onClose, onEmail }: Props) {
     try {
       await updateLeadFields(lead.id, { menu_url: menuUrlDraft.trim() || null });
       setEditingMenuUrl(false);
+      await queryClient.invalidateQueries({ queryKey: ["leads"] });
+      toast.success("Menu URL saved");
+    } catch (err) {
+      toast.error("Couldn't save menu URL", {
+        description: err instanceof Error ? err.message : String(err),
+      });
     } finally {
       setSavingMenuUrl(false);
     }
@@ -172,8 +184,39 @@ export function LeadDetailDialog({ lead, onClose, onEmail }: Props) {
       if (url && !/^https?:\/\//i.test(url)) url = "https://" + url;
       await updateLeadFields(lead.id, { website: url || null });
       setEditingWebsite(false);
+      await queryClient.invalidateQueries({ queryKey: ["leads"] });
+      toast.success(url ? "Website saved" : "Website cleared");
+    } catch (err) {
+      toast.error("Couldn't save website", {
+        description: err instanceof Error ? err.message : String(err),
+      });
     } finally {
       setSavingWebsite(false);
+    }
+  }
+
+  async function handleSaveName() {
+    if (!lead) return;
+    const trimmed = nameDraft.trim();
+    if (!trimmed) {
+      toast.error("Business name can't be empty");
+      return;
+    }
+    setSavingName(true);
+    try {
+      await updateLeadFields(lead.id, {
+        business_name: trimmed,
+        business_name_lower: trimmed.toLowerCase(),
+      });
+      setEditingName(false);
+      await queryClient.invalidateQueries({ queryKey: ["leads"] });
+      toast.success("Business name saved");
+    } catch (err) {
+      toast.error("Couldn't save name", {
+        description: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setSavingName(false);
     }
   }
 
@@ -211,7 +254,45 @@ export function LeadDetailDialog({ lead, onClose, onEmail }: Props) {
 
         {/* Header */}
         <div className="p-5 pb-4">
-          <h2 className="pr-8 text-lg font-semibold">{lead.business_name}</h2>
+          {editingName ? (
+            <div className="flex items-center gap-1.5 pr-8">
+              <input
+                autoFocus
+                type="text"
+                value={nameDraft}
+                onChange={(e) => setNameDraft(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") handleSaveName(); if (e.key === "Escape") setEditingName(false); }}
+                placeholder="Business name"
+                className="flex-1 min-w-0 rounded border border-input bg-background px-2 py-1 text-lg font-semibold"
+              />
+              <button
+                onClick={handleSaveName}
+                disabled={savingName}
+                className="text-emerald-400 hover:text-emerald-300 transition-colors"
+                title="Save"
+              >
+                <Check className="h-4 w-4" />
+              </button>
+              <button
+                onClick={() => setEditingName(false)}
+                className="text-muted-foreground hover:text-foreground transition-colors"
+                title="Cancel"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          ) : (
+            <h2 className="pr-8 text-lg font-semibold flex items-center gap-1.5 group">
+              <span>{lead.business_name}</span>
+              <button
+                onClick={() => { setNameDraft(lead.business_name ?? ""); setEditingName(true); }}
+                className="text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity hover:text-foreground"
+                title="Rename"
+              >
+                <Pencil className="h-3.5 w-3.5" />
+              </button>
+            </h2>
+          )}
           <div className="mt-2 flex flex-wrap gap-1.5">
             {lead.venue_category && (
               <Badge variant="secondary" className="text-[11px] capitalize">
