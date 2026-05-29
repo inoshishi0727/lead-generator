@@ -8,7 +8,7 @@ exclusion:
 scraping:
   google_maps:
     target_count: 60
-    max_parallel_browsers: 3
+    max_parallel_browsers: 1
     search_queries:
       # Core bar/drinks categories
       - "cocktail bars UK"
@@ -40,7 +40,7 @@ scraping:
 
   google_search:
     results_per_query: 20
-    max_parallel_browsers: 2
+    max_parallel_browsers: 1
     headless: false
     search_queries:
       - "UK spirits subscription box companies"
@@ -67,7 +67,7 @@ scraping:
 
   bing_search:
     results_per_query: 20
-    max_parallel_browsers: 2
+    max_parallel_browsers: 1
     headless: false
     search_queries:
       - "UK spirits subscription box companies"
@@ -94,7 +94,7 @@ scraping:
 
   directory:
     max_results_per_category: 50
-    max_parallel_browsers: 2
+    max_parallel_browsers: 1
     headless: false
     category_urls:
       # Yell.com — UK business directory
@@ -133,7 +133,7 @@ scraping:
 
   instagram:
     target_count: 40
-    max_parallel_browsers: 2
+    max_parallel_browsers: 1
     hashtags:
       - "ukcocktails"
       - "ukbars"
