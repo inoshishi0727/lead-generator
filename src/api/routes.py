@@ -751,26 +751,65 @@ async def scrape_lead_by_id(lead_id: str) -> ScrapeOneResponse:
                 venue_category=enrichment.venue_category.value if enrichment and enrichment.venue_category else None,
             )
 
-    # 2) No website yet — ask Gemini to research the name (+ any notes).
+    # 2) No website yet — use Gemini with Google Search grounding to
+    # research the business from name + any notes. This is the same trick
+    # email ingestion uses for low-info leads: let the model find a Maps
+    # listing, LinkedIn page, news mention, anything — not just websites.
     if not website and business_name:
-        research_text = business_name + (("\n\n" + notes) if notes else "")
-        parsed = parse_leads_from_text(research_text)
-        if parsed:
-            # Take the entry that best matches the existing name, else the first.
-            target = None
-            for p in parsed:
-                if (p.get("business_name") or "").lower().strip() == business_name.lower():
-                    target = p
-                    break
-            target = target or parsed[0]
-            if target.get("website"):
-                website = target["website"]
-                update_lead(lead_id, {
-                    "website": website,
-                    "phone": target.get("phone") or existing.get("phone"),
-                    "address": target.get("address") or existing.get("address"),
-                })
-                existing["website"] = website
+        from src.scrapers.text_lead_parser import research_lead_via_gemini
+
+        research_seed = business_name + (("\n\n" + notes) if notes else "")
+        researched = research_lead_via_gemini(research_seed)
+
+        if researched:
+            # Persist everything Gemini found onto the lead, including the
+            # research-derived enrichment data so the lead is usable even
+            # if there's no scrapeable website at the end.
+            patch = {}
+            if researched.get("website"):
+                website = researched["website"]
+                patch["website"] = website
+            if researched.get("business_name") and researched["business_name"] != business_name:
+                patch["business_name"] = researched["business_name"]
+                patch["business_name_lower"] = researched["business_name"].lower()
+            for k in ("phone", "address", "location_area", "location_postcode"):
+                v = researched.get(k)
+                if v and not existing.get(k):
+                    patch[k] = v
+            # Build a structured enrichment payload from the research output.
+            patch["enrichment"] = {
+                "venue_category": researched.get("venue_category"),
+                "business_summary": researched.get("business_summary"),
+                "location_area": researched.get("location_area"),
+                "menu_fit": researched.get("menu_fit") or "unknown",
+                "drinks_programme": researched.get("drinks_programme"),
+                "context_notes": researched.get("notes"),
+                "enrichment_status": "success",
+                "enrichment_source": "gemini_research",
+            }
+            patch["venue_category"] = researched.get("venue_category")
+            patch["menu_fit"] = researched.get("menu_fit")
+            patch["enrichment_status"] = "success"
+            patch["notes"] = researched.get("notes") or notes
+            try:
+                update_lead(lead_id, patch)
+            except Exception as exc:
+                log.warning("research_patch_failed", lead_id=lead_id, error=str(exc))
+            existing.update(patch)
+
+            # If the research surfaced a website, fall through to step 3 to
+            # run full website enrichment for the deeper signal. Otherwise
+            # return what we have — the lead is now usable.
+            if not website:
+                return ScrapeOneResponse(
+                    ok=True, is_new=False, detected_kind="name", lead_id=lead_id,
+                    business_name=patch.get("business_name", business_name),
+                    address=patch.get("address") or existing.get("address"),
+                    phone=patch.get("phone") or existing.get("phone"),
+                    website=None,
+                    enriched=True, scored=False,
+                    venue_category=researched.get("venue_category"),
+                )
 
     # 3) Run the standard enrichment engine on the website (mirrors what the
     # bulk pipeline and email-ingestion follow-up do).
@@ -816,7 +855,7 @@ async def scrape_lead_by_id(lead_id: str) -> ScrapeOneResponse:
     return ScrapeOneResponse(
         ok=False, is_new=False, detected_kind="name", lead_id=lead_id,
         business_name=business_name,
-        error="No website found for this lead. Edit the lead and paste its website, then try again.",
+        error="Gemini couldn't find this business online. Edit the lead — add a website or more context — and try again.",
     )
 
 
