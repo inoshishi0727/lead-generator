@@ -77,13 +77,25 @@ Return ONLY a valid JSON array. Examples:
 If nothing useful found, return []."""
 
 
+_RESEARCH_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash"]
+_RETRY_DELAYS_S = [2, 5, 10]
+
+
+def _is_transient_gemini_error(exc: Exception) -> bool:
+    """503 (UNAVAILABLE), 429 (quota), 'overloaded', 'high demand' — all worth retrying."""
+    msg = str(exc).lower()
+    return any(token in msg for token in (
+        "503", "unavailable", "high demand", "overloaded",
+        "429", "quota", "rate limit", "rate_limit_exceeded",
+    ))
+
+
 def research_lead_via_gemini(seed: str) -> dict[str, Any] | None:
     """Research a single business using Gemini + Google Search grounding.
 
-    Pass any text the user has typed (name + optional context). Gemini uses
-    its Google Search tool to find the business and returns a structured
-    dict matching our enrichment schema. Returns None if the model can't
-    find anything (or Gemini is unavailable).
+    Retries on transient Gemini errors (503/429/overloaded) up to 3 attempts
+    with exponential backoff. Falls back to gemini-2.0-flash if 2.5-flash
+    stays unavailable. Returns None only after all attempts genuinely fail.
     """
     seed = (seed or "").strip()
     if not seed:
@@ -94,57 +106,89 @@ def research_lead_via_gemini(seed: str) -> dict[str, Any] | None:
         log.warning("research_no_api_key")
         return None
 
+    import time as _time
     try:
         from google import genai
         from google.genai import types
-
-        client = genai.Client(api_key=api_key)
-        prompt = _RESEARCH_PROMPT.format(seed=seed[:1000])
-
-        # Enable Google Search as a grounding tool so the model can fetch
-        # real web pages instead of relying on training data alone.
-        config = types.GenerateContentConfig(
-            tools=[types.Tool(google_search=types.GoogleSearch())],
-            temperature=0.1,
-            max_output_tokens=2048,
-        )
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt,
-            config=config,
-        )
-
-        raw = (response.text or "").strip()
-        raw = re.sub(r"```json\s*", "", raw)
-        raw = raw.replace("```", "").strip()
-
-        start = raw.find("{")
-        end = raw.rfind("}")
-        if start < 0 or end <= start:
-            log.warning("research_no_json", raw=raw[:300])
-            return None
-
-        data = json.loads(raw[start:end + 1])
-        if not isinstance(data, dict):
-            return None
-
-        # If the model returned an "I couldn't find this" payload, give up.
-        if not data.get("business_name") and not data.get("website"):
-            log.info("research_not_found", seed=seed[:80])
-            return None
-
-        # Normalise URL fields.
-        for url_field in ("website",):
-            v = data.get(url_field)
-            if v and isinstance(v, str) and not re.match(r"^https?://", v, re.IGNORECASE):
-                data[url_field] = "https://" + v.lstrip("/")
-
-        log.info("research_done", seed=seed[:80], name=data.get("business_name"),
-                 has_website=bool(data.get("website")))
-        return data
     except Exception as exc:
-        log.warning("research_failed", error=str(exc), seed=seed[:80])
+        log.warning("research_genai_import_failed", error=str(exc))
         return None
+
+    client = genai.Client(api_key=api_key)
+    prompt = _RESEARCH_PROMPT.format(seed=seed[:1000])
+    config = types.GenerateContentConfig(
+        tools=[types.Tool(google_search=types.GoogleSearch())],
+        temperature=0.1,
+        max_output_tokens=2048,
+    )
+
+    last_error: Exception | None = None
+
+    for model_name in _RESEARCH_MODELS:
+        for attempt in range(1, 4):
+            try:
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                    config=config,
+                )
+                raw = (response.text or "").strip()
+                raw = re.sub(r"```json\s*", "", raw)
+                raw = raw.replace("```", "").strip()
+
+                start = raw.find("{")
+                end = raw.rfind("}")
+                if start < 0 or end <= start:
+                    log.warning("research_no_json", model=model_name, raw=raw[:300])
+                    return None
+
+                data = json.loads(raw[start:end + 1])
+                if not isinstance(data, dict):
+                    return None
+
+                # Model honestly said "I couldn't find it" — don't retry.
+                if not data.get("business_name") and not data.get("website"):
+                    log.info("research_not_found", seed=seed[:80], model=model_name)
+                    return None
+
+                # Normalise URL fields.
+                for url_field in ("website",):
+                    v = data.get(url_field)
+                    if v and isinstance(v, str) and not re.match(r"^https?://", v, re.IGNORECASE):
+                        data[url_field] = "https://" + v.lstrip("/")
+
+                log.info(
+                    "research_done",
+                    seed=seed[:80],
+                    model=model_name,
+                    attempt=attempt,
+                    name=data.get("business_name"),
+                    has_website=bool(data.get("website")),
+                )
+                return data
+
+            except Exception as exc:
+                last_error = exc
+                transient = _is_transient_gemini_error(exc)
+                log.warning(
+                    "research_attempt_failed",
+                    model=model_name,
+                    attempt=attempt,
+                    transient=transient,
+                    error=str(exc)[:200],
+                )
+                if not transient:
+                    # Non-transient — bail and don't try the fallback model.
+                    return None
+                if attempt < 3:
+                    _time.sleep(_RETRY_DELAYS_S[attempt - 1])
+                    continue
+                # Out of retries on this model — break to try the next one.
+                break
+
+    log.warning("research_all_models_failed", seed=seed[:80],
+                last_error=str(last_error)[:200] if last_error else None)
+    return None
 
 
 def parse_leads_from_text(text: str) -> list[dict[str, Any]]:
