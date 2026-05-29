@@ -75,7 +75,7 @@ class GoogleMapsScraper(BaseScraper):
         selectors = ["#searchboxinput", "input[name='q']", "[aria-label='Search Google Maps']"]
         for sel in selectors:
             try:
-                search_box = await page.wait_for_selector(sel, state="visible", timeout=8000)
+                search_box = await page.wait_for_selector(sel, state="visible", timeout=30000)
                 if search_box:
                     log.debug("search_box_found", selector=sel)
                     break
@@ -301,7 +301,7 @@ class GoogleMapsScraper(BaseScraper):
                 await self._dismiss_consent(page)
 
                 await page.wait_for_selector(
-                    DETAIL_SELECTORS["address"], state="attached", timeout=10000
+                    DETAIL_SELECTORS["address"], state="attached", timeout=30000
                 )
 
                 detail = await self._extract_detail(page)
@@ -473,7 +473,7 @@ class GoogleMapsScraper(BaseScraper):
             await self._dismiss_consent(page)
             log.warning("result_item_not_found_trying_listing_cards")
             try:
-                await page.wait_for_selector(LISTING_CARDS, state="attached", timeout=10000)
+                await page.wait_for_selector(LISTING_CARDS, state="attached", timeout=30000)
             except Exception:
                 try:
                     await page.screenshot(path="data/debug_gmaps_fail.png")
