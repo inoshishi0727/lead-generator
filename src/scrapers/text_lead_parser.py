@@ -19,14 +19,23 @@ import structlog
 log = structlog.get_logger()
 
 
-_RESEARCH_PROMPT = """You are a sales-ops research assistant. The user just added a single lead with very little info — only a name (and possibly a hint of region or business type). Your job is to research this business online using Google Search and return a structured summary.
+_RESEARCH_PROMPT = """You are a sales-ops research assistant for Asterley Bros, a premium British drinks brand whose portfolio includes:
+- Dispense (Modern British Amaro)
+- Schofield's (botanical gin)
+- Estate (English vermouth)
+- Rosé (rosé vermouth)
+- Asterley Original (aperitif)
+- Britannica (London Fernet)
+- RED (red bitter aperitif)
+
+The user just added a single lead with very little info — usually just a name and possibly a region or business-type hint. Your job is to research this business online using Google Search and return a structured summary plus an assessment of how the Asterley portfolio fits them.
 
 Lead seed:
 {seed}
 
-Use Google Search to find what this business does, where it is, and how to contact them. Acceptable sources: their own website, Google Maps listing, LinkedIn company page, Companies House, news articles, trade press, social media, Crunchbase, Yelp. If multiple distinct businesses match the name, choose the one most likely matching the seed hint; otherwise pick the most plausible UK match.
+Use Google Search to find what this business does, where it is, how to contact them, and what they currently stock or pour. Acceptable sources: their own website, Google Maps listing, LinkedIn company page, Companies House, news articles, trade press, social media, Crunchbase, Yelp. If multiple distinct businesses match the name, choose the one most likely matching the seed hint; otherwise pick the most plausible UK match.
 
-Return ONLY a valid JSON object with these fields (use null for anything you cannot find — do NOT invent):
+Return ONLY a valid JSON object with these fields (use null for anything you cannot find — do NOT invent URLs, addresses or phone numbers):
 {{
   "business_name": "the canonical name",
   "website": "https://... or null if no real site exists",
@@ -36,9 +45,18 @@ Return ONLY a valid JSON object with these fields (use null for anything you can
   "location_postcode": "UK postcode or null",
   "venue_category": "one of [cocktail_bar, wine_bar, italian_restaurant, gastropub, hotel_bar, bottle_shop, deli_farm_shop, events_catering, rtd, restaurant_groups, festival_operators, cookery_schools, corporate_gifting, membership_clubs, airlines_trains, subscription_boxes, film_tv_theatre, yacht_charter, luxury_food_retail, grocery, wholesaler] or null",
   "business_summary": "MAX 25 words: what they do, where, who they serve",
-  "drinks_programme": "any cocktails / wines / spirits they're known for, semicolon separated, or null",
-  "notes": "concrete details: founding story, target customers, region served, news mentions — null if nothing useful",
-  "menu_fit": "one of [strong, moderate, weak, unknown] — strong = obvious cocktail/spirits-led on-trade venue or premium spirits buyer; weak = unrelated category"
+  "drinks_programme": "actual cocktails / wines / spirits they're known for, semicolon separated, or null",
+  "menu_fit": "one of [strong, moderate, weak, unknown] — strong = obvious cocktail/spirits-led on-trade venue or premium spirits buyer; weak = unrelated category",
+  "menu_fit_signals": ["short bullet-point evidence for the fit score, max 4 items"],
+  "why_asterley_fits": "MAX 20 words. Concrete reason why this account fits Asterley's portfolio. e.g. 'Stocks Italian amari like Cynar — Dispense slots straight in as a British amaro alternative.'",
+  "lead_products": ["1–3 of the Asterley portfolio names most relevant for this venue (use exact spellings above)"],
+  "tone_tier": "one of [bartender_casual, warm_professional, b2b_commercial, corporate_formal] — pick how a first email should read for this account",
+  "opening_hours_summary": "brief one-line summary like 'Mon-Sat 5pm-midnight, closed Sun' or null",
+  "price_tier": "one of [budget, mid, premium, luxury] or null",
+  "contact_name": "decision-maker name if findable (owner / GM / head bartender / buyer) — null otherwise",
+  "contact_role": "their role title or null",
+  "contact_email": "verified email if findable from website / Linkedin — null otherwise",
+  "notes": "concrete details: founding story, target customers, region served, news mentions, recent menu changes — null if nothing useful"
 }}
 
 Important: if you genuinely cannot find this business, return {{"business_name": null}} and null for everything else. Don't fabricate."""
