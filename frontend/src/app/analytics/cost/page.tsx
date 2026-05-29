@@ -14,6 +14,7 @@ interface DailyRow {
   cost: number;
   calls?: number;
   drafts?: number;
+  generations?: number;
 }
 
 interface CostResponse {
