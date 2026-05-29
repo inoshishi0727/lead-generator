@@ -38,6 +38,35 @@ class ScrapeOneRequest(BaseModel):
     input: str = Field(min_length=1, max_length=2000)
 
 
+class ScrapeBatchRequest(BaseModel):
+    """Input for bulk single-venue scrape: a list of pasted strings,
+    each independently detected (URL/name/website)."""
+    inputs: list[str] = Field(min_length=1, max_length=200)
+
+
+class ScrapeBatchItem(BaseModel):
+    """Per-input outcome inside a batch run."""
+    input: str
+    status: str  # pending | running | added | duplicate | error
+    business_name: Optional[str] = None
+    detected_kind: Optional[str] = None
+    lead_id: Optional[str] = None
+    error: Optional[str] = None
+
+
+class ScrapeBatchStatusResponse(BaseModel):
+    batch_id: str
+    status: str  # running | completed | failed
+    total: int
+    completed: int
+    added: int
+    duplicate: int
+    failed: int
+    started_at: str
+    completed_at: Optional[str] = None
+    items: list[ScrapeBatchItem] = []
+
+
 class ScrapeOneResponse(BaseModel):
     """Result of a single-venue scrape + enrich.
 
