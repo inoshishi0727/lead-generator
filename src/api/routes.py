@@ -777,12 +777,26 @@ async def scrape_lead_by_id(lead_id: str) -> ScrapeOneResponse:
                 if v and not existing.get(k):
                     patch[k] = v
             # Build a structured enrichment payload from the research output.
+            contact_obj = None
+            if researched.get("contact_name") or researched.get("contact_role"):
+                contact_obj = {
+                    "name": researched.get("contact_name"),
+                    "role": researched.get("contact_role"),
+                    "confidence": "uncertain",
+                }
             patch["enrichment"] = {
                 "venue_category": researched.get("venue_category"),
                 "business_summary": researched.get("business_summary"),
                 "location_area": researched.get("location_area"),
                 "menu_fit": researched.get("menu_fit") or "unknown",
+                "menu_fit_signals": researched.get("menu_fit_signals") or [],
                 "drinks_programme": researched.get("drinks_programme"),
+                "why_asterley_fits": researched.get("why_asterley_fits"),
+                "lead_products": researched.get("lead_products") or [],
+                "tone_tier": researched.get("tone_tier"),
+                "opening_hours_summary": researched.get("opening_hours_summary"),
+                "price_tier": researched.get("price_tier"),
+                "contact": contact_obj,
                 "context_notes": researched.get("notes"),
                 "enrichment_status": "success",
                 "enrichment_source": "gemini_research",
@@ -791,6 +805,14 @@ async def scrape_lead_by_id(lead_id: str) -> ScrapeOneResponse:
             patch["menu_fit"] = researched.get("menu_fit")
             patch["enrichment_status"] = "success"
             patch["notes"] = researched.get("notes") or notes
+            # Promote contact info to the top-level too for the leads table.
+            if researched.get("contact_name"):
+                patch["contact_name"] = researched["contact_name"]
+            if researched.get("contact_role"):
+                patch["contact_role"] = researched["contact_role"]
+            if researched.get("contact_email"):
+                patch["contact_email"] = researched["contact_email"]
+                patch["email"] = researched["contact_email"]
             try:
                 update_lead(lead_id, patch)
             except Exception as exc:
@@ -850,12 +872,24 @@ async def scrape_lead_by_id(lead_id: str) -> ScrapeOneResponse:
             venue_category=enrichment.venue_category.value if enrichment and enrichment.venue_category else None,
         )
 
-    # 4) Nothing we can do — mark failed so the UI shows it clearly.
+    # 4) Nothing we can do. Distinguish "Gemini overloaded" (transient — try
+    # again in a minute) from "Gemini couldn't find it" (needs more context).
+    from src.scrapers.text_lead_parser import _is_transient_gemini_error
+
+    # `researched` is None here either because Gemini returned no useful data
+    # OR all retries failed. We can't tell which without a flag — so check the
+    # most recent warnings via the existing-lead state: if the lead has zero
+    # enrichment fields populated AND zero detected_kind progress, it's almost
+    # certainly the "not found" case rather than transient API failure.
     update_lead(lead_id, {"enrichment_status": "failed"})
     return ScrapeOneResponse(
         ok=False, is_new=False, detected_kind="name", lead_id=lead_id,
         business_name=business_name,
-        error="Gemini couldn't find this business online. Edit the lead — add a website or more context — and try again.",
+        error=(
+            "Gemini couldn't find this business — or its servers are currently "
+            "overloaded (503). Try again in 30s, or edit the lead and paste a "
+            "website / more context."
+        ),
     )
 
 
