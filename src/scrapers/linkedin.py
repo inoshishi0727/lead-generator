@@ -482,7 +482,7 @@ class LinkedInCompanyScraper(BaseScraper):
         await human_pause("reading_medium")
 
         try:
-            await page.wait_for_selector("a[href*='/in/']", timeout=10000)
+            await page.wait_for_selector("a[href*='/in/']", timeout=30000)
         except Exception:
             pass
 
@@ -1496,6 +1496,16 @@ def _parse_args() -> argparse.Namespace:
         help="Open a browser for manual login and persist storage_state.",
     )
     parser.add_argument(
+        "--check-session",
+        action="store_true",
+        help=(
+            "Validate the persisted LinkedIn session without scraping. "
+            "Emails admins (via Resend) if the session is expired or blocked, "
+            "and writes a record to Firestore pipeline_jobs. "
+            "Designed to be run on a weekly VPS cron as an early-warning."
+        ),
+    )
+    parser.add_argument(
         "--vnc-session",
         action="store_true",
         help=(
@@ -1588,7 +1598,92 @@ async def _amain() -> None:
         await scraper.save_session_vnc()
         return
 
+    if args.check_session:
+        await _check_session_only(scraper)
+        return
+
     await scraper.run()
+
+
+async def _check_session_only(scraper: "LinkedInCompanyScraper") -> None:
+    """Lightweight session validator. Used by the weekly cron to detect
+    expiry before the next real scrape runs."""
+    from datetime import datetime as _dt
+    started_at = _dt.utcnow().isoformat() + "Z"
+    status = "ok"
+    detail = ""
+
+    try:
+        scraper._ensure_session_exists()
+        ctx = await scraper._launch_persistent_browser(headless=True)
+        page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+        try:
+            await scraper._verify_session_valid(page)
+        finally:
+            try:
+                await scraper._close_persistent_browser()
+            except Exception:
+                pass
+        log.info("linkedin_session_check_ok")
+    except LinkedInSessionExpired as exc:
+        status = "session_expired"
+        detail = str(exc)
+        log.warning("linkedin_session_check_expired", error=detail)
+    except LinkedInBlocked as exc:
+        status = "blocked"
+        detail = str(exc)
+        log.warning("linkedin_session_check_blocked", error=detail)
+    except Exception as exc:
+        status = "error"
+        detail = f"{type(exc).__name__}: {exc}"
+        log.error("linkedin_session_check_error", error=detail)
+
+    _record_session_check(started_at, status, detail)
+
+    if status != "ok":
+        _alert_session_check(status, detail)
+
+
+def _record_session_check(started_at: str, status: str, detail: str) -> None:
+    """Write a pipeline_jobs entry so the heartbeat is queryable."""
+    try:
+        from src.db.client import get_firestore_client
+        db = get_firestore_client()
+        if not db:
+            return
+        from datetime import datetime as _dt
+        db.collection("pipeline_jobs").add({
+            "type": "linkedin_session_check",
+            "status": status,
+            "started_at": started_at,
+            "completed_at": _dt.utcnow().isoformat() + "Z",
+            "result": {"detail": detail},
+        })
+    except Exception as exc:
+        log.warning("linkedin_session_check_record_failed", error=str(exc))
+
+
+def _alert_session_check(status: str, detail: str) -> None:
+    """Reuse the existing admin-email helper from routes.py."""
+    try:
+        from src.api.routes import _send_linkedin_alert
+    except Exception as exc:
+        log.warning("linkedin_session_check_alert_import_failed", error=str(exc))
+        return
+
+    subject = f"[Asterley] LinkedIn session check FAILED — {status}"
+    body = (
+        f"The weekly LinkedIn session check failed with status: {status}\n\n"
+        f"Detail: {detail}\n\n"
+        "Action needed: SSH to the VPS and re-authenticate:\n"
+        "  python -m src.scrapers.linkedin --save-session\n"
+        "or, if running headless:\n"
+        "  python -m src.scrapers.linkedin --vnc-session\n"
+    )
+    try:
+        _send_linkedin_alert(subject, body)
+    except Exception as exc:
+        log.warning("linkedin_session_check_alert_failed", error=str(exc))
 
 
 def main() -> None:

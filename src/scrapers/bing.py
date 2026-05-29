@@ -103,7 +103,7 @@ class BingSearchScraper(BaseScraper):
         selectors = [SEARCH_INPUT, "input#sb_form_q", "textarea[name='q']"]
         for sel in selectors:
             try:
-                search_box = await page.wait_for_selector(sel, state="visible", timeout=8000)
+                search_box = await page.wait_for_selector(sel, state="visible", timeout=30000)
                 if search_box:
                     break
             except Exception:
@@ -180,7 +180,7 @@ class BingSearchScraper(BaseScraper):
         except Exception:
             await self._dismiss_consent(page)
             try:
-                await page.wait_for_selector(RESULT_CONTAINER, state="attached", timeout=10000)
+                await page.wait_for_selector(RESULT_CONTAINER, state="attached", timeout=30000)
             except Exception:
                 log.error("bing_results_not_found", query=query)
                 try:
