@@ -219,7 +219,24 @@ export default function DashboardPage() {
     if (csvInputRef.current) csvInputRef.current.value = "";
   }
 
+  // Default queries used by the top-level "Run venue scrape" button.
+  // Kept small to stay well clear of the VPS OOM threshold. For larger /
+  // category-targeted scrapes, use the Scrape Controls section lower down.
+  const QUICK_SCRAPE_QUERIES = [
+    "cocktail bars London",
+    "wine bar Manchester",
+    "gastropub Edinburgh",
+  ];
+  const QUICK_SCRAPE_LIMIT = 10;
+
   function triggerScrapeAnimation() {
+    if (isRunning || isStarting) {
+      toast.info("A scrape is already running. Wait for it to finish.");
+      return;
+    }
+    startScrape({ queries: QUICK_SCRAPE_QUERIES, limit: QUICK_SCRAPE_LIMIT, headless: true });
+    // Local animation runs alongside until the polled `status` flips to
+    // "running" and the spinner is driven by `isRunning` instead.
     setIsScraping(true);
     setScrapeProgress(0);
     const start = Date.now();
