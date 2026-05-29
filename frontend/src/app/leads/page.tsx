@@ -119,6 +119,11 @@ function LeadsPageInner() {
     [allLeads]
   );
 
+  const wholesalerCount = useMemo(
+    () => allLeads.filter((l) => (l.venue_category || l.category) === "wholesaler").length,
+    [allLeads]
+  );
+
   // Each dropdown's counts respect all OTHER active filters
   const FIT_ORDER = ["strong", "moderate", "weak", "unknown"];
 
@@ -311,6 +316,34 @@ function LeadsPageInner() {
       {showQueries && <SearchQueryManager />}
 
       <div data-tour="leads-filters" className="sticky top-0 z-30 bg-background pt-2 pb-3 -mx-7 px-7 border-b border-border/30 space-y-2">
+        {/* Quick-filter chips — extend with more as new categories warrant their own shortcut */}
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => setCategory(category === "wholesaler" ? "" : "wholesaler")}
+            aria-pressed={category === "wholesaler"}
+            className={
+              "inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-colors " +
+              (category === "wholesaler"
+                ? "border-indigo-500 bg-indigo-500 text-white"
+                : "border-input bg-background text-foreground hover:bg-accent")
+            }
+            title="Show only wholesaler / distributor leads"
+          >
+            Wholesalers
+            <span
+              className={
+                "rounded-full px-1.5 py-0.5 text-[10px] tabular-nums " +
+                (category === "wholesaler"
+                  ? "bg-white/20 text-white"
+                  : "bg-muted text-muted-foreground")
+              }
+            >
+              {wholesalerCount}
+            </span>
+          </button>
+        </div>
+
         {/* Row 1: dropdowns — fixed widths so they never resize when options change */}
         <div className="flex flex-wrap gap-2">
           <select
