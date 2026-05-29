@@ -1,4 +1,7 @@
-"""List leads created in the last N minutes. Verifies a recent scrape wrote to Firestore.
+"""List leads written in the last N minutes. Verifies a recent scrape wrote to Firestore.
+
+The Lead model timestamps with `scraped_at` (timezone-naive `datetime.now()`),
+so we compare with a naive ISO string to match Firestore's lexicographic sort.
 
 Run on the VPS (where Firebase creds are configured):
     cd /root/asterley-bros
@@ -9,7 +12,7 @@ Run on the VPS (where Firebase creds are configured):
 from __future__ import annotations
 
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -28,25 +31,27 @@ def main() -> int:
         print("Firestore client unavailable. Check GOOGLE_APPLICATION_CREDENTIALS.")
         return 1
 
-    since = (datetime.now(timezone.utc) - timedelta(minutes=minutes)).isoformat()
-    print(f"\n=== Leads written since {since} (last {minutes} min) ===\n")
+    # Naive UTC to match the format Pydantic writes (datetime.now() is naive).
+    since_dt = datetime.utcnow() - timedelta(minutes=minutes)
+    since = since_dt.isoformat()
+    print(f"\n=== Leads scraped since {since} (last {minutes} min) ===\n")
 
-    leads = list(db.collection("leads").where("created_at", ">=", since).stream())
+    leads = list(db.collection("leads").where("scraped_at", ">=", since).stream())
     if not leads:
         print("No new leads in that window.")
     else:
         rows = sorted(
             (d.to_dict() for d in leads),
-            key=lambda l: str(l.get("created_at", "")),
+            key=lambda l: str(l.get("scraped_at", "")),
             reverse=True,
         )
         print(f"Found {len(rows)} lead(s):\n")
         for l in rows:
-            created = str(l.get("created_at", ""))[:19].replace("T", " ")
+            scraped = str(l.get("scraped_at", ""))[:19].replace("T", " ")
             source = (l.get("source") or "?").ljust(14)
             where = l.get("website") or l.get("address") or "—"
             stage = l.get("stage") or "?"
-            print(f"  {created}  [{source}] {l.get('business_name', '?')}")
+            print(f"  {scraped}  [{source}] {l.get('business_name', '?')}")
             print(f"                       stage={stage}  {where}")
 
     print(f"\n=== Recent scrape_runs (last 10) ===\n")

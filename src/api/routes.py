@@ -135,6 +135,23 @@ def _run_gmaps_scrape(run_id: str, queries: list[str], limit: int, headless: boo
 
     Runs multiple queries in parallel via ParallelScrapeOrchestrator.
     """
+    from uuid import UUID
+    from src.db.firestore import save_scrape_run, update_scrape_run
+    from src.db.models import LeadSource, RunStatus, ScrapeRun
+
+    # Persist a scrape_runs Firestore doc keyed on the API run_id so manual
+    # scrapes from the app show up in the history list alongside CLI runs.
+    try:
+        scrape_run = ScrapeRun(
+            id=UUID(run_id),
+            source=LeadSource.GOOGLE_MAPS,
+            query=", ".join(queries),
+            status=RunStatus.RUNNING,
+        )
+        save_scrape_run(scrape_run)
+    except Exception as exc:
+        log.warning("scrape_run_persist_failed", run_id=run_id, error=str(exc))
+
     try:
         _scrape_runs[run_id]["status"] = "running"
 
@@ -234,6 +251,15 @@ def _run_gmaps_scrape(run_id: str, queries: list[str], limit: int, headless: boo
         )
         log.info("scrape_thread_done", run_id=run_id, leads=len(lead_responses))
 
+        try:
+            update_scrape_run(run_id, {
+                "status": RunStatus.COMPLETED.value,
+                "leads_found": len(lead_responses),
+                "completed_at": datetime.now().isoformat(),
+            })
+        except Exception as exc:
+            log.warning("scrape_run_finalize_failed", run_id=run_id, error=str(exc))
+
     except Exception as exc:
         _scrape_runs[run_id].update(
             status="failed",
@@ -241,6 +267,15 @@ def _run_gmaps_scrape(run_id: str, queries: list[str], limit: int, headless: boo
             completed_at=datetime.now(),
         )
         log.exception("scrape_thread_failed", run_id=run_id)
+
+        try:
+            update_scrape_run(run_id, {
+                "status": RunStatus.FAILED.value,
+                "error": str(exc),
+                "completed_at": datetime.now().isoformat(),
+            })
+        except Exception as exc2:
+            log.warning("scrape_run_finalize_failed", run_id=run_id, error=str(exc2))
 
 
 def _run_enrichment(run_id: str, lead_ids: list[str] | None, limit: int | None = None, force: bool = False) -> None:
