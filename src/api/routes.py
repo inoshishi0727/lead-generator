@@ -24,6 +24,9 @@ from src.api.schemas import (
     LinkedInScrapeStatusResponse,
     RatioUpdateRequest,
     ScoreStatusResponse,
+    ScrapeBatchItem,
+    ScrapeBatchRequest,
+    ScrapeBatchStatusResponse,
     ScrapeOneRequest,
     ScrapeOneResponse,
     ScrapeRequest,
@@ -44,6 +47,8 @@ _scrape_leads: dict[str, list[LeadResponse]] = {}  # run_id -> leads
 _enrich_runs: dict[str, dict] = {}  # run_id -> enrichment status
 _linkedin_runs: dict[str, dict] = {}  # run_id -> LinkedIn scrape status
 _linkedin_lock = threading.Lock()  # only one LinkedIn scrape at a time per VPS
+_scrape_batches: dict[str, dict] = {}  # batch_id -> bulk scrape-one progress
+_scrape_batch_lock = threading.Lock()
 _linkedin_running: bool = False
 
 
@@ -465,6 +470,142 @@ async def scrape_one(req: ScrapeOneRequest) -> ScrapeOneResponse:
         scored=result.scored,
         venue_category=venue_category,
     )
+
+
+def _run_scrape_batch(batch_id: str, inputs: list[str]) -> None:
+    """Background thread: process pasted inputs one at a time through
+    scrape_single_venue, updating the in-memory batch dict after each item.
+
+    Serial on purpose — concurrency=1 protects the VPS from OOM.
+    """
+    from src.scrapers.single_venue import scrape_single_venue
+
+    def _update(**fields):
+        with _scrape_batch_lock:
+            _scrape_batches[batch_id].update(fields)
+
+    def _set_item(idx: int, **fields):
+        with _scrape_batch_lock:
+            _scrape_batches[batch_id]["items"][idx].update(fields)
+
+    _update(status="running")
+
+    for idx, raw in enumerate(inputs):
+        _set_item(idx, status="running")
+        try:
+            result = asyncio.run(scrape_single_venue(raw))
+        except Exception as exc:
+            log.exception("scrape_batch_item_failed", batch_id=batch_id, idx=idx)
+            _set_item(idx, status="error", error=str(exc))
+            with _scrape_batch_lock:
+                _scrape_batches[batch_id]["failed"] += 1
+                _scrape_batches[batch_id]["completed"] += 1
+            continue
+
+        if not result.lead:
+            _set_item(
+                idx,
+                status="error",
+                detected_kind=result.detected_kind,
+                error=result.error or "Could not extract venue details.",
+            )
+            with _scrape_batch_lock:
+                _scrape_batches[batch_id]["failed"] += 1
+                _scrape_batches[batch_id]["completed"] += 1
+            continue
+
+        if result.is_new:
+            _set_item(
+                idx,
+                status="added",
+                business_name=result.lead.business_name,
+                detected_kind=result.detected_kind,
+                lead_id=str(result.lead.id),
+            )
+            with _scrape_batch_lock:
+                _scrape_batches[batch_id]["added"] += 1
+        else:
+            _set_item(
+                idx,
+                status="duplicate",
+                business_name=result.lead.business_name,
+                detected_kind=result.detected_kind,
+                lead_id=str(result.lead.id),
+            )
+            with _scrape_batch_lock:
+                _scrape_batches[batch_id]["duplicate"] += 1
+
+        with _scrape_batch_lock:
+            _scrape_batches[batch_id]["completed"] += 1
+
+    _update(status="completed", completed_at=datetime.now().isoformat())
+    log.info("scrape_batch_done", batch_id=batch_id, total=len(inputs))
+
+
+@router.post("/scrape-batch", response_model=ScrapeBatchStatusResponse)
+async def start_scrape_batch(req: ScrapeBatchRequest) -> ScrapeBatchStatusResponse:
+    """Kick off a serial bulk single-venue scrape.
+
+    Returns the batch_id immediately. Poll /scrape-batch/{batch_id} for progress.
+    """
+    cleaned = [s.strip() for s in req.inputs if isinstance(s, str) and s.strip()]
+    if not cleaned:
+        raise HTTPException(status_code=400, detail="No usable inputs in request.")
+
+    batch_id = str(uuid4())
+    started_at = datetime.now().isoformat()
+
+    with _scrape_batch_lock:
+        _scrape_batches[batch_id] = {
+            "batch_id": batch_id,
+            "status": "pending",
+            "total": len(cleaned),
+            "completed": 0,
+            "added": 0,
+            "duplicate": 0,
+            "failed": 0,
+            "started_at": started_at,
+            "completed_at": None,
+            "items": [
+                {"input": raw, "status": "pending", "business_name": None,
+                 "detected_kind": None, "lead_id": None, "error": None}
+                for raw in cleaned
+            ],
+        }
+
+    threading.Thread(
+        target=_run_scrape_batch,
+        args=(batch_id, cleaned),
+        daemon=True,
+    ).start()
+
+    return _batch_state_to_response(batch_id)
+
+
+@router.get("/scrape-batch/{batch_id}", response_model=ScrapeBatchStatusResponse)
+async def get_scrape_batch(batch_id: str) -> ScrapeBatchStatusResponse:
+    if batch_id not in _scrape_batches:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    return _batch_state_to_response(batch_id)
+
+
+def _batch_state_to_response(batch_id: str) -> ScrapeBatchStatusResponse:
+    """Snapshot the in-memory batch dict into the pydantic response model."""
+    with _scrape_batch_lock:
+        b = _scrape_batches[batch_id]
+        items = [ScrapeBatchItem(**item) for item in b["items"]]
+        return ScrapeBatchStatusResponse(
+            batch_id=batch_id,
+            status=b["status"],
+            total=b["total"],
+            completed=b["completed"],
+            added=b["added"],
+            duplicate=b["duplicate"],
+            failed=b["failed"],
+            started_at=b["started_at"],
+            completed_at=b.get("completed_at"),
+            items=items,
+        )
 
 
 def _send_linkedin_alert(subject: str, body: str) -> None:

@@ -17,7 +17,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from typing import Optional
-from urllib.parse import urlparse
+from urllib.parse import quote_plus, urlparse
 
 import structlog
 
@@ -73,6 +73,29 @@ def _detect_input_kind(raw: str) -> str:
     return "website_url"
 
 
+def _is_unsupported_gmaps_path(url: str) -> Optional[str]:
+    """Return a user-facing error message if the URL is a Maps URL we can't
+    extract a single venue from (directions, search results, etc.). None means
+    the URL is usable."""
+    path = (urlparse(url).path or "").lower()
+    if "/maps/dir" in path:
+        return "That's a Google Maps directions link — please paste the venue's place page instead (click the venue, then Share)."
+    if "/maps/search" in path:
+        return "That's a Google Maps search-results page — please open the venue and share its place page."
+    return None
+
+
+def _shorten_name_for_search(raw: str) -> str:
+    """Trim a long pasted address down to a searchable venue name.
+
+    Google Maps handles "Severn Valley Railway" fine; "Severn Valley
+    Railway - Kidderminster station, Station Dr, ... DY10 1QX, United Kingdom"
+    chokes the typed search. Keep the first comma-delimited chunk and cap length.
+    """
+    first = raw.split(",")[0].strip()
+    return first[:80] if len(first) > 80 else first
+
+
 # ----------------------------------------------------- Scrape one
 
 
@@ -83,6 +106,12 @@ async def scrape_single_venue(raw_input: str) -> SingleVenueResult:
     """
     kind = _detect_input_kind(raw_input)
     log.info("scrape_one_start", kind=kind, input=raw_input[:200])
+
+    # Reject Google Maps URLs we can't extract from before launching a browser.
+    if kind == "gmaps_url":
+        unsupported = _is_unsupported_gmaps_path(raw_input)
+        if unsupported:
+            return SingleVenueResult(lead=None, is_new=False, detected_kind=kind, error=unsupported)
 
     scraper = GoogleMapsScraper(config=load_config())
 
@@ -145,7 +174,7 @@ async def _scrape_from_gmaps_url(scraper: GoogleMapsScraper, page, url: str) -> 
     # Wait for the address panel — same selector the bulk scraper uses.
     from src.scrapers.selectors.gmaps_selectors import DETAIL_SELECTORS
     try:
-        await page.wait_for_selector(DETAIL_SELECTORS["address"], state="attached", timeout=30000)
+        await page.wait_for_selector(DETAIL_SELECTORS["address"], state="attached", timeout=20000)
     except Exception:
         log.warning("gmaps_url_address_not_loaded", url=target_url)
         return None
@@ -155,15 +184,26 @@ async def _scrape_from_gmaps_url(scraper: GoogleMapsScraper, page, url: str) -> 
 
 
 async def _scrape_from_name(scraper: GoogleMapsScraper, page, name: str) -> Optional[Lead]:
-    """Search Google Maps for the name, then extract from the first result."""
-    await scraper._human_search(page, name)
+    """Search Google Maps for the name, then extract from the first result.
+
+    Uses a direct /maps/search/ URL rather than typing into the search box —
+    faster and more reliable for long inputs (pasted addresses etc.).
+    """
     from src.scrapers.selectors.gmaps_selectors import LISTING_CARDS, DETAIL_SELECTORS
 
-    # Wait for at least one listing card. If Google jumps straight into a single
-    # result detail page (common for an exact venue name), the address selector
-    # will already be present.
+    cleaned = _shorten_name_for_search(name)
+    if not cleaned:
+        return None
+    search_url = f"https://www.google.com/maps/search/{quote_plus(cleaned)}"
+
+    await scraper._navigate_with_retry(page, search_url)
+    await human_pause("navigation")
+    await scraper._dismiss_consent(page)
+
+    # Wait for either a listing card OR an address panel. The former means we got
+    # a list of results; the latter means Google redirected us straight to the venue.
     try:
-        await page.wait_for_selector(LISTING_CARDS, state="attached", timeout=30000)
+        await page.wait_for_selector(LISTING_CARDS, state="attached", timeout=20000)
         first = await page.query_selector(LISTING_CARDS)
         if first is not None:
             href = await first.get_attribute("href")
@@ -176,9 +216,9 @@ async def _scrape_from_name(scraper: GoogleMapsScraper, page, name: str) -> Opti
         pass
 
     try:
-        await page.wait_for_selector(DETAIL_SELECTORS["address"], state="attached", timeout=30000)
+        await page.wait_for_selector(DETAIL_SELECTORS["address"], state="attached", timeout=20000)
     except Exception:
-        log.warning("name_search_no_detail", name=name)
+        log.warning("name_search_no_detail", name=cleaned)
         return None
 
     detail = await scraper._extract_detail(page)
