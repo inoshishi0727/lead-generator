@@ -618,43 +618,71 @@ def _batch_state_to_response(batch_id: str) -> ScrapeBatchStatusResponse:
 
 @router.post("/leads/quick-add", response_model=QuickAddResponse)
 async def quick_add_leads(req: QuickAddRequest) -> QuickAddResponse:
-    """Insert pasted strings as skeleton leads. No scraping or enrichment —
-    the user triggers that later from the leads table.
+    """Insert pasted text as skeleton leads via the same Gemini text-parser
+    that powers email ingestion. No browser, no Google Maps — just Gemini
+    structuring the text into {business_name, website, address, ...} dicts.
 
-    Each input becomes one lead with:
-      - business_name = normalised input
-      - source = manual
-      - stage = scraped (so it appears in default lead lists)
-      - enrichment_status = pending (so the UI knows it still needs work)
+    Falls back to literal "one line = one lead" if Gemini is unavailable.
     """
     from src.db.firestore import save_lead_immediate
-    from src.db.models import EnrichmentData, Lead, LeadSource, PipelineStage
+    from src.db.models import Lead, LeadSource, PipelineStage
     from src.scrapers.single_venue import _normalize_input
+    from src.scrapers.text_lead_parser import parse_leads_from_text
 
     added = 0
     duplicate = 0
     lead_ids: list[str] = []
 
-    for raw in req.inputs:
-        if not isinstance(raw, str):
+    # Concatenate the inputs into one text block — the parser handles
+    # numbered lists, free-form context, multi-line entries, etc.
+    text_block = "\n".join(s for s in req.inputs if isinstance(s, str) and s.strip())
+    parsed = parse_leads_from_text(text_block) if text_block else []
+
+    # Fallback: if Gemini returned nothing, treat each line as a literal name.
+    if not parsed:
+        log.info("quick_add_fallback_literal", lines=len(req.inputs))
+        parsed = []
+        for raw in req.inputs:
+            cleaned = _normalize_input(raw or "")
+            if cleaned:
+                parsed.append({"business_name": cleaned})
+
+    for item in parsed:
+        name = (item.get("business_name") or "").strip()
+        website = (item.get("website") or "").strip() or None
+        if not name and not website:
             continue
-        cleaned = _normalize_input(raw)
-        if not cleaned:
-            continue
+        if not name and website:
+            # Derive a name from the domain so the row is identifiable.
+            from urllib.parse import urlparse as _u
+            host = _u(website).netloc.removeprefix("www.")
+            name = host.split(".")[0].replace("-", " ").title() if host else "Unknown"
 
         lead = Lead(
             source=LeadSource.MANUAL,
-            business_name=cleaned,
+            business_name=name,
+            website=website,
+            phone=item.get("phone") or None,
+            address=item.get("address") or None,
+            google_maps_place_id=None,
             stage=PipelineStage.SCRAPED,
-            enrichment=EnrichmentData(
-                enrichment_status="pending",
-            ) if hasattr(EnrichmentData, "enrichment_status") else None,
         )
         try:
             is_new = save_lead_immediate(lead)
         except Exception as exc:
-            log.warning("quick_add_save_failed", input=cleaned, error=str(exc))
+            log.warning("quick_add_save_failed", input=name, error=str(exc))
             continue
+
+        # Stamp enrichment_status = pending on the freshly saved doc so the
+        # UI can show the "needs scrape" badge.
+        try:
+            from src.db.firestore import update_lead as _update_lead
+            _update_lead(str(lead.id), {
+                "enrichment_status": "pending",
+                "notes": item.get("notes") or None,
+            })
+        except Exception:
+            pass
 
         if is_new:
             added += 1
@@ -662,7 +690,7 @@ async def quick_add_leads(req: QuickAddRequest) -> QuickAddResponse:
             duplicate += 1
         lead_ids.append(str(lead.id))
 
-    log.info("quick_add_done", total=len(req.inputs), added=added, duplicate=duplicate)
+    log.info("quick_add_done", parsed=len(parsed), added=added, duplicate=duplicate)
     return QuickAddResponse(added=added, duplicate=duplicate, lead_ids=lead_ids)
 
 
@@ -673,63 +701,122 @@ async def quick_add_leads(req: QuickAddRequest) -> QuickAddResponse:
 
 @router.post("/leads/{lead_id}/scrape-now", response_model=ScrapeOneResponse)
 async def scrape_lead_by_id(lead_id: str) -> ScrapeOneResponse:
-    """Run scrape + enrich + score against an existing lead's business_name.
+    """Enrich an existing lead. Same pipeline as email ingestion:
 
-    Lookup the stored business_name (or website if present), feed it through
-    single_venue.scrape_single_venue, then merge the fresh data onto the
-    existing Lead doc — preserving the lead_id so external references survive.
+      1. If the lead has a Google Maps URL → use the Maps scraper path
+         to fill out address/phone (B2C venues).
+      2. Else if it has a website → run the enrichment engine (visits site,
+         Gemini reads it, fills in category/products/etc.).
+      3. Else → ask Gemini to look up the business by name. If a website
+         shows up, enrich from there. Otherwise mark enrichment_status=failed.
+
+    No Google Maps name-search step (that's where the prior failures came
+    from for B2B wholesalers).
     """
     from src.db.firestore import get_lead_by_id, update_lead
-    from src.scrapers.single_venue import scrape_single_venue
+    from src.db.models import Lead, LeadSource, PipelineStage
+    from src.scrapers.single_venue import (
+        _detect_input_kind,
+        scrape_single_venue,
+        _enrich_and_score,
+    )
+    from src.scrapers.text_lead_parser import parse_leads_from_text
 
     existing = get_lead_by_id(lead_id)
     if not existing:
         raise HTTPException(status_code=404, detail="Lead not found")
 
-    # Prefer the stored website (best match), fall back to name.
-    seed = existing.get("website") or existing.get("business_name") or ""
-    if not seed:
-        raise HTTPException(status_code=400, detail="Lead has no website or business_name to scrape.")
+    business_name = (existing.get("business_name") or "").strip()
+    website = (existing.get("website") or "").strip() or None
+    maps_url = (existing.get("google_maps_url") or "").strip() or None
+    notes = existing.get("notes")
 
-    result = await scrape_single_venue(seed)
+    # 1) Google Maps URL → reuse the venue-page scrape (gives us a confident
+    # address/phone/place_id without depending on a search guess).
+    if maps_url and _detect_input_kind(maps_url) == "gmaps_url":
+        result = await scrape_single_venue(maps_url)
+        if result.lead:
+            updates = {
+                k: v for k, v in result.lead.model_dump(mode="json", exclude_none=True).items()
+                if k not in ("id", "scraped_at", "stage")
+            }
+            updates["enrichment_status"] = "success" if result.enriched else "pending"
+            update_lead(lead_id, updates)
+            enrichment = result.lead.enrichment
+            return ScrapeOneResponse(
+                ok=True, is_new=False, detected_kind="gmaps_url", lead_id=lead_id,
+                business_name=result.lead.business_name, address=result.lead.address,
+                phone=result.lead.phone, website=result.lead.website,
+                score=result.lead.score, enriched=result.enriched, scored=result.scored,
+                venue_category=enrichment.venue_category.value if enrichment and enrichment.venue_category else None,
+            )
 
-    if not result.lead:
+    # 2) No website yet — ask Gemini to research the name (+ any notes).
+    if not website and business_name:
+        research_text = business_name + (("\n\n" + notes) if notes else "")
+        parsed = parse_leads_from_text(research_text)
+        if parsed:
+            # Take the entry that best matches the existing name, else the first.
+            target = None
+            for p in parsed:
+                if (p.get("business_name") or "").lower().strip() == business_name.lower():
+                    target = p
+                    break
+            target = target or parsed[0]
+            if target.get("website"):
+                website = target["website"]
+                update_lead(lead_id, {
+                    "website": website,
+                    "phone": target.get("phone") or existing.get("phone"),
+                    "address": target.get("address") or existing.get("address"),
+                })
+                existing["website"] = website
+
+    # 3) Run the standard enrichment engine on the website (mirrors what the
+    # bulk pipeline and email-ingestion follow-up do).
+    if website:
+        try:
+            lead_obj = Lead(
+                id=lead_id,
+                source=LeadSource(existing.get("source", "manual")),
+                business_name=business_name or "Unknown",
+                website=website,
+                phone=existing.get("phone"),
+                address=existing.get("address"),
+                stage=PipelineStage.SCRAPED,
+            )
+        except Exception:
+            # Fall back to a minimal Lead if the existing source value is unknown.
+            lead_obj = Lead(
+                source=LeadSource.MANUAL,
+                business_name=business_name or "Unknown",
+                website=website,
+                stage=PipelineStage.SCRAPED,
+            )
+
+        enriched, scored = await _enrich_and_score(lead_obj, log_prefix=business_name)
+        updates = {
+            k: v for k, v in lead_obj.model_dump(mode="json", exclude_none=True).items()
+            if k not in ("id", "scraped_at", "stage")
+        }
+        updates["enrichment_status"] = "success" if enriched else "failed"
+        update_lead(lead_id, updates)
+
+        enrichment = lead_obj.enrichment
         return ScrapeOneResponse(
-            ok=False, is_new=False, detected_kind=result.detected_kind,
-            lead_id=lead_id, error=result.error or "Could not extract venue details.",
+            ok=True, is_new=False, detected_kind="website_url", lead_id=lead_id,
+            business_name=lead_obj.business_name, address=lead_obj.address,
+            phone=lead_obj.phone, website=lead_obj.website,
+            score=lead_obj.score, enriched=enriched, scored=scored,
+            venue_category=enrichment.venue_category.value if enrichment and enrichment.venue_category else None,
         )
 
-    # Merge fresh fields back onto the existing doc instead of creating a duplicate.
-    updates = {
-        k: v for k, v in result.lead.model_dump(mode="json", exclude_none=True).items()
-        if k not in ("id", "scraped_at", "stage")  # preserve original id, stamp, stage progress
-    }
-    updates["enrichment_status"] = "success" if result.enriched else (
-        existing.get("enrichment_status") or "pending"
-    )
-    try:
-        update_lead(lead_id, updates)
-    except Exception as exc:
-        log.warning("scrape_now_update_failed", lead_id=lead_id, error=str(exc))
-
-    enrichment = result.lead.enrichment
-    venue_category = (
-        enrichment.venue_category.value if enrichment and enrichment.venue_category else None
-    )
-
+    # 4) Nothing we can do — mark failed so the UI shows it clearly.
+    update_lead(lead_id, {"enrichment_status": "failed"})
     return ScrapeOneResponse(
-        ok=True,
-        is_new=False,  # not a brand-new lead — we updated an existing one
-        detected_kind=result.detected_kind,
-        lead_id=lead_id,
-        business_name=result.lead.business_name,
-        address=result.lead.address,
-        phone=result.lead.phone,
-        website=result.lead.website,
-        score=result.lead.score,
-        enriched=result.enriched,
-        scored=result.scored,
-        venue_category=venue_category,
+        ok=False, is_new=False, detected_kind="name", lead_id=lead_id,
+        business_name=business_name,
+        error="No website found for this lead. Edit the lead and paste its website, then try again.",
     )
 
 
