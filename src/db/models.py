@@ -50,6 +50,7 @@ class VenueCategory(str, Enum):
     YACHT_CHARTER = "yacht_charter"
     LUXURY_FOOD_RETAIL = "luxury_food_retail"
     GROCERY = "grocery"
+    WHOLESALER = "wholesaler"
 
 
 class MenuFit(str, Enum):
