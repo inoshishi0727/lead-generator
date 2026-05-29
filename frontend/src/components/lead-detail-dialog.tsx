@@ -149,6 +149,9 @@ export function LeadDetailDialog({ lead, onClose, onEmail }: Props) {
   const [editingMenuUrl, setEditingMenuUrl] = useState(false);
   const [menuUrlDraft, setMenuUrlDraft] = useState("");
   const [savingMenuUrl, setSavingMenuUrl] = useState(false);
+  const [editingWebsite, setEditingWebsite] = useState(false);
+  const [websiteDraft, setWebsiteDraft] = useState("");
+  const [savingWebsite, setSavingWebsite] = useState(false);
 
   async function handleSaveMenuUrl() {
     if (!lead) return;
@@ -158,6 +161,19 @@ export function LeadDetailDialog({ lead, onClose, onEmail }: Props) {
       setEditingMenuUrl(false);
     } finally {
       setSavingMenuUrl(false);
+    }
+  }
+
+  async function handleSaveWebsite() {
+    if (!lead) return;
+    setSavingWebsite(true);
+    try {
+      let url = websiteDraft.trim();
+      if (url && !/^https?:\/\//i.test(url)) url = "https://" + url;
+      await updateLeadFields(lead.id, { website: url || null });
+      setEditingWebsite(false);
+    } finally {
+      setSavingWebsite(false);
     }
   }
 
@@ -316,12 +332,54 @@ export function LeadDetailDialog({ lead, onClose, onEmail }: Props) {
           </Row>
           <Row label="Area">{lead.location_area}</Row>
           <Row label="Website">
-            {lead.website && (
-              <a href={lead.website} target="_blank" rel="noopener noreferrer"
-                className="text-primary hover:underline flex items-center gap-1">
-                <Globe className="h-3 w-3" />
-                {lead.website.replace(/^https?:\/\/(www\.)?/, "").slice(0, 35)}
-              </a>
+            {editingWebsite ? (
+              <span className="flex items-center gap-1.5">
+                <input
+                  autoFocus
+                  type="url"
+                  value={websiteDraft}
+                  onChange={(e) => setWebsiteDraft(e.target.value)}
+                  placeholder="https://example.com"
+                  className="flex-1 min-w-0 rounded border border-input bg-background px-2 py-0.5 text-sm"
+                  onKeyDown={(e) => { if (e.key === "Enter") handleSaveWebsite(); if (e.key === "Escape") setEditingWebsite(false); }}
+                />
+                <button
+                  onClick={handleSaveWebsite}
+                  disabled={savingWebsite}
+                  className="text-emerald-400 hover:text-emerald-300 transition-colors"
+                >
+                  <Check className="h-3.5 w-3.5" />
+                </button>
+                <button onClick={() => setEditingWebsite(false)} className="text-muted-foreground hover:text-foreground transition-colors">
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </span>
+            ) : lead.website ? (
+              <span className="flex items-center gap-1.5">
+                <a href={lead.website} target="_blank" rel="noopener noreferrer"
+                  className="text-primary hover:underline flex items-center gap-1">
+                  <Globe className="h-3 w-3" />
+                  {lead.website.replace(/^https?:\/\/(www\.)?/, "").slice(0, 35)}
+                </a>
+                <button
+                  onClick={() => { setWebsiteDraft(lead.website ?? ""); setEditingWebsite(true); }}
+                  className="text-muted-foreground hover:text-foreground transition-colors"
+                  title="Edit website"
+                >
+                  <Pencil className="h-3 w-3" />
+                </button>
+              </span>
+            ) : (
+              <span className="flex items-center gap-1.5">
+                <span className="text-muted-foreground text-sm">Not set</span>
+                <button
+                  onClick={() => { setWebsiteDraft(""); setEditingWebsite(true); }}
+                  className="text-muted-foreground hover:text-foreground transition-colors"
+                  title="Add website"
+                >
+                  <Pencil className="h-3 w-3" />
+                </button>
+              </span>
             )}
           </Row>
           <Row label="Rating">
