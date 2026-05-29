@@ -19,6 +19,31 @@ import structlog
 log = structlog.get_logger()
 
 
+_RESEARCH_PROMPT = """You are a sales-ops research assistant. The user just added a single lead with very little info — only a name (and possibly a hint of region or business type). Your job is to research this business online using Google Search and return a structured summary.
+
+Lead seed:
+{seed}
+
+Use Google Search to find what this business does, where it is, and how to contact them. Acceptable sources: their own website, Google Maps listing, LinkedIn company page, Companies House, news articles, trade press, social media, Crunchbase, Yelp. If multiple distinct businesses match the name, choose the one most likely matching the seed hint; otherwise pick the most plausible UK match.
+
+Return ONLY a valid JSON object with these fields (use null for anything you cannot find — do NOT invent):
+{{
+  "business_name": "the canonical name",
+  "website": "https://... or null if no real site exists",
+  "address": "full postal address or null",
+  "phone": "+44... or null",
+  "location_area": "neighbourhood / town name or null",
+  "location_postcode": "UK postcode or null",
+  "venue_category": "one of [cocktail_bar, wine_bar, italian_restaurant, gastropub, hotel_bar, bottle_shop, deli_farm_shop, events_catering, rtd, restaurant_groups, festival_operators, cookery_schools, corporate_gifting, membership_clubs, airlines_trains, subscription_boxes, film_tv_theatre, yacht_charter, luxury_food_retail, grocery, wholesaler] or null",
+  "business_summary": "MAX 25 words: what they do, where, who they serve",
+  "drinks_programme": "any cocktails / wines / spirits they're known for, semicolon separated, or null",
+  "notes": "concrete details: founding story, target customers, region served, news mentions — null if nothing useful",
+  "menu_fit": "one of [strong, moderate, weak, unknown] — strong = obvious cocktail/spirits-led on-trade venue or premium spirits buyer; weak = unrelated category"
+}}
+
+Important: if you genuinely cannot find this business, return {{"business_name": null}} and null for everything else. Don't fabricate."""
+
+
 _PROMPT = """You are extracting venue/business lead data from a block of text pasted by a sales team.
 
 Text content:
@@ -50,6 +75,76 @@ Return ONLY a valid JSON array. Examples:
 ]
 
 If nothing useful found, return []."""
+
+
+def research_lead_via_gemini(seed: str) -> dict[str, Any] | None:
+    """Research a single business using Gemini + Google Search grounding.
+
+    Pass any text the user has typed (name + optional context). Gemini uses
+    its Google Search tool to find the business and returns a structured
+    dict matching our enrichment schema. Returns None if the model can't
+    find anything (or Gemini is unavailable).
+    """
+    seed = (seed or "").strip()
+    if not seed:
+        return None
+
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        log.warning("research_no_api_key")
+        return None
+
+    try:
+        from google import genai
+        from google.genai import types
+
+        client = genai.Client(api_key=api_key)
+        prompt = _RESEARCH_PROMPT.format(seed=seed[:1000])
+
+        # Enable Google Search as a grounding tool so the model can fetch
+        # real web pages instead of relying on training data alone.
+        config = types.GenerateContentConfig(
+            tools=[types.Tool(google_search=types.GoogleSearch())],
+            temperature=0.1,
+            max_output_tokens=2048,
+        )
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+            config=config,
+        )
+
+        raw = (response.text or "").strip()
+        raw = re.sub(r"```json\s*", "", raw)
+        raw = raw.replace("```", "").strip()
+
+        start = raw.find("{")
+        end = raw.rfind("}")
+        if start < 0 or end <= start:
+            log.warning("research_no_json", raw=raw[:300])
+            return None
+
+        data = json.loads(raw[start:end + 1])
+        if not isinstance(data, dict):
+            return None
+
+        # If the model returned an "I couldn't find this" payload, give up.
+        if not data.get("business_name") and not data.get("website"):
+            log.info("research_not_found", seed=seed[:80])
+            return None
+
+        # Normalise URL fields.
+        for url_field in ("website",):
+            v = data.get(url_field)
+            if v and isinstance(v, str) and not re.match(r"^https?://", v, re.IGNORECASE):
+                data[url_field] = "https://" + v.lstrip("/")
+
+        log.info("research_done", seed=seed[:80], name=data.get("business_name"),
+                 has_website=bool(data.get("website")))
+        return data
+    except Exception as exc:
+        log.warning("research_failed", error=str(exc), seed=seed[:80])
+        return None
 
 
 def parse_leads_from_text(text: str) -> list[dict[str, Any]]:
