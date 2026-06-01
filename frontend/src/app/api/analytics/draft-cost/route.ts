@@ -61,7 +61,16 @@ export async function GET(req: NextRequest) {
 
     // generation_log captures every generation call including regenerations,
     // unlike outreach_messages which only has one doc per message.
-    const snap = await adminDb.collection("generation_log").get();
+    // Push the window filter into Firestore — full collection scans on this
+    // grow with every draft generated and were timing the Netlify function
+    // out, surfacing in the UI as a JSON parse error after the 504.
+    // generated_at is written as an ISO string (functions/index.js:977),
+    // so lexicographic >= behaves correctly.
+    const baseRef = adminDb.collection("generation_log");
+    const query = since
+      ? baseRef.where("generated_at", ">=", since.toISOString())
+      : baseRef;
+    const snap = await query.get();
 
     let totalInput = 0;
     let totalOutput = 0;

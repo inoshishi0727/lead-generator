@@ -45,6 +45,10 @@ export default function CostAnalyticsPage() {
   useEffect(() => {
     setLoading(true);
     setErr(null);
+    // Clear stale data — the jarvis and drafts responses have different
+    // shapes (totals.sessions vs totals.drafts), and rendering one branch
+    // with the other's data crashes on `undefined.toLocaleString`.
+    setData(null);
     const endpoint = tab === "jarvis" ? "/api/analytics/cost" : "/api/analytics/draft-cost";
     const qs = windowSel === "all" ? "all=1" : `days=${windowSel}`;
     fetch(`${endpoint}?${qs}`)
