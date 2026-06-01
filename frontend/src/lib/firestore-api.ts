@@ -559,6 +559,7 @@ export async function createLead(data: {
     source: "manual",
     stage: "scraped",
     scraped_at: now,
+    created_at: now,
     updated_at: now,
     email: null,
     email_found: false,

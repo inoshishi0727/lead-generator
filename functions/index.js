@@ -2920,6 +2920,7 @@ export const processLeadIngestion = functions
           added_by_email: fromEmail,
           added_by_name: fromName,
           scraped_at: now,
+          created_at: now,
           email: null,
           score: null,
           enrichment_status: null,
@@ -6561,116 +6562,5 @@ Return ONLY valid JSON in this exact shape (no markdown, no commentary):
       console.error("applyDraftSuggestions failed:", err.message, err.stack);
       throw new HttpsError("internal", "Failed to rewrite draft.");
     }
-  });
-
-/**
- * Scheduled trigger — runs daily at 9am London time.
- * "Scrape heartbeat": confirms new leads are flowing in. If the count of
- * leads created in the last 8 days is zero, the weekly scrape has silently
- * failed (or selectors have drifted) — alert admins.
- *
- * Logs every run to pipeline_jobs so we can prove the heartbeat itself is alive.
- */
-export const scheduledScrapeHeartbeat = functions
-  .runWith({ timeoutSeconds: 120, memory: "256MB", secrets: ["RESEND_API_KEY"] })
-  .pubsub.schedule("0 9 * * *")
-  .timeZone("Europe/London")
-  .onRun(async () => {
-    const startedAt = new Date().toISOString();
-    const jobRef = db.collection("pipeline_jobs").doc();
-    await jobRef.set({
-      type: "scrape_heartbeat",
-      status: "running",
-      started_at: startedAt,
-      completed_at: null,
-      result: null,
-    });
-
-    try {
-      const ZERO_LEAD_WINDOW_DAYS = 8;
-      const windowStart = new Date(Date.now() - ZERO_LEAD_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
-      const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-
-      const [leadsWindowSnap, leads24hSnap, employees24hSnap] = await Promise.all([
-        db.collection("leads").where("created_at", ">=", windowStart).get(),
-        db.collection("leads").where("created_at", ">=", since24h).get(),
-        db.collection("linkedin_employees").where("scraped_at", ">=", since24h).get(),
-      ]);
-
-      const leadsLastWindow = leadsWindowSnap.size;
-      const leadsLast24h = leads24hSnap.size;
-      const employeesLast24h = employees24hSnap.size;
-
-      const result = {
-        window_days: ZERO_LEAD_WINDOW_DAYS,
-        leads_last_window: leadsLastWindow,
-        leads_last_24h: leadsLast24h,
-        linkedin_employees_last_24h: employeesLast24h,
-      };
-
-      // Alert only when the longer window comes back empty — avoids
-      // weekday noise where no scrape was expected to run.
-      const shouldAlert = leadsLastWindow === 0;
-
-      if (shouldAlert) {
-        const apiKey = process.env.RESEND_API_KEY;
-        if (apiKey) {
-          const adminSnap = await db.collection("users").where("role", "==", "admin").get();
-          const adminEmails = adminSnap.docs.map(d => d.data().email).filter(Boolean);
-
-          if (adminEmails.length) {
-            const resend = new Resend(apiKey);
-            const subject = `[Asterley] Scrape heartbeat ALERT — 0 new leads in ${ZERO_LEAD_WINDOW_DAYS} days`;
-            const text = [
-              `The daily scrape heartbeat found no new leads written in the last ${ZERO_LEAD_WINDOW_DAYS} days.`,
-              "",
-              "This usually means one of:",
-              "  • The weekly GitHub Actions scrape failed (check the workflow logs)",
-              "  • A scraper's selectors have drifted (silent zero-result)",
-              "  • Firestore writes are failing",
-              "",
-              `Leads created in last 24h:                ${leadsLast24h}`,
-              `Leads created in last ${ZERO_LEAD_WINDOW_DAYS} days:            ${leadsLastWindow}`,
-              `LinkedIn employees scraped in last 24h:   ${employeesLast24h}`,
-              "",
-              "Heartbeat runs every morning at 09:00 Europe/London.",
-            ].join("\n");
-
-            for (const email of adminEmails) {
-              try {
-                await resend.emails.send({
-                  from: "Asterley Bros Alerts <alerts@asterleybros.com>",
-                  to: email,
-                  subject,
-                  text,
-                });
-              } catch (err) {
-                console.error(`[scrapeHeartbeat] Failed to email ${email}:`, err.message);
-              }
-            }
-            result.alert_sent_to = adminEmails;
-          } else {
-            result.alert_skipped_reason = "no admin emails";
-          }
-        } else {
-          result.alert_skipped_reason = "RESEND_API_KEY not set";
-        }
-      }
-
-      await jobRef.update({
-        status: shouldAlert ? "alerted" : "ok",
-        completed_at: new Date().toISOString(),
-        result,
-      });
-      console.log("[scrapeHeartbeat]", JSON.stringify(result));
-    } catch (err) {
-      await jobRef.update({
-        status: "failed",
-        completed_at: new Date().toISOString(),
-        result: { error: err.message },
-      });
-      console.error("[scrapeHeartbeat] failed:", err.message, err.stack);
-    }
-    return null;
   });
 
