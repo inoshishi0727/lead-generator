@@ -316,6 +316,40 @@ It's been 3 months since we last touched base. Warm, low-pressure tone. Acknowle
 Signal that this is a fresh start, not a continuation of the previous thread.`,
 };
 
+// ---- Follow-up system prompt override ----
+// Appended to EMAIL_SYSTEM_PROMPT (or V17) when generating step > 1.
+// The base system prompt is built for cold opens (7-step structure, 120-160
+// words, "identity + hook" reintroduction, cold-open benchmark emails). All of
+// those rules are wrong for follow-ups. This delta overrides them.
+const FOLLOWUP_SYSTEM_PROMPT_DELTA = `
+
+---
+
+## ⚠️ FOLLOW-UP MODE — OVERRIDES THE COLD-OPEN RULES ABOVE
+
+The recipient already received the first email in this thread. They know who Asterley Bros is and what we make. The rules below override the cold-open instructions above for THIS email only. Apply them strictly.
+
+**RULE 1 — Do NOT re-introduce yourself or Asterley Bros.**
+
+The reader already knows. No "We're Asterley Bros, makers of English Vermouth...". No "I'm Rob, founder of...". No restatement of who you are or where you're based. You are writing from inside an existing conversation.
+
+**RULE 2 — Word count and structure come from STEP INSTRUCTION at the bottom of the user prompt, NOT from the cold-open spec above.**
+
+Ignore the 7-step EMAIL STRUCTURE (greeting → identity + hook → early CTA → product detail → venue observation → closing CTA → sign-off). Ignore the "120-160 words" rule. The per-step word count and shape are defined in STEP INSTRUCTION. Follow that exactly.
+
+**RULE 3 — Reference the prior thread naturally.**
+
+The prior email's subject and opening lines appear in the user prompt under PRIOR EMAIL CONTEXT. Use them for voice continuity and to anchor your opening ("Following up on my note about X…" / "Wanted to add one more thought on Y…" / "Quick one to flag…"). Do not quote the prior email's body verbatim. Add a "Re:" prefix to the subject only if STEP INSTRUCTION asks for it.
+
+**RULE 4 — The benchmark emails A/B/C above are COLD OPENS.**
+
+Match their voice, vocabulary, hard rules (no em dashes, no banned phrases, product names, brand register). Do NOT model this email's structure or word count on A/B/C. Their shape is for first emails; the shape you need is in STEP INSTRUCTION.
+
+**RULE 5 — Output format unchanged.**
+
+"Subject:" on the first line, then the email body. The HTML signature is appended downstream; never write your name after the sign-off.
+`;
+
 // ---- Instagram Escalation Prompt ----
 
 const INSTAGRAM_ESCALATION_PROMPT = `INSTAGRAM DM — Channel Escalation. Under 80 words.
@@ -889,7 +923,17 @@ function getCurrentSeason() {
   return "Autumn/Winter";
 }
 
-function buildPrompt(lead, enrichment, step = 1, previousSubject = "") {
+// Pull the first 1-2 sentences of the prior email for voice continuity.
+// Kept short so the model uses it as context, not as text to quote.
+function truncateToSentences(text, maxSentences = 2) {
+  if (!text) return "";
+  const trimmed = String(text).trim();
+  const matches = trimmed.match(/[^.!?\n]+[.!?]+/g);
+  if (!matches || matches.length === 0) return trimmed.slice(0, 200);
+  return matches.slice(0, maxSentences).join(" ").trim();
+}
+
+function buildPrompt(lead, enrichment, step = 1, previousSubject = "", previousContent = "") {
   const contact = enrichment.contact || {};
   const season = getCurrentSeason();
   const seasonData = SEASONAL_PRODUCTS[season] || SEASONAL_PRODUCTS["Spring/Summer"];
@@ -916,6 +960,13 @@ function buildPrompt(lead, enrichment, step = 1, previousSubject = "") {
 
   const stepInstr = (STEP_INSTRUCTIONS[step] || STEP_INSTRUCTIONS[1])
     .replace("{previous_subject}", previousSubject);
+
+  const priorEmailBlock = step > 1
+    ? `\nPRIOR EMAIL CONTEXT (for voice continuity — do NOT quote verbatim):
+- Subject: ${previousSubject || "(unknown)"}
+- Opening lines: ${truncateToSentences(previousContent, 2) || "(unknown)"}
+`
+    : "";
 
   return `VENUE DATA:
 - Name: ${lead.business_name || ""}
@@ -945,7 +996,7 @@ PRODUCTS FOR THIS EMAIL:
 - Lead serve: ${leadServe}
 - Second product (for step 2 or brackets): ${secondProduct}
 - Second serve: ${secondServe}
-
+${priorEmailBlock}
 ${stepInstr}
 
 Write the email now. Subject line first (short, specific, intriguing, 3-7 words), then the full email.`;
@@ -987,7 +1038,7 @@ function toV17ProductName(name) {
   return PRODUCT_NAME_V17[(name || "").toLowerCase()] || (name || "").toUpperCase();
 }
 
-function buildPromptV17(lead, enrichment, step = 1, previousSubject = "") {
+function buildPromptV17(lead, enrichment, step = 1, previousSubject = "", previousContent = "") {
   const contact = enrichment.contact || {};
   const season = getCurrentSeason();
   const seasonEnum = SEASON_ENUM_V17[season] || "spring_summer";
@@ -1010,6 +1061,10 @@ function buildPromptV17(lead, enrichment, step = 1, previousSubject = "") {
   const stepInstr = (STEP_INSTRUCTIONS[step] || STEP_INSTRUCTIONS[1])
     .replace("{previous_subject}", previousSubject);
 
+  const priorEmailBlock = step > 1
+    ? `\nprior_email_subject: ${previousSubject || "(unknown)"}\nprior_email_opening: ${truncateToSentences(previousContent, 2) || "(unknown)"}\n`
+    : "";
+
   return `venue_name: ${lead.business_name || ""}
 venue_category: ${venueCat}
 location: ${lead.address || "London"}
@@ -1025,7 +1080,7 @@ menu_fit: ${enrichment.menu_fit || "unknown"}
 menu_url: ${enrichment.menu_url || "none"}
 lead_products: [${leadProducts.join(", ")}]
 season: ${seasonEnum}
-
+${priorEmailBlock}
 ${stepInstr}
 
 Write the email now. Subject line first, then the full email body.`;
@@ -1035,23 +1090,33 @@ Write the email now. Subject line first, then the full email body.`;
  * Fetch recent edit feedback from Firestore to inject as training examples.
  * Returns up to 3 most recent edits, optionally filtered by venue_category/tone_tier.
  */
-async function getEditFeedback(venueCat, toneTier, limit = 3) {
+async function getEditFeedback(venueCat, toneTier, limit = 3, step = null) {
   try {
-    // Try to find edits matching the same venue category first
+    // Pull a wider set so we can filter by step in memory without needing a
+    // composite index. Cold-open edits look nothing like follow-up edits, so
+    // when step > 1 we strongly prefer same-step examples.
     let snap = await db.collection("edit_feedback")
       .where("channel", "==", "email")
       .orderBy("created_at", "desc")
-      .limit(20)
+      .limit(step != null ? 40 : 20)
       .get();
 
     if (snap.empty) return "";
 
     const docs = snap.docs.map((d) => d.data());
 
+    // When step is specified, prefer same-step edits; fall back to the full pool
+    // if there are fewer than 2 same-step examples.
+    let pool = docs;
+    if (step != null) {
+      const stepMatched = docs.filter((d) => (d.step_number ?? 1) === step);
+      if (stepMatched.length >= 2) pool = stepMatched;
+    }
+
     // Prefer matching venue_category, then tone_tier, then any
-    const matched = docs.filter((d) => d.venue_category === venueCat);
-    const toneMatched = docs.filter((d) => d.tone_tier === toneTier);
-    const examples = matched.length >= 2 ? matched : toneMatched.length >= 2 ? toneMatched : docs;
+    const matched = pool.filter((d) => d.venue_category === venueCat);
+    const toneMatched = pool.filter((d) => d.tone_tier === toneTier);
+    const examples = matched.length >= 2 ? matched : toneMatched.length >= 2 ? toneMatched : pool;
 
     // Prioritize reflected edits (those with a reason note) over unreflected ones
     const reflected = examples.filter((d) => d.reflection_note);
@@ -1085,14 +1150,16 @@ async function getEditFeedback(venueCat, toneTier, limit = 3) {
 
 // Pull the top reply-getting drafts from the same segment so Claude can mimic
 // what already worked. Falls back to broader cohort if the narrow one is thin.
-async function getWinningExamples(segmentKey, broadKey, limit = 3) {
+async function getWinningExamples(segmentKey, broadKey, limit = 3, step = null) {
   try {
+    // Pull a wider set per segment so the in-memory step filter has headroom.
+    // Avoids needing a composite index on (segment_key, has_reply, step_number).
     const trySegment = async (key) => {
       if (!key) return [];
       const snap = await db.collection("outreach_messages")
         .where("segment_key", "==", key)
         .where("has_reply", "==", true)
-        .limit(20)
+        .limit(step != null ? 40 : 20)
         .get();
       return snap.docs.map((d) => d.data());
     };
@@ -1104,6 +1171,13 @@ async function getWinningExamples(segmentKey, broadKey, limit = 3) {
       for (const d of broad) {
         if (!seen.has(d.id)) docs.push(d);
       }
+    }
+
+    // Prefer same-step winners when step is specified. A step-1 winner has
+    // the wrong shape for a step-2 draft.
+    if (step != null) {
+      const stepMatched = docs.filter((d) => (d.step_number ?? 1) === step);
+      if (stepMatched.length >= 2) docs = stepMatched;
     }
 
     if (docs.length === 0) return "";
@@ -1258,8 +1332,10 @@ export const generateDrafts = functions
         const prompt = buildPrompt(leadDoc, enrichment);
 
         // Inject edit feedback + past winners so Claude learns from corrections AND from what got replies
-        const feedbackBlock = await getEditFeedback(venueCat, toneTier);
-        const winnersBlock = await getWinningExamples(segmentKey, broadSegmentKey);
+        // generateDrafts always produces step-1 cold opens; filter feedback +
+        // winners to step 1 so the model doesn't learn from follow-up shapes.
+        const feedbackBlock = await getEditFeedback(venueCat, toneTier, 3, 1);
+        const winnersBlock = await getWinningExamples(segmentKey, broadSegmentKey, 3, 1);
         const promptRules = await getPromptRules();
         const systemPrompt = EMAIL_SYSTEM_PROMPT
           + (promptRules ? `\n\nPROMPT RULES (apply to every email):\n${promptRules}` : "")
@@ -1376,16 +1452,36 @@ export const regenerateDraft = functions
       ? (msgDoc.subject || msgDoc.original_subject || "")
       : "";
 
-    const prompt = useV17
-      ? buildPromptV17(leadDoc, enrichment, stepNumber, previousSubject)
-      : buildPrompt(leadDoc, enrichment, stepNumber, previousSubject);
+    // For follow-up regeneration, fetch the prior sent step's content so the
+    // model can reference the thread voice. Best-effort: skip if not found.
+    let previousContent = "";
+    if (stepNumber > 1) {
+      try {
+        const priorSnap = await db.collection("outreach_messages")
+          .where("lead_id", "==", msgDoc.lead_id)
+          .where("step_number", "==", stepNumber - 1)
+          .where("status", "==", "sent")
+          .limit(1)
+          .get();
+        if (!priorSnap.empty) {
+          previousContent = priorSnap.docs[0].data().content || "";
+        }
+      } catch (err) {
+        console.warn("Failed to fetch prior step content:", err.message);
+      }
+    }
 
-    const feedbackBlock = await getEditFeedback(venueCat, toneTier);
+    const prompt = useV17
+      ? buildPromptV17(leadDoc, enrichment, stepNumber, previousSubject, previousContent)
+      : buildPrompt(leadDoc, enrichment, stepNumber, previousSubject, previousContent);
+
+    const feedbackBlock = await getEditFeedback(venueCat, toneTier, 3, stepNumber);
     const promptRules = await getPromptRules();
     const baseSystemPrompt = useV17 ? EMAIL_SYSTEM_PROMPT_V17 : EMAIL_SYSTEM_PROMPT;
     const systemPrompt = baseSystemPrompt
       + (promptRules ? `\n\nPROMPT RULES (apply to every email):\n${promptRules}` : "")
-      + (feedbackBlock || "");
+      + (feedbackBlock || "")
+      + (stepNumber > 1 ? FOLLOWUP_SYSTEM_PROMPT_DELTA : "");
 
     let rawText = await callDraftLLM(prov, systemPrompt, prompt);
     let { subject, content } = parseSubjectContent(rawText);
@@ -1479,7 +1575,8 @@ export const regenerateAllDrafts = functions
         const toneTier = enrichment.tone_tier || "bartender_casual";
         const prompt = buildPrompt(leadDoc, enrichment);
 
-        const feedbackBlock = await getEditFeedback(venueCat, toneTier);
+        // regenerateAllDrafts always produces step-1 cold opens.
+        const feedbackBlock = await getEditFeedback(venueCat, toneTier, 3, 1);
         const promptRules = await getPromptRules();
         const systemPrompt = EMAIL_SYSTEM_PROMPT
           + (promptRules ? `\n\nPROMPT RULES (apply to every email):\n${promptRules}` : "")
@@ -3504,6 +3601,7 @@ async function runFollowUpGeneration() {
       const initialMessage = sentMessages[0]; // First sent message (step 1)
       const lastSent = sentMessages[sentMessages.length - 1]; // Last sent message
       const previousSubject = initialMessage?.subject || lastSent?.subject || "";
+      const previousContent = lastSent?.content || initialMessage?.content || "";
       // Bug #9: Build References chain from all prior sent messages
       const allPriorMessageIds = sentMessages.map((m) => m.email_message_id).filter(Boolean);
       const parentEmailMessageId = initialMessage?.email_message_id || null;
@@ -3512,13 +3610,15 @@ async function runFollowUpGeneration() {
       const enrichment = lead.enrichment || {};
       const venueCat = enrichment.venue_category || lead.category || "cocktail_bar";
       const toneTier = enrichment.tone_tier || "bartender_casual";
-      const prompt = buildPrompt(lead, enrichment, plannedDoc.step_number, previousSubject);
+      const stepNumber = plannedDoc.step_number;
+      const prompt = buildPrompt(lead, enrichment, stepNumber, previousSubject, previousContent);
 
-      const feedbackBlock = await getEditFeedback(venueCat, toneTier);
+      const feedbackBlock = await getEditFeedback(venueCat, toneTier, 3, stepNumber);
       const promptRules = await getPromptRules();
       const systemPrompt = EMAIL_SYSTEM_PROMPT
         + (promptRules ? `\n\nPROMPT RULES (apply to every email):\n${promptRules}` : "")
-        + (feedbackBlock || "");
+        + (feedbackBlock || "")
+        + (stepNumber > 1 ? FOLLOWUP_SYSTEM_PROMPT_DELTA : "");
 
       const response = await anthropic.messages.create({
         model: CLAUDE_MODEL,
@@ -3624,6 +3724,7 @@ async function runFollowUpGeneration() {
       const initialMessage = sentMessages2[0]; // First sent message (step 1)
       const lastSent = sentMessages2[sentMessages2.length - 1]; // Last sent message
       const previousSubject = initialMessage?.subject || lastSent?.subject || "";
+      const previousContent = lastSent?.content || initialMessage?.content || "";
       // Bug #9: Build References chain from all prior sent messages
       const allPriorMessageIds2 = sentMessages2.map((m) => m.email_message_id).filter(Boolean);
       const parentEmailMessageId = initialMessage?.email_message_id || null;
@@ -3632,13 +3733,14 @@ async function runFollowUpGeneration() {
       const enrichment = lead.enrichment || {};
       const venueCat = enrichment.venue_category || lead.category || "cocktail_bar";
       const toneTier = enrichment.tone_tier || "bartender_casual";
-      const prompt = buildPrompt(lead, enrichment, nextStepNumber, previousSubject);
+      const prompt = buildPrompt(lead, enrichment, nextStepNumber, previousSubject, previousContent);
 
-      const feedbackBlock = await getEditFeedback(venueCat, toneTier);
+      const feedbackBlock = await getEditFeedback(venueCat, toneTier, 3, nextStepNumber);
       const promptRules = await getPromptRules();
       const systemPrompt = EMAIL_SYSTEM_PROMPT
         + (promptRules ? `\n\nPROMPT RULES (apply to every email):\n${promptRules}` : "")
-        + (feedbackBlock || "");
+        + (feedbackBlock || "")
+        + (nextStepNumber > 1 ? FOLLOWUP_SYSTEM_PROMPT_DELTA : "");
 
       const response = await anthropic.messages.create({
         model: CLAUDE_MODEL,
