@@ -241,7 +241,10 @@ export default function OutreachPage() {
         result = [...result].sort((a, b) => {
           const aRank = priorityMap.get(a.lead_id) ?? Infinity;
           const bRank = priorityMap.get(b.lead_id) ?? Infinity;
-          return aRank - bRank;
+          if (aRank !== bRank) return aRank - bRank;
+          // Within the same priority tier, cluster by venue_category so review
+          // batches stay coherent even without an explicit focus-mode filter.
+          return (a.venue_category ?? "").localeCompare(b.venue_category ?? "");
         });
       }
     }
@@ -385,6 +388,34 @@ export default function OutreachPage() {
           ?? value.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
       }));
   }, [allLeads]);
+
+  // Focus Mode: when a venue category is selected, the next "Generate Drafts"
+  // call produces drafts only for that category's top-N eligible leads.
+  // outreachPlan.recommended is priority-ranked; pad with allLeads when shallow.
+  const focusModeLeadIds = useMemo(() => {
+    if (!categoryFilter) return null;
+    const ids: string[] = [];
+    const seen = new Set<string>();
+    for (const l of outreachPlan?.recommended ?? []) {
+      if (l.venue_category !== categoryFilter) continue;
+      if (seen.has(l.lead_id)) continue;
+      ids.push(l.lead_id);
+      seen.add(l.lead_id);
+    }
+    for (const l of allLeads) {
+      if (l.venue_category !== categoryFilter) continue;
+      if (seen.has(l.id)) continue;
+      ids.push(l.id);
+      seen.add(l.id);
+    }
+    return ids.slice(0, 20);
+  }, [categoryFilter, outreachPlan, allLeads]);
+
+  const focusCohortLabel = useMemo(() => {
+    if (!categoryFilter) return null;
+    return venueCounts.find((v) => v.value === categoryFilter)?.label
+      ?? categoryFilter.replace(/_/g, " ");
+  }, [categoryFilter, venueCounts]);
   const draftsByStep = useMemo(() => {
     const drafts = universalMessages.filter((m) => m.status === "draft");
     return {
@@ -432,7 +463,11 @@ export default function OutreachPage() {
   }, [selectedThread?.leadId, statusFilter]);
 
   function handleGenerate() {
-    generateMutation.mutate(undefined);
+    if (focusModeLeadIds && focusModeLeadIds.length > 0) {
+      generateMutation.mutate(focusModeLeadIds);
+    } else {
+      generateMutation.mutate(undefined);
+    }
   }
 
   function handleApproveAll() {
@@ -785,11 +820,24 @@ export default function OutreachPage() {
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
               <h1 className="sp-page-title">Outreach</h1>
               <div data-tour="outreach-actions" className="sp-page-actions">
-              <Button onClick={handleGenerate} disabled={generateMutation.isPending}>
+              <Button
+                onClick={handleGenerate}
+                disabled={
+                  generateMutation.isPending
+                  || (categoryFilter !== "" && (focusModeLeadIds?.length ?? 0) === 0)
+                }
+                title={
+                  categoryFilter !== "" && (focusModeLeadIds?.length ?? 0) === 0
+                    ? `No eligible ${focusCohortLabel ?? "leads"} in pool`
+                    : undefined
+                }
+              >
                 {generateMutation.isPending
                   ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
                   : <FileText className="mr-1.5 h-4 w-4" />}
-                Generate Drafts
+                {focusModeLeadIds && focusModeLeadIds.length > 0 && focusCohortLabel
+                  ? `Generate ${focusModeLeadIds.length} ${focusCohortLabel} drafts`
+                  : "Generate Drafts"}
               </Button>
               <Button variant="outline" onClick={() => regenerateAllMutation.mutate()} disabled={regenerateAllMutation.isPending}>
                 {regenerateAllMutation.isPending
@@ -848,19 +896,65 @@ export default function OutreachPage() {
               ))}
             </div>
 
+            {/* Focus Mode discovery strip — visible on drafts tab when no venue is selected */}
+            {statusFilter === "draft" && categoryFilter === "" && venueCounts.length > 0 && (
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <span style={{
+                  fontSize: 11,
+                  color: "var(--sp-ink-3)",
+                  whiteSpace: "nowrap",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 4,
+                }}>
+                  <Target style={{ width: 12, height: 12 }} />
+                  Focus next batch on
+                </span>
+                {venueCounts.slice(0, 5).map(({ value, label, count }) => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => setCategoryFilter(value)}
+                    title={`Generate the next batch from ${count} ${label} leads only`}
+                    style={{
+                      fontSize: 12,
+                      padding: "4px 10px",
+                      borderRadius: 999,
+                      border: "1px solid var(--sp-line-strong)",
+                      background: "var(--sp-bg-sunken)",
+                      color: "var(--sp-ink-2)",
+                      cursor: "pointer",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {label}
+                    <span style={{ color: "var(--sp-ink-3)", marginLeft: 4 }}>· {count}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+
             {/* Venue + Fit filters */}
             <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <label style={{ fontSize: 11, color: "var(--sp-ink-3)", whiteSpace: "nowrap" }}>Venue</label>
+                <label style={{
+                  fontSize: 11,
+                  color: categoryFilter ? "var(--sp-accent)" : "var(--sp-ink-3)",
+                  whiteSpace: "nowrap",
+                  fontWeight: categoryFilter ? 600 : 400,
+                }}>
+                  {categoryFilter ? "Focus" : "Venue"}
+                </label>
                 <select
                   value={categoryFilter}
                   onChange={(e) => setCategoryFilter(e.target.value)}
                   style={{
                     fontSize: 12, padding: "4px 8px", borderRadius: 6, cursor: "pointer",
-                    border: "1px solid var(--sp-line-strong)",
+                    border: `1px solid ${categoryFilter ? "var(--sp-accent)" : "var(--sp-line-strong)"}`,
                     background: "var(--sp-bg-sunken)",
-                    color: "var(--sp-ink-2)",
+                    color: categoryFilter ? "var(--sp-accent)" : "var(--sp-ink-2)",
                     minWidth: 180,
+                    fontWeight: categoryFilter ? 600 : 400,
                   }}
                 >
                   <option value="">All venues</option>
@@ -1049,6 +1143,21 @@ export default function OutreachPage() {
                   </div>
                 )}
               </div>
+
+              {/* Cohort banner — visible when Focus Mode is active on the drafts queue */}
+              {statusFilter === "draft" && focusCohortLabel && (
+                <div
+                  style={{
+                    padding: "8px 14px",
+                    borderLeft: "2px solid var(--sp-accent)",
+                    background: "var(--sp-bg-sunken)",
+                    fontSize: 12,
+                    color: "var(--sp-ink-2)",
+                  }}
+                >
+                  Reviewing <strong>{focusCohortLabel}</strong> batch — {allMessages.length} draft{allMessages.length === 1 ? "" : "s"} in queue
+                </div>
+              )}
 
               {/* Scrollable email list */}
               <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
