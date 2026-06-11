@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Users, TrendingUp, Target, BarChart3, MessageSquare, Send, Eye, CheckCircle } from "lucide-react";
+import { Users, TrendingUp, Target, BarChart3, MessageSquare, Send, Eye, CheckCircle, DollarSign } from "lucide-react";
 import { StatCard } from "@/components/stat-card";
 import { FunnelChart } from "@/components/funnel-chart";
 import { CategoryBreakdown } from "@/components/category-breakdown";
@@ -79,6 +79,12 @@ export default function AnalyticsPage() {
                 Team Metrics
               </button>
             </Link>
+            <Link href="/analytics/cost">
+              <button className="sp-btn sm" title="Sommelier AI cost + token usage (admin)">
+                <DollarSign size={13} />
+                AI Cost
+              </button>
+            </Link>
           </div>
         )}
       </div>
@@ -91,7 +97,12 @@ export default function AnalyticsPage() {
       </div>
 
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-        <StatCard icon={MessageSquare} label="Reply Rate (12wk)" value={`${overallReplyRate}%`} />
+        <StatCard
+          icon={MessageSquare}
+          label="Reply Rate (12wk)"
+          value={`${overallReplyRate}%`}
+          info={`Message-level reply rate over the last 12 weeks: ${outreachReplied} replies ÷ ${outreachSent} sends (every send counted, including follow-ups). The Dashboard "Reply Rate" shows a different number because it counts unique leads contacted (lead-level) in the current cache, not message sends over 12 weeks.`}
+        />
         <StatCard icon={Eye} label="Open Rate (12wk)" value={`${overallOpenRate}%`} />
         <StatCard icon={CheckCircle} label="Delivery Rate (12wk)" value={`${overallDeliveryRate}%`} />
         <StatCard icon={Send} label="Total Sent (12wk)" value={engagementSent} />

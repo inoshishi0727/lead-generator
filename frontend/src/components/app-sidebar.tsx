@@ -15,6 +15,7 @@ import {
   WORKSPACE_NAV,
   SYSTEM_NAV,
   isNavItemActive,
+  isExactNavItemActive,
   type NavItem,
 } from "@/lib/nav-items";
 
@@ -187,26 +188,51 @@ function NavEntry({
   pathname,
   currentTab,
   unreadCount,
+  isAdmin,
 }: {
   item: NavItem;
   pathname: string;
   currentTab: string | null;
   unreadCount: number;
+  isAdmin: boolean;
 }) {
   const isActive = isNavItemActive(item.href, pathname, currentTab);
   const badge =
     item.badgeKey === "outreachReplies" && unreadCount > 0 ? unreadCount : null;
   const { Icon } = item;
+
+  // Show children when the parent or any child route is active. That way the
+  // sub-menu only takes space when the user is already in that part of the app.
+  const visibleChildren = (item.children ?? []).filter((c) => !c.adminOnly || isAdmin);
+  const showChildren = isActive && visibleChildren.length > 0;
+
   return (
-    <Link
-      key={item.href}
-      href={item.href}
-      className={`sp-nav-item${isActive ? " active" : ""}`}
-    >
-      <Icon size={15} />
-      <span>{item.label}</span>
-      {badge && <span className="sp-nav-badge">{badge}</span>}
-    </Link>
+    <>
+      <Link
+        key={item.href}
+        href={item.href}
+        className={`sp-nav-item${isActive ? " active" : ""}`}
+      >
+        <Icon size={15} />
+        <span>{item.label}</span>
+        {badge && <span className="sp-nav-badge">{badge}</span>}
+      </Link>
+      {showChildren && visibleChildren.map((child) => {
+        const ChildIcon = child.Icon;
+        const childActive = isExactNavItemActive(child.href, pathname);
+        return (
+          <Link
+            key={child.href}
+            href={child.href}
+            className={`sp-nav-item${childActive ? " active" : ""}`}
+            style={{ paddingLeft: 32, fontSize: 12 }}
+          >
+            <ChildIcon size={13} />
+            <span>{child.label}</span>
+          </Link>
+        );
+      })}
+    </>
   );
 }
 
@@ -231,6 +257,7 @@ function SidebarNav({
           pathname={pathname}
           currentTab={currentTab}
           unreadCount={unreadCount}
+          isAdmin={isAdmin}
         />
       ))}
 
@@ -244,6 +271,7 @@ function SidebarNav({
           pathname={pathname}
           currentTab={currentTab}
           unreadCount={unreadCount}
+          isAdmin={isAdmin}
         />
       ))}
     </>
