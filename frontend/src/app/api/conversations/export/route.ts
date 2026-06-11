@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebase-admin";
+import { isInternalSession } from "@/lib/test-traffic";
 
 function escapeCsv(value: string | null | undefined): string {
   if (value == null) return "";
@@ -40,6 +41,8 @@ export async function GET(req: NextRequest) {
     const format = (searchParams.get("format") || "csv").toLowerCase();
     const from = searchParams.get("from");
     const to = searchParams.get("to");
+    // Admin opt-in: ?includeTest=1 to include internal QA sessions.
+    const includeTest = searchParams.get("includeTest") === "1";
 
     let convQuery: FirebaseFirestore.Query = adminDb
       .collection("sommelier_conversations")
@@ -49,6 +52,7 @@ export async function GET(req: NextRequest) {
     if (to) convQuery = convQuery.where("createdAt", "<=", new Date(to));
 
     const convSnap = await convQuery.get();
+    let excludedTest = 0;
 
     type ExportSession = {
       sessionId: string;
@@ -65,6 +69,17 @@ export async function GET(req: NextRequest) {
 
     for (const doc of convSnap.docs) {
       const d = doc.data();
+      if (!includeTest && isInternalSession({
+        isTest: d.isTest === true,
+        tags: Array.isArray(d.tags) ? d.tags : undefined,
+        firstUserMessage: d.firstUserMessage ?? null,
+        userEmail: d.userEmail ?? null,
+        email: d.email ?? null,
+        pageUrl: d.pageUrl ?? null,
+      })) {
+        excludedTest++;
+        continue;
+      }
       const msgsSnap = await doc.ref.collection("messages").orderBy("createdAt", "asc").get();
       const messages = msgsSnap.docs.map((m) => {
         const md = m.data();

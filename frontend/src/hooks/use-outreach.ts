@@ -249,6 +249,37 @@ export function useBatchApprove() {
   });
 }
 
+/**
+ * Reverts a list of approved messages back to draft status. Powers the
+ * "Undo" action on the bulk-approve toast. Capped at 50 ids to avoid
+ * thundering Firestore; the bulk approve button hides Undo above that.
+ */
+export function useBulkUnapprove() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (messageIds: string[]) => {
+      const ids = messageIds.slice(0, 50);
+      let reverted = 0;
+      if (hasBackend) {
+        for (const id of ids) {
+          await api.patch<OutreachMessage>(`/api/outreach/messages/${id}`, { status: "draft" });
+          reverted++;
+        }
+      } else {
+        for (const id of ids) {
+          await updateOutreachMessage(id, { status: "draft" });
+          reverted++;
+        }
+      }
+      return { reverted };
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["outreach"] });
+      qc.invalidateQueries({ queryKey: ["recommendations", "outreach-plan"] });
+    },
+  });
+}
+
 export interface SendResponse {
   run_id: string;
   status: string;

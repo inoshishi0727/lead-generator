@@ -4285,6 +4285,63 @@ export const scheduledSendCampaigns = functions
   });
 
 /**
+ * Reconciles expired campaigns once per day. The same auto-complete logic lives
+ * inline at the end of scheduledSendCampaigns above, but that block only runs
+ * when there are due messages to send — once a campaign's last message has been
+ * sent, the early-return at the top of scheduledSendCampaigns means the
+ * auto-complete never executes and campaigns linger as "active" indefinitely.
+ *
+ * This dedicated cron runs daily at 07:00 London and closes that gap.
+ *
+ * Logic: for every active campaign whose timeframe_end <= today AND has no
+ * remaining draft/approved/planned messages → status=completed.
+ * If pending messages remain → needs_attention=true (do NOT auto-close).
+ */
+export const reconcileExpiredCampaigns = functions
+  .runWith({ timeoutSeconds: 120, memory: "256MB" })
+  .pubsub.schedule("0 7 * * *")
+  .timeZone("Europe/London")
+  .onRun(async () => {
+    const todayStr = new Date().toISOString().slice(0, 10);
+    let completed = 0;
+    let flagged = 0;
+
+    const activeSnap = await db.collection("campaigns")
+      .where("status", "==", "active")
+      .get();
+
+    for (const campaignDoc of activeSnap.docs) {
+      const campaign = campaignDoc.data();
+      if (!campaign.timeframe_end || campaign.timeframe_end > todayStr) continue;
+
+      const pendingSnap = await db.collection("outreach_messages")
+        .where("campaign_id", "==", campaignDoc.id)
+        .where("status", "in", ["draft", "approved", "planned"])
+        .limit(1)
+        .get();
+
+      if (pendingSnap.empty) {
+        await db.collection("campaigns").doc(campaignDoc.id).update({
+          status: "completed",
+          completed_at: new Date().toISOString(),
+        });
+        completed++;
+        console.log(`reconcileExpiredCampaigns: ${campaignDoc.id} (${campaign.name || campaign.campaign_type}) → completed`);
+      } else if (!campaign.needs_attention) {
+        await db.collection("campaigns").doc(campaignDoc.id).update({
+          needs_attention: true,
+          attention_reason: "timeframe_ended_with_pending",
+        });
+        flagged++;
+        console.log(`reconcileExpiredCampaigns: ${campaignDoc.id} flagged (pending messages remain)`);
+      }
+    }
+
+    console.log("reconcileExpiredCampaigns complete:", JSON.stringify({ completed, flagged, scanned: activeSnap.size }));
+    return null;
+  });
+
+/**
  * Sends approved outreach messages (non-campaign) whose scheduled_send_date is <= now.
  * Runs every 30 minutes so time-specific schedules (e.g. 5:30pm) are respected.
  */
