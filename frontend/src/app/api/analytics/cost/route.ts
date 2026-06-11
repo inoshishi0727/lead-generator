@@ -53,15 +53,20 @@ export async function GET(req: NextRequest) {
 
     // Pre-load the set of session IDs we want to treat as internal. The
     // backfill script tags `isTest:true` on both the conversation doc and
-    // any matching `sommelier_usage` rows, but until that's been run we
-    // need to derive the exclusion set from the conversations collection.
+    // any matching `sommelier_usage` rows; this set covers the case where
+    // only the conversation doc is tagged. Failure here is non-fatal — fall
+    // back to the per-row `isTest` flag on the usage docs themselves.
     const internalSessionIds = new Set<string>();
     if (!includeTest) {
-      const convSnap = await adminDb.collection("sommelier_conversations").get();
-      for (const cdoc of convSnap.docs) {
-        const c = cdoc.data();
-        if (c.isTest === true) internalSessionIds.add(cdoc.id);
-        else if (Array.isArray(c.tags) && c.tags.includes("internal")) internalSessionIds.add(cdoc.id);
+      try {
+        const convSnap = await adminDb.collection("sommelier_conversations").get();
+        for (const cdoc of convSnap.docs) {
+          const c = cdoc.data();
+          if (c.isTest === true) internalSessionIds.add(cdoc.id);
+          else if (Array.isArray(c.tags) && c.tags.includes("internal")) internalSessionIds.add(cdoc.id);
+        }
+      } catch (err) {
+        console.warn("Cost analytics: sommelier_conversations pre-load failed; falling back to per-row isTest only.", err instanceof Error ? err.message : err);
       }
     }
 

@@ -368,7 +368,8 @@ export default function DashboardPage() {
           label="Reply rate"
           value={replyRate}
           unit="%"
-          delta={`${replies} replies`}
+          delta={`${replies} of ${replyRateMetric.denominator} contacted`}
+          info={`Lead-level reply rate: ${replies} leads who replied ÷ ${replyRateMetric.denominator} leads we sent at least one email to. The Analytics page shows a different number because it aggregates message-level sends + replies across a 12-week window — that denominator includes every follow-up and grows over time.`}
         />
         <StatCard
           label="Pending approval"
@@ -670,16 +671,41 @@ function StatCard({
   unit,
   delta,
   warn,
+  info,
 }: {
   label: string;
   value: number | string | null;
   unit?: string;
   delta?: string;
   warn?: boolean;
+  /** Hover tooltip explaining what the number actually measures. */
+  info?: string;
 }) {
   return (
-    <div className="sp-stat">
-      <div className="sp-stat-label">{label}</div>
+    <div className="sp-stat" title={info}>
+      <div className="sp-stat-label" style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+        {label}
+        {info && (
+          <span
+            aria-hidden
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: 12,
+              height: 12,
+              borderRadius: "50%",
+              border: "1px solid var(--sp-line-strong)",
+              color: "var(--sp-ink-3)",
+              fontSize: 9,
+              fontWeight: 600,
+              cursor: "help",
+            }}
+          >
+            ?
+          </span>
+        )}
+      </div>
       <div className="sp-stat-value">
         {value === null ? (
           <span style={{ fontSize: 18, color: "var(--sp-ink-4)" }}>—</span>

@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { DollarSign, MessageCircle, Zap, TrendingUp, FileText, Bot } from "lucide-react";
+import Link from "next/link";
+import { ChevronLeft, DollarSign, MessageCircle, Zap, TrendingUp, FileText, Bot } from "lucide-react";
 import { StatCard } from "@/components/stat-card";
 import { useAuth } from "@/lib/auth-context";
 
@@ -29,10 +30,15 @@ interface CostResponse {
 type Window = 7 | 30 | 90 | "all";
 type Tab = "jarvis" | "drafts";
 
-const fmtUsd = (n: number) =>
-  n.toLocaleString("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 4 });
+// Defensive: the jarvis and drafts tabs render with different `totals` shapes,
+// and a tab switch can race the fetch — when that happens the still-current
+// `data` is from the previous tab and missing the field the new tab expects.
+// Coercing undefined → 0 keeps the page rendering "$0" / "0" while the new
+// fetch lands instead of throwing on .toLocaleString.
+const fmtUsd = (n: number | null | undefined) =>
+  (n ?? 0).toLocaleString("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 4 });
 
-const fmtNum = (n: number) => n.toLocaleString("en-US");
+const fmtNum = (n: number | null | undefined) => (n ?? 0).toLocaleString("en-US");
 
 export default function CostAnalyticsPage() {
   const { isAdmin } = useAuth();
@@ -77,6 +83,13 @@ export default function CostAnalyticsPage() {
 
   return (
     <div className="p-6 space-y-6">
+      <Link
+        href="/analytics"
+        className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+      >
+        <ChevronLeft size={12} />
+        Back to Analytics
+      </Link>
       <div className="flex items-center gap-2">
         {tab === "jarvis" ? (
           <Bot className="h-5 w-5 text-emerald-500" />

@@ -3,12 +3,14 @@ import {
   Building2,
   ClipboardCheck,
   ClipboardList,
+  DollarSign,
   Inbox,
   Megaphone,
   MessageCircle,
   Search,
   Settings,
   TrendingUp,
+  Users,
   type LucideIcon,
 } from "lucide-react";
 
@@ -37,6 +39,9 @@ export interface NavItem {
   adminOnly?: boolean;
   /** Optional badge key — used by the sidebar to know where to mount unread counts. */
   badgeKey?: "outreachReplies";
+  /** Optional nested sub-entries. Rendered indented below the parent when the
+   *  parent's route (or any child's route) is active. */
+  children?: NavItem[];
 }
 
 /**
@@ -55,7 +60,15 @@ export const WORKSPACE_NAV: NavItem[] = [
   },
   { href: "/campaigns", label: "Campaigns", Icon: Megaphone },
   { href: "/clients", label: "Clients", Icon: Building2 },
-  { href: "/analytics", label: "Analytics", Icon: TrendingUp },
+  {
+    href: "/analytics",
+    label: "Analytics",
+    Icon: TrendingUp,
+    children: [
+      { href: "/analytics/team", label: "Team Metrics", Icon: Users, adminOnly: true },
+      { href: "/analytics/cost", label: "AI Cost", Icon: DollarSign, adminOnly: true },
+    ],
+  },
 ];
 
 /**
@@ -98,4 +111,15 @@ export function isNavItemActive(
   if (pathname === "/outreach" && currentTab) return false;
 
   return pathname.startsWith(pathPart);
+}
+
+/**
+ * Stricter variant for child entries — only matches the exact path, so two
+ * siblings (e.g. /analytics/team and /analytics/cost) don't both highlight
+ * when one is active. Falls through to the standard matcher for prefix
+ * behaviour the parent already handles.
+ */
+export function isExactNavItemActive(href: string, pathname: string): boolean {
+  const [pathPart] = href.split("?");
+  return pathname === pathPart;
 }

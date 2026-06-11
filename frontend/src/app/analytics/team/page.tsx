@@ -10,7 +10,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Mail, Eye, MessageCircle, Check, Users, Loader2 } from "lucide-react";
+import { Mail, Eye, MessageCircle, Check, Users, Loader2, ChevronLeft } from "lucide-react";
+import Link from "next/link";
 import { toast } from "sonner";
 
 function StatBox({
@@ -71,6 +72,13 @@ export default function TeamAnalyticsPage() {
   return (
     <div className="space-y-6">
       <div>
+        <Link
+          href="/analytics"
+          className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground mb-2"
+        >
+          <ChevronLeft size={12} />
+          Back to Analytics
+        </Link>
         <h1 className="text-2xl font-bold tracking-tight">Team Metrics</h1>
         <p className="text-sm text-muted-foreground mt-1">
           Individual team member performance overview. Metrics include leads assigned, emails sent, open rates, and conversions.
