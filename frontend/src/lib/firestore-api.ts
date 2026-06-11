@@ -832,6 +832,7 @@ import type {
   SommelierMessage,
   SommelierConversationDetail,
 } from "./types";
+import { isInternalSession } from "./test-traffic";
 
 function toIso(value: any): string {
   if (!value) return "";
@@ -848,10 +849,19 @@ export async function getSommelierConversations(filters?: {
   search?: string;
   startDate?: string;
   endDate?: string;
+  /** Admin-only opt-in: include internal QA/test sessions in the result. */
+  includeTest?: boolean;
 }): Promise<SommelierConversation[]> {
   const ref = collection(db, "sommelier_conversations");
   const constraints: any[] = [orderBy("lastActive", "desc")];
-  if (filters?.limit) constraints.push(fbLimit(filters.limit));
+  // When the internal-traffic filter is active we pull a wider window so the
+  // resulting (filtered) count isn't undercut by test sessions clustering at
+  // the top of `lastActive desc`. 1.5x covers typical QA densities; bump if a
+  // single QA burst ever exceeds it.
+  if (filters?.limit) {
+    const fetchSize = filters.includeTest ? filters.limit : Math.ceil(filters.limit * 1.5);
+    constraints.push(fbLimit(fetchSize));
+  }
 
   const q = query(ref, ...constraints);
   const snap = await getDocs(q);
@@ -866,8 +876,22 @@ export async function getSommelierConversations(filters?: {
       messagesCount: data.messagesCount ?? 0,
       firstUserMessage: data.firstUserMessage ?? null,
       source: data.source ?? "sommelier",
+      isTest: data.isTest === true,
+      tags: Array.isArray(data.tags) ? data.tags : undefined,
     };
   });
+
+  // Drop internal/QA traffic by default. Admin debugging can opt back in via
+  // `includeTest: true`.
+  if (!filters?.includeTest) {
+    results = results.filter((c) => !isInternalSession({
+      isTest: c.isTest,
+      tags: c.tags,
+      firstUserMessage: c.firstUserMessage,
+      pageUrl: c.pageUrl,
+    }));
+    if (filters?.limit) results = results.slice(0, filters.limit);
+  }
 
   if (filters?.search) {
     const q = filters.search.toLowerCase();
