@@ -28,6 +28,7 @@ import { toast } from "sonner";
 import { Sparkline } from "@/components/ui/sparkline";
 import { StageChip } from "@/components/ui/stage-chip";
 import type { Lead, OutreachMessage } from "@/lib/types";
+import { computeLeadReplyRate, formatRate } from "@/lib/metrics";
 
 const SOURCE_KEYS: (keyof SearchQueries)[] = [
   "google_maps", "google_search", "bing_search", "directory",
@@ -93,8 +94,11 @@ export default function DashboardPage() {
   const drafts = allMessages.filter((m) => m.status === "draft").length;
   const approved = allMessages.filter((m) => m.status === "approved").length;
   const sent = allMessages.filter((m) => m.status === "sent").length;
-  const replies = allLeads.filter((l) => (l.reply_count ?? 0) > 0).length;
-  const replyRate = sent > 0 ? ((replies / sent) * 100).toFixed(1) : "0.0";
+  // Use the single metrics module so this rate agrees with Analytics + Outreach.
+  // Lead-level: leads who replied / leads we sent at least one email to.
+  const replyRateMetric = computeLeadReplyRate(allLeads, allMessages);
+  const replies = replyRateMetric.numerator;
+  const replyRate = formatRate(replyRateMetric).replace("%", "");
 
   const pipeline = useMemo(() => {
     const counts = { new: 0, contacted: 0, replied: 0, converted: 0, rejected: 0 };
@@ -364,7 +368,8 @@ export default function DashboardPage() {
           label="Reply rate"
           value={replyRate}
           unit="%"
-          delta={`${replies} replies`}
+          delta={`${replies} of ${replyRateMetric.denominator} contacted`}
+          info={`Lead-level reply rate: ${replies} leads who replied ÷ ${replyRateMetric.denominator} leads we sent at least one email to. The Analytics page shows a different number because it aggregates message-level sends + replies across a 12-week window — that denominator includes every follow-up and grows over time.`}
         />
         <StatCard
           label="Pending approval"
@@ -666,16 +671,41 @@ function StatCard({
   unit,
   delta,
   warn,
+  info,
 }: {
   label: string;
   value: number | string | null;
   unit?: string;
   delta?: string;
   warn?: boolean;
+  /** Hover tooltip explaining what the number actually measures. */
+  info?: string;
 }) {
   return (
-    <div className="sp-stat">
-      <div className="sp-stat-label">{label}</div>
+    <div className="sp-stat" title={info}>
+      <div className="sp-stat-label" style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+        {label}
+        {info && (
+          <span
+            aria-hidden
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: 12,
+              height: 12,
+              borderRadius: "50%",
+              border: "1px solid var(--sp-line-strong)",
+              color: "var(--sp-ink-3)",
+              fontSize: 9,
+              fontWeight: 600,
+              cursor: "help",
+            }}
+          >
+            ?
+          </span>
+        )}
+      </div>
       <div className="sp-stat-value">
         {value === null ? (
           <span style={{ fontSize: 18, color: "var(--sp-ink-4)" }}>—</span>

@@ -15,7 +15,9 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/lib/auth-context";
 import { getTeamMembers } from "@/lib/auth-admin";
-import { Search, Sparkles, Loader2, Plus, Settings2, Link2Off, Mail, X, RefreshCw } from "lucide-react";
+import { Search, Sparkles, Loader2, Plus, Settings2, Link2Off, Mail, X, RefreshCw, MoreHorizontal } from "lucide-react";
+import { Menu, MenuTrigger, MenuContent, MenuItem } from "@/components/ui/menu";
+import { LeadsFilterBanner, type ActiveFilter } from "@/components/leads-filter-banner";
 
 const SOURCE_OPTIONS = [
   { value: "", label: "All Sources" },
@@ -184,6 +186,36 @@ function LeadsPageInner() {
   const total = leads.length;
   const totalRaw = allLeads.length;
 
+  // Build the visible chip list shown by the LeadsFilterBanner so any narrowed
+  // pool surfaces a clearable indicator (the prior layout silently hid leads
+  // behind the default-on "Email only" filter — Fable flagged this as a "602
+  // vs 1040" inconsistency).
+  const activeFilters: ActiveFilter[] = useMemo(() => {
+    const out: ActiveFilter[] = [];
+    if (source) out.push({ key: "source", label: `Source: ${source.replace(/_/g, " ")}`, onClear: () => setSource("") });
+    if (stage) out.push({ key: "stage", label: `Stage: ${stage.replace(/_/g, " ")}`, onClear: () => setStage("") });
+    if (category) out.push({ key: "category", label: `Venue: ${category.replace(/_/g, " ")}`, onClear: () => setCategory("") });
+    if (fit) out.push({ key: "fit", label: `Fit: ${fit}`, onClear: () => setFit("") });
+    if (postcode) out.push({ key: "postcode", label: `Postcode: ${postcode}`, onClear: () => setPostcode("") });
+    if (assignedToFilter) out.push({ key: "assignedTo", label: assignedToFilter === "__unassigned__" ? "Unassigned" : `Assigned: ${assignedToFilter}`, onClear: () => setAssignedToFilter("") });
+    if (emailOnly) out.push({ key: "emailOnly", label: "Email only", onClear: () => setEmailOnly(false) });
+    if (noMenuUrl) out.push({ key: "noMenuUrl", label: "No menu URL", onClear: () => setNoMenuUrl(false) });
+    if (search) out.push({ key: "search", label: `Search: ${search}`, onClear: () => setSearch("") });
+    return out;
+  }, [source, stage, category, fit, postcode, assignedToFilter, emailOnly, noMenuUrl, search]);
+
+  const clearAllFilters = () => {
+    setSource("");
+    setStage("");
+    setCategory("");
+    setFit("");
+    setPostcode("");
+    setAssignedToFilter("");
+    setEmailOnly(false);
+    setNoMenuUrl(false);
+    setSearch("");
+  };
+
   const DISMISS_KEY = "new_leads_banner_dismissed_at";
   const cutoff = Date.now() - 24 * 60 * 60 * 1000;
 
@@ -231,10 +263,27 @@ function LeadsPageInner() {
               variant="outline"
               size="sm"
               onClick={() => setShowQueries(!showQueries)}
+              title="Open scrape queries panel — find new venues to add to the pipeline"
             >
-              <Settings2 className="mr-1.5 h-3.5 w-3.5" />
-              Scrape Queries
+              <Search className="mr-1.5 h-3.5 w-3.5" />
+              Find new venues
             </Button>
+            {enrichmentQueueCount > 0 && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => enrichMutation.mutate({})}
+                disabled={enrichMutation.isPending}
+                title={`${enrichmentQueueCount} leads awaiting enrichment`}
+              >
+                {enrichMutation.isPending ? (
+                  <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Sparkles className="mr-1.5 h-3.5 w-3.5" />
+                )}
+                Update missing info ({enrichmentQueueCount})
+              </Button>
+            )}
             <Button
               variant="outline"
               size="sm"
@@ -243,58 +292,59 @@ function LeadsPageInner() {
               <Plus className="mr-1.5 h-3.5 w-3.5" />
               Quick Add
             </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => enrichMutation.mutate({})}
-              disabled={enrichMutation.isPending}
-              title={enrichmentQueueCount > 0 ? `${enrichmentQueueCount} leads awaiting enrichment` : "All leads enriched"}
-            >
-              {enrichMutation.isPending ? (
-                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Sparkles className="mr-1.5 h-3.5 w-3.5" />
-              )}
-              Enrich{enrichmentQueueCount > 0 ? ` (${enrichmentQueueCount})` : " All"}
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                if (confirm(`Force re-enrich all ${allLeads.length} leads? This overwrites existing enrichment data.`)) {
-                  enrichMutation.mutate({ force: true });
+            <Menu>
+              <MenuTrigger
+                render={
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    title="Data tools — re-enrich, find menu URLs, etc."
+                  >
+                    <MoreHorizontal className="mr-1.5 h-3.5 w-3.5" />
+                    Data
+                  </Button>
                 }
-              }}
-              disabled={enrichMutation.isPending}
-              title="Re-enrich all leads, overwriting existing enrichment data"
-            >
-              <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
-              Force Re-enrich
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={menuUrlLoading}
-              onClick={async () => {
-                setMenuUrlLoading(true);
-                try {
-                  const res = await fetch("/api/enrich-menu-url", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ limit: 50 }) });
-                  const data = await res.json();
-                  alert(`Menu URL scan done: ${data.found} found, ${data.not_found} not found, ${data.failed} failed`);
-                } catch (e: any) {
-                  alert("Menu URL scan failed: " + e.message);
-                } finally {
-                  setMenuUrlLoading(false);
-                }
-              }}
-            >
-              {menuUrlLoading ? (
-                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Link2Off className="mr-1.5 h-3.5 w-3.5" />
-              )}
-              Find Menu URLs
-            </Button>
+              />
+              <MenuContent align="end">
+                <MenuItem
+                  onClick={() => {
+                    if (confirm(`Force re-enrich all ${allLeads.length} leads? This overwrites existing enrichment data.`)) {
+                      enrichMutation.mutate({ force: true });
+                    }
+                  }}
+                  disabled={enrichMutation.isPending}
+                >
+                  <RefreshCw className="h-3.5 w-3.5" />
+                  Force re-enrich all
+                </MenuItem>
+                <MenuItem
+                  disabled={menuUrlLoading}
+                  onClick={async () => {
+                    setMenuUrlLoading(true);
+                    try {
+                      const res = await fetch("/api/enrich-menu-url", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ limit: 50 }) });
+                      const data = await res.json();
+                      alert(`Menu URL scan done: ${data.found} found, ${data.not_found} not found, ${data.failed} failed`);
+                    } catch (e: any) {
+                      alert("Menu URL scan failed: " + e.message);
+                    } finally {
+                      setMenuUrlLoading(false);
+                    }
+                  }}
+                >
+                  {menuUrlLoading ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Link2Off className="h-3.5 w-3.5" />
+                  )}
+                  Find missing menu URLs
+                </MenuItem>
+                <MenuItem onClick={() => setShowQueries(true)}>
+                  <Settings2 className="h-3.5 w-3.5" />
+                  Manage scrape queries
+                </MenuItem>
+              </MenuContent>
+            </Menu>
           </div>
         )}
       </div>
@@ -557,6 +607,13 @@ function LeadsPageInner() {
           </div>
         </div>
       )}
+
+      <LeadsFilterBanner
+        total={total}
+        totalRaw={totalRaw}
+        activeFilters={activeFilters}
+        onClearAll={clearAllFilters}
+      />
 
       <div data-tour="leads-table">
         <LeadsTable

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Users, TrendingUp, Target, BarChart3, MessageSquare, Send, Eye, CheckCircle } from "lucide-react";
+import { Users, TrendingUp, Target, BarChart3, MessageSquare, Send, Eye, CheckCircle, DollarSign } from "lucide-react";
 import { StatCard } from "@/components/stat-card";
 import { FunnelChart } from "@/components/funnel-chart";
 import { CategoryBreakdown } from "@/components/category-breakdown";
@@ -20,6 +20,7 @@ import { EmailPerformanceCard } from "@/components/email-performance-card";
 import { Button } from "@/components/ui/button";
 import { useFunnel, useCategories, useReplyRateTrend, useOpenRateTrend } from "@/hooks/use-analytics";
 import { useAuth } from "@/lib/auth-context";
+import { makeRate } from "@/lib/metrics";
 
 export default function AnalyticsPage() {
   const { isAdmin } = useAuth();
@@ -35,21 +36,24 @@ export default function AnalyticsPage() {
   const converted = stages.find((s) => s.name === "converted")?.count ?? 0;
   const sent = stages.find((s) => s.name === "sent")?.count ?? 0;
 
-  const responseRate = sent > 0 ? Math.round((responded / sent) * 100) : 0;
-  const conversionRate = totalLeads > 0 ? Math.round((converted / totalLeads) * 100) : 0;
+  // Use the metrics module so rates can never render > 100% (the prior
+  // "RESPONSE RATE 209%" bug came from a denominator/numerator mismatch
+  // in the backend funnel data — frontend now clamps defensively).
+  const responseRateMetric = makeRate(responded, sent);
+  const responseRate = Math.round(responseRateMetric.rate * 100);
+  const conversionRateMetric = makeRate(converted, totalLeads);
+  const conversionRate = Math.round(conversionRateMetric.rate * 100);
 
   const outreachSent = replyTrendData?.series.reduce((sum, s) => sum + s.sent, 0) ?? 0;
   const outreachReplied = replyTrendData?.series.reduce((sum, s) => sum + s.replied, 0) ?? 0;
-  const overallReplyRate =
-    outreachSent > 0 ? Math.round((outreachReplied / outreachSent) * 100) : 0;
+  const replyRateMetric = makeRate(outreachReplied, outreachSent);
+  const overallReplyRate = Math.round(replyRateMetric.rate * 100);
 
   const engagementSent = openTrendData?.series.reduce((sum, s) => sum + s.sent, 0) ?? 0;
   const engagementOpened = openTrendData?.series.reduce((sum, s) => sum + s.opened, 0) ?? 0;
   const engagementDelivered = openTrendData?.series.reduce((sum, s) => sum + s.delivered, 0) ?? 0;
-  const overallOpenRate =
-    engagementSent > 0 ? Math.round((engagementOpened / engagementSent) * 100) : 0;
-  const overallDeliveryRate =
-    engagementSent > 0 ? Math.round((engagementDelivered / engagementSent) * 100) : 0;
+  const overallOpenRate = Math.round(makeRate(engagementOpened, engagementSent).rate * 100);
+  const overallDeliveryRate = Math.round(makeRate(engagementDelivered, engagementSent).rate * 100);
 
   const categories = categoryData?.categories ?? [];
   const avgScore =
@@ -75,6 +79,12 @@ export default function AnalyticsPage() {
                 Team Metrics
               </button>
             </Link>
+            <Link href="/analytics/cost">
+              <button className="sp-btn sm" title="Sommelier AI cost + token usage (admin)">
+                <DollarSign size={13} />
+                AI Cost
+              </button>
+            </Link>
           </div>
         )}
       </div>
@@ -87,7 +97,12 @@ export default function AnalyticsPage() {
       </div>
 
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-        <StatCard icon={MessageSquare} label="Reply Rate (12wk)" value={`${overallReplyRate}%`} />
+        <StatCard
+          icon={MessageSquare}
+          label="Reply Rate (12wk)"
+          value={`${overallReplyRate}%`}
+          info={`Message-level reply rate over the last 12 weeks: ${outreachReplied} replies ÷ ${outreachSent} sends (every send counted, including follow-ups). The Dashboard "Reply Rate" shows a different number because it counts unique leads contacted (lead-level) in the current cache, not message sends over 12 weeks.`}
+        />
         <StatCard icon={Eye} label="Open Rate (12wk)" value={`${overallOpenRate}%`} />
         <StatCard icon={CheckCircle} label="Delivery Rate (12wk)" value={`${overallDeliveryRate}%`} />
         <StatCard icon={Send} label="Total Sent (12wk)" value={engagementSent} />

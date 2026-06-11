@@ -28,10 +28,12 @@ import {
   useGenerateDrafts,
   useRegenerateAll,
   useBatchApprove,
+  useBulkUnapprove,
   useSendApproved,
   useGenerateFollowups,
   useApprovedEmailCount,
 } from "@/hooks/use-outreach";
+import { BulkConfirmDialog } from "@/components/bulk-confirm-dialog";
 import { useLeads } from "@/hooks/use-leads";
 import { useOutreachPlan } from "@/hooks/use-outreach-plan";
 import { getOutreachMessages } from "@/lib/firestore-api";
@@ -77,6 +79,12 @@ const CATEGORY_OPTIONS = [
   { value: "luxury_food_retail", label: "Luxury Food Retail" },
   { value: "grocery", label: "Grocery" },
 ];
+
+function formatVenueLabel(value: string | null | undefined): string {
+  if (!value) return "";
+  return CATEGORY_OPTIONS.find((o) => o.value === value)?.label
+    ?? value.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
 
 export default function OutreachPage() {
   const { isAdmin, isMember, user } = useAuth();
@@ -182,6 +190,9 @@ export default function OutreachPage() {
   const generateMutation = useGenerateDrafts();
   const regenerateAllMutation = useRegenerateAll();
   const batchApproveMutation = useBatchApprove();
+  const bulkUnapproveMutation = useBulkUnapprove();
+  const [confirmApproveOpen, setConfirmApproveOpen] = useState(false);
+  const [confirmRegenerateOpen, setConfirmRegenerateOpen] = useState(false);
   const sendMutation = useSendApproved();
   const followupsMutation = useGenerateFollowups();
 
@@ -471,18 +482,42 @@ export default function OutreachPage() {
   }
 
   function handleApproveAll() {
-    if (draftIds.length > 0) {
-      batchApproveMutation.mutate(draftIds, {
-        onSuccess: (data) => {
-          const skipped = (data as { skipped_duplicates?: number }).skipped_duplicates ?? 0;
-          if (skipped > 0) {
-            toast.warning(
-              `${skipped} draft${skipped > 1 ? "s" : ""} skipped — lead already has a live email outreach.`
-            );
-          }
-        },
-      });
-    }
+    if (draftIds.length === 0) return;
+    // Snapshot the ids before the mutation so Undo can revert exactly the
+    // set we just approved (filter state may have moved on by then).
+    const idsToApprove = [...draftIds];
+    batchApproveMutation.mutate(idsToApprove, {
+      onSuccess: (data) => {
+        const skipped = (data as { skipped_duplicates?: number }).skipped_duplicates ?? 0;
+        const approvedCount = (data as { approved?: number }).approved ?? idsToApprove.length;
+        if (skipped > 0) {
+          toast.warning(
+            `${skipped} draft${skipped > 1 ? "s" : ""} skipped — lead already has a live email outreach.`
+          );
+        }
+        // Undo toast — only offered for batches small enough to revert cleanly.
+        if (approvedCount > 0 && approvedCount <= 50) {
+          toast.success(
+            `Approved ${approvedCount} draft${approvedCount === 1 ? "" : "s"}.`,
+            {
+              duration: 10_000,
+              action: {
+                label: "Undo",
+                onClick: () => {
+                  bulkUnapproveMutation.mutate(idsToApprove.slice(0, approvedCount), {
+                    onSuccess: ({ reverted }) => {
+                      toast.info(
+                        `Reverted ${reverted} draft${reverted === 1 ? "" : "s"} back to draft.`
+                      );
+                    },
+                  });
+                },
+              },
+            },
+          );
+        }
+      },
+    });
   }
 
   function handleSend(force: boolean = false) {
@@ -839,7 +874,12 @@ export default function OutreachPage() {
                   ? `Generate ${focusModeLeadIds.length} ${focusCohortLabel} drafts`
                   : "Generate Drafts"}
               </Button>
-              <Button variant="outline" onClick={() => regenerateAllMutation.mutate()} disabled={regenerateAllMutation.isPending}>
+              <Button
+                variant="outline"
+                onClick={() => setConfirmRegenerateOpen(true)}
+                disabled={regenerateAllMutation.isPending}
+                title="Discards current drafts and re-runs Generate Drafts. Confirms first."
+              >
                 {regenerateAllMutation.isPending
                   ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
                   : <RefreshCw className="mr-1.5 h-4 w-4" />}
@@ -849,11 +889,13 @@ export default function OutreachPage() {
                 <Button
                   variant="outline"
                   className="border-emerald-500 text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/20"
-                  onClick={handleApproveAll}
+                  onClick={() => setConfirmApproveOpen(true)}
                   disabled={batchApproveMutation.isPending || emailCapReached}
                 >
                   <CheckCheck className="mr-1.5 h-4 w-4" />
-                  Approve All ({msgDraftCount})
+                  {(focusCohortLabel || fitFilter)
+                    ? `Approve these ${msgDraftCount}${focusCohortLabel ? ` ${focusCohortLabel}` : ""}${fitFilter ? ` / ${fitFilter.replace(/_/g, " ")}` : ""}`
+                    : `Approve all ${msgDraftCount} drafts`}
                 </Button>
               )}
               {(isAdmin || isMember) && msgApprovedCount > 0 && (
@@ -1219,12 +1261,35 @@ export default function OutreachPage() {
                         </div>
                         {(() => {
                           const fit = getFitPill(msg.lead_id);
-                          return fit ? (
-                            <div style={{ display: "flex", alignItems: "center", gap: 3, marginTop: 1 }}>
-                              <span style={{ width: 6, height: 6, borderRadius: "50%", background: fit.color, flexShrink: 0, display: "inline-block" }} />
-                              <span style={{ fontSize: 10, color: fit.color, fontWeight: 500 }}>{fit.label}</span>
+                          // Hide the venue pill in Focus Mode — it would just
+                          // repeat the cohort label on every row.
+                          const showVenue = !categoryFilter && !!msg.venue_category;
+                          const venueLabel = showVenue ? formatVenueLabel(msg.venue_category) : "";
+                          if (!fit && !venueLabel) return null;
+                          return (
+                            <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 2, flexWrap: "wrap" }}>
+                              {venueLabel && (
+                                <span style={{
+                                  fontSize: 10,
+                                  padding: "1px 7px",
+                                  borderRadius: 999,
+                                  background: "var(--sp-bg-sunken)",
+                                  border: "1px solid var(--sp-line)",
+                                  color: "var(--sp-ink-3)",
+                                  whiteSpace: "nowrap",
+                                  lineHeight: 1.5,
+                                }}>
+                                  {venueLabel}
+                                </span>
+                              )}
+                              {fit && (
+                                <span style={{ display: "inline-flex", alignItems: "center", gap: 3 }}>
+                                  <span style={{ width: 6, height: 6, borderRadius: "50%", background: fit.color, flexShrink: 0, display: "inline-block" }} />
+                                  <span style={{ fontSize: 10, color: fit.color, fontWeight: 500 }}>{fit.label}</span>
+                                </span>
+                              )}
                             </div>
-                          ) : null;
+                          );
                         })()}
                         {msg.subject && <div className="sp-email-item-subj">{msg.subject}</div>}
                         <div className="sp-email-item-prev">
@@ -1279,6 +1344,35 @@ export default function OutreachPage() {
         lead={selectedLead}
         onClose={() => setSelectedLead(null)}
         onEmail={selectedLead ? handleEmailLead : undefined}
+      />
+
+      {/* Bulk confirm dialogs — one shared component for Approve + Regenerate */}
+      <BulkConfirmDialog
+        open={confirmApproveOpen}
+        onClose={() => setConfirmApproveOpen(false)}
+        onConfirm={handleApproveAll}
+        title={
+          (focusCohortLabel || fitFilter)
+            ? `Approve these ${msgDraftCount} drafts?`
+            : `Approve all ${msgDraftCount} drafts?`
+        }
+        description="Approved drafts move into the send queue. You can Undo within 10 seconds."
+        breakdown={[
+          focusCohortLabel ? `${focusCohortLabel} · ${msgDraftCount}` : null,
+          fitFilter ? `${fitFilter.replace(/_/g, " ")} fit` : null,
+        ].filter((s): s is string => s !== null)}
+        confirmLabel={`Approve ${msgDraftCount}`}
+        disabled={batchApproveMutation.isPending || emailCapReached}
+      />
+      <BulkConfirmDialog
+        open={confirmRegenerateOpen}
+        onClose={() => setConfirmRegenerateOpen(false)}
+        onConfirm={() => regenerateAllMutation.mutate()}
+        title="Regenerate all current drafts?"
+        description="This rejects every current draft and regenerates them. Edits made in-place are discarded."
+        confirmLabel="Regenerate all"
+        destructive
+        disabled={regenerateAllMutation.isPending}
       />
     </div>
   );
