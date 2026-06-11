@@ -28,6 +28,7 @@ import { toast } from "sonner";
 import { Sparkline } from "@/components/ui/sparkline";
 import { StageChip } from "@/components/ui/stage-chip";
 import type { Lead, OutreachMessage } from "@/lib/types";
+import { computeLeadReplyRate, formatRate } from "@/lib/metrics";
 
 const SOURCE_KEYS: (keyof SearchQueries)[] = [
   "google_maps", "google_search", "bing_search", "directory",
@@ -93,8 +94,11 @@ export default function DashboardPage() {
   const drafts = allMessages.filter((m) => m.status === "draft").length;
   const approved = allMessages.filter((m) => m.status === "approved").length;
   const sent = allMessages.filter((m) => m.status === "sent").length;
-  const replies = allLeads.filter((l) => (l.reply_count ?? 0) > 0).length;
-  const replyRate = sent > 0 ? ((replies / sent) * 100).toFixed(1) : "0.0";
+  // Use the single metrics module so this rate agrees with Analytics + Outreach.
+  // Lead-level: leads who replied / leads we sent at least one email to.
+  const replyRateMetric = computeLeadReplyRate(allLeads, allMessages);
+  const replies = replyRateMetric.numerator;
+  const replyRate = formatRate(replyRateMetric).replace("%", "");
 
   const pipeline = useMemo(() => {
     const counts = { new: 0, contacted: 0, replied: 0, converted: 0, rejected: 0 };

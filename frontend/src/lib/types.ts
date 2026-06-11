@@ -512,6 +512,10 @@ export interface SommelierConversation {
   messagesCount: number;
   firstUserMessage: string | null;
   source: string;
+  /** True when the session originated from internal QA/test traffic. */
+  isTest?: boolean;
+  /** Optional tag bag (e.g. ["internal"]) attached at write-time. */
+  tags?: string[];
 }
 
 export interface SommelierMessage {

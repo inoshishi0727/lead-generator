@@ -1,18 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useRef, useState } from "react";
 import {
-  BarChart3,
-  Building2,
-  ClipboardList,
-  Mail,
-  Megaphone,
-  MessageCircle,
-  Search,
-  Settings,
-  TrendingUp,
   LogOut,
   Bell,
   HelpCircle,
@@ -20,6 +11,12 @@ import {
 import { useAuth } from "@/lib/auth-context";
 import { useReplyNotifications } from "@/hooks/use-notifications";
 import type { ReplyNotification } from "@/lib/firestore-api";
+import {
+  WORKSPACE_NAV,
+  SYSTEM_NAV,
+  isNavItemActive,
+  type NavItem,
+} from "@/lib/nav-items";
 
 function timeAgo(iso: string) {
   if (!iso) return "";
@@ -185,22 +182,76 @@ function NotificationDropdown({
   );
 }
 
-const NAV_ITEMS = [
-  { href: "/", label: "Dashboard", Icon: BarChart3 },
-  { href: "/leads", label: "Leads", Icon: Search },
-  { href: "/clients", label: "Clients", Icon: Building2 },
-  { href: "/campaigns", label: "Campaigns", Icon: Megaphone },
-  { href: "/outreach", label: "Outreach", Icon: Mail },
-  { href: "/conversations", label: "Conversations", Icon: MessageCircle },
-  { href: "/analytics", label: "Analytics", Icon: TrendingUp },
-  { href: "/analytics/cost", label: "AI Cost", Icon: TrendingUp },
-  { href: "/log", label: "Log", Icon: ClipboardList },
-  { href: "/settings", label: "Settings", Icon: Settings },
-];
+function NavEntry({
+  item,
+  pathname,
+  currentTab,
+  unreadCount,
+}: {
+  item: NavItem;
+  pathname: string;
+  currentTab: string | null;
+  unreadCount: number;
+}) {
+  const isActive = isNavItemActive(item.href, pathname, currentTab);
+  const badge =
+    item.badgeKey === "outreachReplies" && unreadCount > 0 ? unreadCount : null;
+  const { Icon } = item;
+  return (
+    <Link
+      key={item.href}
+      href={item.href}
+      className={`sp-nav-item${isActive ? " active" : ""}`}
+    >
+      <Icon size={15} />
+      <span>{item.label}</span>
+      {badge && <span className="sp-nav-badge">{badge}</span>}
+    </Link>
+  );
+}
+
+function SidebarNav({
+  unreadCount,
+  isAdmin,
+}: {
+  unreadCount: number;
+  isAdmin: boolean;
+}) {
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const currentTab = searchParams.get("tab");
+
+  return (
+    <>
+      <div className="sp-nav-section-label">Workspace</div>
+      {WORKSPACE_NAV.map((item) => (
+        <NavEntry
+          key={item.href}
+          item={item}
+          pathname={pathname}
+          currentTab={currentTab}
+          unreadCount={unreadCount}
+        />
+      ))}
+
+      <div className="sp-nav-section-label" style={{ marginTop: 16 }}>
+        System
+      </div>
+      {SYSTEM_NAV.filter((item) => !item.adminOnly || isAdmin).map((item) => (
+        <NavEntry
+          key={item.href}
+          item={item}
+          pathname={pathname}
+          currentTab={currentTab}
+          unreadCount={unreadCount}
+        />
+      ))}
+    </>
+  );
+}
 
 export function AppSidebar() {
-  const pathname = usePathname();
-  const { displayName, signOut } = useAuth();
+  const { displayName, signOut, isAdmin } = useAuth();
   const { unreadCount, replies, lastReadAt, markAllRead } =
     useReplyNotifications();
   const [notifOpen, setNotifOpen] = useState(false);
@@ -236,24 +287,9 @@ export function AppSidebar() {
         </div>
       </div>
 
-      <div className="sp-nav-section-label">Workspace</div>
-
-      {NAV_ITEMS.map(({ href, label, Icon }) => {
-        const isActive = href === "/" ? pathname === "/" : pathname.startsWith(href);
-        const badge =
-          href === "/outreach" && unreadCount > 0 ? unreadCount : null;
-        return (
-          <Link
-            key={href}
-            href={href}
-            className={`sp-nav-item${isActive ? " active" : ""}`}
-          >
-            <Icon size={15} />
-            <span>{label}</span>
-            {badge && <span className="sp-nav-badge">{badge}</span>}
-          </Link>
-        );
-      })}
+      <Suspense fallback={<div className="sp-nav-section-label">Workspace</div>}>
+        <SidebarNav unreadCount={unreadCount} isAdmin={isAdmin} />
+      </Suspense>
 
       {/* Footer */}
       <div className="sp-sidebar-footer">

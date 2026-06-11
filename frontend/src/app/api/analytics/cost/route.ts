@@ -41,6 +41,8 @@ export async function GET(req: NextRequest) {
     const { searchParams } = new URL(req.url);
     const all = searchParams.get("all") === "1" || searchParams.get("days") === "all";
     const days = all ? 0 : Math.max(1, Math.min(365, parseInt(searchParams.get("days") || "30", 10)));
+    // Admin opt-in: ?includeTest=1 to fold internal QA sessions back in.
+    const includeTest = searchParams.get("includeTest") === "1";
 
     let since: Date | null = null;
     if (!all) {
@@ -49,8 +51,23 @@ export async function GET(req: NextRequest) {
       since.setUTCHours(0, 0, 0, 0);
     }
 
+    // Pre-load the set of session IDs we want to treat as internal. The
+    // backfill script tags `isTest:true` on both the conversation doc and
+    // any matching `sommelier_usage` rows, but until that's been run we
+    // need to derive the exclusion set from the conversations collection.
+    const internalSessionIds = new Set<string>();
+    if (!includeTest) {
+      const convSnap = await adminDb.collection("sommelier_conversations").get();
+      for (const cdoc of convSnap.docs) {
+        const c = cdoc.data();
+        if (c.isTest === true) internalSessionIds.add(cdoc.id);
+        else if (Array.isArray(c.tags) && c.tags.includes("internal")) internalSessionIds.add(cdoc.id);
+      }
+    }
+
     const base = adminDb.collection("sommelier_usage");
     const snap = await base.get();
+    let excludedTestRows = 0;
 
     let totalInput = 0;
     let totalOutput = 0;
@@ -75,6 +92,14 @@ export async function GET(req: NextRequest) {
       const created = tsToDate(d.createdAt);
       if (!created) continue;
       if (since && created < since) continue;
+
+      // Skip internal QA traffic unless explicitly requested. Caught by
+      // either the per-row `isTest` flag OR the conversation-derived set
+      // above (in case the backfill hasn't tagged usage docs yet).
+      if (!includeTest && (d.isTest === true || (d.sessionId && internalSessionIds.has(d.sessionId)))) {
+        excludedTestRows++;
+        continue;
+      }
 
       const r = {
         inputTokens: d.inputTokens ?? 0,
@@ -123,6 +148,9 @@ export async function GET(req: NextRequest) {
       all,
       since: since ? since.toISOString() : null,
       pricing: HAIKU_PRICING,
+      // How many usage rows were folded out as internal/test traffic. Lets
+      // the Dashboard show "N test sessions hidden" without a second query.
+      excludedTestRows,
       totals: {
         inputTokens: totalInput,
         outputTokens: totalOutput,

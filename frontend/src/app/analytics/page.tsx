@@ -20,6 +20,7 @@ import { EmailPerformanceCard } from "@/components/email-performance-card";
 import { Button } from "@/components/ui/button";
 import { useFunnel, useCategories, useReplyRateTrend, useOpenRateTrend } from "@/hooks/use-analytics";
 import { useAuth } from "@/lib/auth-context";
+import { makeRate } from "@/lib/metrics";
 
 export default function AnalyticsPage() {
   const { isAdmin } = useAuth();
@@ -35,21 +36,24 @@ export default function AnalyticsPage() {
   const converted = stages.find((s) => s.name === "converted")?.count ?? 0;
   const sent = stages.find((s) => s.name === "sent")?.count ?? 0;
 
-  const responseRate = sent > 0 ? Math.round((responded / sent) * 100) : 0;
-  const conversionRate = totalLeads > 0 ? Math.round((converted / totalLeads) * 100) : 0;
+  // Use the metrics module so rates can never render > 100% (the prior
+  // "RESPONSE RATE 209%" bug came from a denominator/numerator mismatch
+  // in the backend funnel data — frontend now clamps defensively).
+  const responseRateMetric = makeRate(responded, sent);
+  const responseRate = Math.round(responseRateMetric.rate * 100);
+  const conversionRateMetric = makeRate(converted, totalLeads);
+  const conversionRate = Math.round(conversionRateMetric.rate * 100);
 
   const outreachSent = replyTrendData?.series.reduce((sum, s) => sum + s.sent, 0) ?? 0;
   const outreachReplied = replyTrendData?.series.reduce((sum, s) => sum + s.replied, 0) ?? 0;
-  const overallReplyRate =
-    outreachSent > 0 ? Math.round((outreachReplied / outreachSent) * 100) : 0;
+  const replyRateMetric = makeRate(outreachReplied, outreachSent);
+  const overallReplyRate = Math.round(replyRateMetric.rate * 100);
 
   const engagementSent = openTrendData?.series.reduce((sum, s) => sum + s.sent, 0) ?? 0;
   const engagementOpened = openTrendData?.series.reduce((sum, s) => sum + s.opened, 0) ?? 0;
   const engagementDelivered = openTrendData?.series.reduce((sum, s) => sum + s.delivered, 0) ?? 0;
-  const overallOpenRate =
-    engagementSent > 0 ? Math.round((engagementOpened / engagementSent) * 100) : 0;
-  const overallDeliveryRate =
-    engagementSent > 0 ? Math.round((engagementDelivered / engagementSent) * 100) : 0;
+  const overallOpenRate = Math.round(makeRate(engagementOpened, engagementSent).rate * 100);
+  const overallDeliveryRate = Math.round(makeRate(engagementDelivered, engagementSent).rate * 100);
 
   const categories = categoryData?.categories ?? [];
   const avgScore =
