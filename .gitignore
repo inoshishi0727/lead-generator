@@ -49,6 +49,13 @@ firestore-debug.log
 frontend/node_modules/
 frontend/.next/
 
+# Root-level node deps (installed for scripts/seed-demo-data.mjs, which
+# imports firebase-admin to talk to the local emulator). Not part of the
+# build; just runtime deps for one-off scripts.
+/node_modules/
+/package.json
+/package-lock.json
+
 # Static build output
 src/static/
 

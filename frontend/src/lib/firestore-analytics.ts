@@ -22,6 +22,39 @@ const STAGE_ORDER = [
   "follow_up_1", "follow_up_2", "responded", "converted", "declined",
 ];
 
+// The funnel stages, in linear progression order. `declined` is an absorbing
+// terminal that doesn't fit the pipeline forward-flow (you can decline at any
+// point), so it's excluded from the monotonic count. follow_up_1/follow_up_2
+// are downstream of "sent" but we collapse them under "sent" for the funnel
+// view — once a lead has been sent at least one message, every later stage
+// implies "sent" is true.
+const FUNNEL_PROGRESSION = [
+  "scraped",
+  "enriched",
+  "scored",
+  "draft_generated",
+  "approved",
+  "sent",
+  "responded",
+  "converted",
+];
+
+// For each funnel stage, the set of CURRENT stages that imply the lead has
+// REACHED or PASSED that stage. A lead currently at "responded" has reached
+// "sent" too — that's the bug the previous getFunnel() had, where each lead
+// counted only at its current stage and produced non-monotonic funnels
+// (Responded 23 > Sent 11).
+const STAGE_REACHED_BY: Record<string, Set<string>> = {
+  scraped: new Set(["scraped", "needs_email", "enriched", "scored", "draft_generated", "approved", "sent", "follow_up_1", "follow_up_2", "responded", "converted"]),
+  enriched: new Set(["enriched", "scored", "draft_generated", "approved", "sent", "follow_up_1", "follow_up_2", "responded", "converted"]),
+  scored: new Set(["scored", "draft_generated", "approved", "sent", "follow_up_1", "follow_up_2", "responded", "converted"]),
+  draft_generated: new Set(["draft_generated", "approved", "sent", "follow_up_1", "follow_up_2", "responded", "converted"]),
+  approved: new Set(["approved", "sent", "follow_up_1", "follow_up_2", "responded", "converted"]),
+  sent: new Set(["sent", "follow_up_1", "follow_up_2", "responded", "converted"]),
+  responded: new Set(["responded", "converted"]),
+  converted: new Set(["converted"]),
+};
+
 const TARGET_RATIOS: Record<string, number> = {
   cocktail_bar: 0.20,
   wine_bar: 0.15,
@@ -43,18 +76,26 @@ export async function getFunnel(): Promise<FunnelData> {
   if (!allDocs.length) return { stages: [], total_leads: 0 };
   const docs = allDocs.filter((d) => !!d.email);
 
-  const counts: Record<string, number> = {};
-  for (const doc of docs) {
-    const stage = doc.stage || "scraped";
-    counts[stage] = (counts[stage] || 0) + 1;
-  }
-
+  // Count, for each funnel stage, the number of leads whose CURRENT stage
+  // means they have REACHED (or already passed) that stage. This makes the
+  // funnel monotonic by construction — every stage is upper-bounded by the
+  // previous one. The prior implementation counted only leads sitting AT a
+  // given stage right now, which produced non-monotonic shapes like
+  // "Sent 11 < Responded 23" the moment leads moved past Sent.
   const total = docs.length;
-  const stages: FunnelStage[] = STAGE_ORDER.map((name) => ({
-    name,
-    count: counts[name] || 0,
-    conversion_rate: total > 0 ? Math.round(((counts[name] || 0) / total) * 1000) / 10 : 0,
-  }));
+  const stages: FunnelStage[] = FUNNEL_PROGRESSION.map((name) => {
+    const reachedSet = STAGE_REACHED_BY[name] ?? new Set([name]);
+    let count = 0;
+    for (const doc of docs) {
+      const stage = doc.stage || "scraped";
+      if (reachedSet.has(stage)) count++;
+    }
+    return {
+      name,
+      count,
+      conversion_rate: total > 0 ? Math.round((count / total) * 1000) / 10 : 0,
+    };
+  });
 
   return { stages, total_leads: total };
 }

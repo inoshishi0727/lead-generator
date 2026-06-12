@@ -587,6 +587,19 @@ export interface ScrapeRunRecord {
   error: string | null;
   started_at: string;
   completed_at: string | null;
+  /** Set client-side from the stale-banner Dismiss action. When present, the
+   *  banner hides the run even if status is still "running". */
+  dismissed_at?: string | null;
+}
+
+/** Mark a stalled scrape run as dismissed so the banner stops surfacing it.
+ *  Does NOT change the run's status (a manual "Mark failed" would do that;
+ *  that needs a Cloud Function callable for security and isn't in scope yet). */
+export async function dismissScrapeRun(runId: string): Promise<void> {
+  const { updateDoc, doc, serverTimestamp } = await import("firebase/firestore");
+  await updateDoc(doc(db, "scrape_runs", runId), {
+    dismissed_at: serverTimestamp(),
+  });
 }
 
 export async function getScrapeRuns(max = 10): Promise<ScrapeRunRecord[]> {
