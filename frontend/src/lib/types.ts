@@ -299,7 +299,7 @@ export interface EditFeedback {
 
 // --- Reply Tracking ---
 
-export type LeadOutcome = "ongoing" | "converted" | "lost" | "not_interested" | "snoozed";
+export type LeadOutcome = "ongoing" | "interested" | "converted" | "lost" | "not_interested" | "snoozed";
 
 export interface InboundReply {
   id: string;

@@ -34,6 +34,7 @@ import {
   useApprovedEmailCount,
 } from "@/hooks/use-outreach";
 import { BulkConfirmDialog } from "@/components/bulk-confirm-dialog";
+import { ListRail } from "@/components/outreach-list-rail";
 import { useLeads } from "@/hooks/use-leads";
 import { useOutreachPlan } from "@/hooks/use-outreach-plan";
 import { getOutreachMessages } from "@/lib/firestore-api";
@@ -46,7 +47,13 @@ import { useReplyNotifications } from "@/hooks/use-notifications";
 import type { Lead, OutreachMessage } from "@/lib/types";
 import type { OutreachLead } from "@/hooks/use-outreach-plan";
 
-const STATUS_FILTERS = ["draft", "approved", "scheduled", "sent", "conversations", "rejected", "follow-ups", "clients", "all"] as const;
+// In-page tab strip. Note: "conversations" is intentionally absent — Inbox
+// is now its own sidebar destination at /inbox (which renders this same
+// component with forcedTab="conversations" and hideTabStrip). The state
+// machinery still handles "conversations" as a statusFilter value because
+// the /inbox route relies on it; we just don't surface it as a tab here.
+const STATUS_FILTERS = ["draft", "approved", "scheduled", "sent", "rejected", "follow-ups", "clients", "all"] as const;
+const ALL_STATUS_FILTERS = [...STATUS_FILTERS, "conversations"] as const;
 
 function stageFor(lead: Lead): "new" | "contacted" | "replied" | "converted" | "rejected" {
   if (lead.outcome === "converted") return "converted";
@@ -86,13 +93,30 @@ function formatVenueLabel(value: string | null | undefined): string {
     ?? value.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-export default function OutreachPage() {
+interface OutreachViewProps {
+  /** When set, overrides the URL ?tab=... param. Used by /inbox to force the
+   *  conversations view. */
+  forcedTab?: string;
+  /** Hide the in-page status tab strip. Used by /inbox so the page reads as
+   *  a single-purpose destination, not a sub-tab of Outreach. */
+  hideTabStrip?: boolean;
+  /** Replace the H1 ("Outreach" → "Inbox"). */
+  titleOverride?: string;
+  /** Default to "messages" main-tab when /inbox skips the overview. */
+  initialMainTab?: "overview" | "messages";
+}
+
+export function OutreachView(props: OutreachViewProps = {}) {
+  const { forcedTab, hideTabStrip, titleOverride, initialMainTab } = props;
   const { isAdmin, isMember, user } = useAuth();
   const searchParams = useSearchParams();
-  const initialTab = searchParams.get("tab");
-  const [mainTab, setMainTab] = useState<"overview" | "messages">("overview");
+  const urlTab = searchParams.get("tab");
+  const initialTab = forcedTab ?? urlTab;
+  const [mainTab, setMainTab] = useState<"overview" | "messages">(
+    initialMainTab ?? "overview",
+  );
   const [statusFilter, setStatusFilter] = useState<string>(
-    STATUS_FILTERS.includes(initialTab as any) ? initialTab! : "draft"
+    ALL_STATUS_FILTERS.includes(initialTab as any) ? initialTab! : "draft"
   );
   const [categoryFilter, setCategoryFilter] = useState<string>("");
   const [fitFilter, setFitFilter] = useState<string>("");
@@ -106,6 +130,11 @@ export default function OutreachPage() {
   const [leadFilter, setLeadFilter] = useState<string | null>(null);
   const [actionPendingLead, setActionPendingLead] = useState<string | null>(null);
   const [overviewVenueFilter, setOverviewVenueFilter] = useState<string>("");
+  // Inbox-only filter: narrows the conversation list by triage outcome.
+  // "pending" = no outcome yet (operator hasn't triaged it).
+  const [inboxOutcomeFilter, setInboxOutcomeFilter] = useState<
+    "all" | "pending" | "interested" | "not_interested" | "snoozed"
+  >("all");
 
   const isThreadView = statusFilter === "conversations" || (statusFilter === "clients" && !clientsViewAll);
 
@@ -125,13 +154,17 @@ export default function OutreachPage() {
   // dilution that hides older replied messages behind newer drafts.
   const { data: apiMessages, isLoading: apiLoading } = useMessages(firestoreFilter);
   const useClientSide = statusFilter === "conversations" || statusFilter === "follow-ups" || statusFilter === "clients" || statusFilter === "scheduled";
+  // Inbox + scheduled + follow-ups + clients views fetch progressively; bump
+  // by 100 per "Load older" click. Initial 100 keeps first paint snappy and
+  // bounds the work the virtualizer + ThreadCard have to do on a cold load.
+  const [conversationPageSize, setConversationPageSize] = useState(100);
   const { data: clientSideMessages, isLoading: clientSideLoading } = useQuery({
-    queryKey: ["outreach", "messages", "clientSide", statusFilter, assignedTo],
+    queryKey: ["outreach", "messages", "clientSide", statusFilter, assignedTo, conversationPageSize],
     queryFn: () => {
       if (statusFilter === "conversations") {
-        return getOutreachMessages({ has_reply: true, assignedTo, limit: 1000 });
+        return getOutreachMessages({ has_reply: true, assignedTo, limit: conversationPageSize });
       }
-      return getOutreachMessages({ limit: 1000, assignedTo });
+      return getOutreachMessages({ limit: conversationPageSize, assignedTo });
     },
     enabled: useClientSide,
   });
@@ -451,12 +484,20 @@ export default function OutreachPage() {
       }
       threads.get(msg.lead_id)!.messages.push(msg);
     }
-    return Array.from(threads.values()).sort((a, b) => {
+    const all = Array.from(threads.values()).sort((a, b) => {
       const latest = (msgs: typeof allMessages) =>
         msgs.reduce((m, x) => { const t = x.sent_at || x.created_at || ""; return t > m ? t : m; }, "");
       return latest(b.messages).localeCompare(latest(a.messages));
     });
-  }, [allMessages, isThreadView]);
+    // Apply the inbox outcome filter only on the inbox view (statusFilter ===
+    // "conversations"). The "clients" thread view shouldn't be affected.
+    if (statusFilter !== "conversations" || inboxOutcomeFilter === "all") return all;
+    return all.filter((t) => {
+      const outcome = leadMap.get(t.leadId)?.outcome;
+      if (inboxOutcomeFilter === "pending") return !outcome || outcome === "ongoing";
+      return outcome === inboxOutcomeFilter;
+    });
+  }, [allMessages, isThreadView, statusFilter, inboxOutcomeFilter, leadMap]);
 
   const selectedMessage = allMessages.find((m) => m.id === selectedMessageId) ?? allMessages[0] ?? null;
   const selectedThread = conversationThreads?.find((t) => t.leadId === selectedLeadId) ?? conversationThreads?.[0] ?? null;
@@ -853,7 +894,7 @@ export default function OutreachPage() {
           {/* Page head */}
           <div className="sp-page-head" style={{ margin: 0, padding: "16px 28px 8px", flexDirection: "column", alignItems: "stretch", gap: 10 }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-              <h1 className="sp-page-title">Outreach</h1>
+              <h1 className="sp-page-title">{titleOverride ?? "Outreach"}</h1>
               <div data-tour="outreach-actions" className="sp-page-actions">
               <Button
                 onClick={handleGenerate}
@@ -1086,27 +1127,21 @@ export default function OutreachPage() {
           <EditReflectionBanner />
 
           {/* Gmail-style split pane */}
-          {/* Full-width status tabs — above split pane, like Gmail's category tabs */}
-          <div className="sp-email-status-bar">
-            {STATUS_FILTERS.map((s) => (
-              <button
-                key={s}
-                className={`sp-email-status-tab${statusFilter === s ? " active" : ""}`}
-                onClick={() => { setStatusFilter(s); setSearchQuery(""); }}
-              >
-                {STATUS_FILTER_LABELS[s] ?? s}
-                {s === "conversations" && unreadConversations > 0 && (
-                  <span style={{
-                    display: "inline-flex", alignItems: "center", justifyContent: "center",
-                    width: 16, height: 16, borderRadius: "50%",
-                    background: "#ef4444", color: "#fff", fontSize: 9, fontWeight: 700,
-                  }}>
-                    {unreadConversations > 9 ? "9+" : unreadConversations}
-                  </span>
-                )}
-              </button>
-            ))}
-          </div>
+          {/* Full-width status tabs — above split pane, like Gmail's category tabs.
+              Hidden on /inbox so the page reads as a single-purpose destination. */}
+          {!hideTabStrip && (
+            <div className="sp-email-status-bar">
+              {STATUS_FILTERS.map((s) => (
+                <button
+                  key={s}
+                  className={`sp-email-status-tab${statusFilter === s ? " active" : ""}`}
+                  onClick={() => { setStatusFilter(s); setSearchQuery(""); }}
+                >
+                  {STATUS_FILTER_LABELS[s] ?? s}
+                </button>
+              ))}
+            </div>
+          )}
 
           {/* Split pane — flex row, fills remaining height */}
           <div
@@ -1201,42 +1236,58 @@ export default function OutreachPage() {
                 </div>
               )}
 
+              {/* Inbox outcome filter chips — only on the inbox view */}
+              {statusFilter === "conversations" && (
+                <div style={{ display: "flex", gap: 6, padding: "8px 14px", borderBottom: "1px solid var(--sp-line)", flexWrap: "wrap" }}>
+                  {[
+                    { value: "all", label: "All" },
+                    { value: "pending", label: "Pending" },
+                    { value: "interested", label: "Interested" },
+                    { value: "not_interested", label: "Not interested" },
+                    { value: "snoozed", label: "Snoozed" },
+                  ].map((opt) => {
+                    const active = inboxOutcomeFilter === opt.value;
+                    return (
+                      <button
+                        key={opt.value}
+                        type="button"
+                        onClick={() => setInboxOutcomeFilter(opt.value as typeof inboxOutcomeFilter)}
+                        style={{
+                          padding: "3px 10px",
+                          fontSize: 11,
+                          fontWeight: 500,
+                          borderRadius: 999,
+                          border: active ? "1px solid var(--sp-accent)" : "1px solid var(--sp-line-strong)",
+                          background: active ? "var(--sp-accent-soft)" : "transparent",
+                          color: active ? "var(--sp-accent-ink)" : "var(--sp-ink-3)",
+                          cursor: "pointer",
+                        }}
+                      >
+                        {opt.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
               {/* Scrollable email list */}
-              <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
-                {isLoading ? (
-                  <div className="p-3 space-y-2">
-                    <Skeleton className="h-14 w-full" />
-                    <Skeleton className="h-14 w-full" />
-                    <Skeleton className="h-14 w-full" />
-                  </div>
-                ) : allMessages.length === 0 && (!isThreadView || !conversationThreads?.length) ? (
-                  <div className="p-8 text-center" style={{ color: "var(--sp-ink-3)" }}>
-                    <FileText style={{ width: 28, height: 28, margin: "0 auto 8px", opacity: 0.3 }} />
-                    <p style={{ fontSize: 12 }}>No messages in this view.</p>
-                  </div>
-                ) : isThreadView ? (
-                  (conversationThreads ?? []).map(({ leadId, businessName, messages: msgs }) => (
-                    <div
-                      key={leadId}
-                      className={`sp-email-item${selectedLeadId === leadId || (!selectedLeadId && conversationThreads?.[0]?.leadId === leadId) ? " selected" : ""}`}
-                      onClick={() => { setSelectedLeadId(leadId); markLeadRead(leadId); }}
-                    >
-                      <div className="sp-email-item-top">
-                        <span className="sp-email-item-recip">{businessName}</span>
-                        {unreadByLead.get(leadId) ? (
-                          <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 16, height: 16, borderRadius: "50%", background: "#ef4444", color: "#fff", fontSize: 9, fontWeight: 700, flexShrink: 0 }}>
-                            {unreadByLead.get(leadId)}
-                          </span>
-                        ) : (
-                          <span className="sp-email-item-time">{msgs.length} msg</span>
-                        )}
-                      </div>
-                      <div className="sp-email-item-prev">
-                        {msgs[0]?.subject || msgs[0]?.content?.split("\n").filter(Boolean)[0]}
-                      </div>
-                    </div>
-                  ))
-                ) : (
+              <ListRail
+                isLoading={isLoading}
+                isEmpty={allMessages.length === 0 && (!isThreadView || !conversationThreads?.length)}
+                isThreadView={!!isThreadView}
+                conversationThreads={conversationThreads ?? []}
+                outcomeByLead={
+                  statusFilter === "conversations"
+                    ? new Map((conversationThreads ?? []).map((t) => [t.leadId, leadMap.get(t.leadId)?.outcome ?? null]))
+                    : undefined
+                }
+                selectedLeadId={selectedLeadId}
+                onSelectThread={(leadId) => { setSelectedLeadId(leadId); markLeadRead(leadId); }}
+                unreadByLead={unreadByLead}
+                onLoadMore={useClientSide ? () => setConversationPageSize((n) => n + 100) : null}
+                canLoadMore={useClientSide && allMessages.length >= conversationPageSize}
+              >
+                {!isThreadView && (
                   allMessages.map((msg) => {
                     const isSelected = msg.id === (selectedMessage?.id ?? allMessages[0]?.id);
                     return (
@@ -1299,7 +1350,7 @@ export default function OutreachPage() {
                     );
                   })
                 )}
-              </div>{/* end scrollable list */}
+              </ListRail>{/* end scrollable list */}
             </div>{/* end left panel */}
 
             {/* RIGHT: email detail — scrolls independently */}
@@ -1311,6 +1362,7 @@ export default function OutreachPage() {
                     businessName={selectedThread.businessName}
                     messages={selectedThread.messages}
                     unreadReplies={unreadByLead.get(selectedThread.leadId) ?? 0}
+                    outcome={leadMap.get(selectedThread.leadId)?.outcome}
                     onOpen={() => markLeadRead(selectedThread.leadId)}
                   />
                 ) : (
@@ -1376,4 +1428,8 @@ export default function OutreachPage() {
       />
     </div>
   );
+}
+
+export default function OutreachPage() {
+  return <OutreachView />;
 }

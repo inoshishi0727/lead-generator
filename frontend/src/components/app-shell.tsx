@@ -56,13 +56,49 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     }
   }
 
+  const isEmulator = process.env.NEXT_PUBLIC_USE_EMULATORS === "true";
+
   return (
     <div className="sp-app">
       <AppSidebar />
       <div className="sp-main">
+        {isEmulator && (
+          <div
+            style={{
+              background: "#f59e0b",
+              color: "#1c1917",
+              fontSize: 11,
+              fontWeight: 700,
+              letterSpacing: "0.08em",
+              textTransform: "uppercase",
+              padding: "4px 12px",
+              textAlign: "center",
+              borderBottom: "1px solid #b45309",
+            }}
+          >
+            Emulator mode · local Firestore + Auth · demo data only · no production reads
+          </div>
+        )}
         <div className="sp-topbar">
           <div className="sp-crumb">
             Workspace · <b>{label}</b>
+            {isEmulator && (
+              <span
+                style={{
+                  marginLeft: 8,
+                  background: "#fef3c7",
+                  color: "#92400e",
+                  border: "1px solid #fbbf24",
+                  borderRadius: 4,
+                  fontSize: 10,
+                  fontWeight: 700,
+                  padding: "1px 6px",
+                  letterSpacing: "0.04em",
+                }}
+              >
+                EMULATOR
+              </span>
+            )}
           </div>
           <div className="sp-spacer" />
           <button

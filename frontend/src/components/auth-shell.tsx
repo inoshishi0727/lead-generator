@@ -11,6 +11,27 @@ import { GettingStarted } from "@/components/getting-started";
 // Routes accessible without logging in
 const PUBLIC_ROUTES = ["/login", "/help"];
 
+function EmulatorBanner() {
+  if (process.env.NEXT_PUBLIC_USE_EMULATORS !== "true") return null;
+  return (
+    <div
+      style={{
+        background: "#f59e0b",
+        color: "#1c1917",
+        fontSize: 11,
+        fontWeight: 700,
+        letterSpacing: "0.08em",
+        textTransform: "uppercase",
+        padding: "4px 12px",
+        textAlign: "center",
+        borderBottom: "1px solid #b45309",
+      }}
+    >
+      Emulator mode · local Firestore + Auth · demo data only
+    </div>
+  );
+}
+
 function AuthGate({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
   const pathname = usePathname();
@@ -23,9 +44,14 @@ function AuthGate({ children }: { children: React.ReactNode }) {
     );
   }
 
-  // Login page — always standalone
+  // Login page — always standalone (with emulator banner if active)
   if (pathname === "/login") {
-    return <>{children}</>;
+    return (
+      <>
+        <EmulatorBanner />
+        {children}
+      </>
+    );
   }
 
   // Public pages when NOT logged in — show standalone (no navbar)

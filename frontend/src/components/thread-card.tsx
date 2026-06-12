@@ -13,14 +13,46 @@ import {
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { MessageCard } from "@/components/message-card";
-import type { OutreachMessage } from "@/lib/types";
+import { InboxTriage } from "@/components/inbox-triage";
+import type { LeadOutcome, OutreachMessage } from "@/lib/types";
 
 interface Props {
   leadId: string;
   businessName: string;
   messages: OutreachMessage[];
   unreadReplies?: number;
+  outcome?: LeadOutcome | null;
   onOpen?: () => void;
+}
+
+/** Pill rendering for a lead's triage outcome. Returns null when there's
+ *  nothing meaningful to show (null/ongoing). */
+function OutcomePill({ outcome }: { outcome?: LeadOutcome | null }) {
+  if (!outcome || outcome === "ongoing") return null;
+  const styles: Record<string, string> = {
+    interested: "border-emerald-600/50 bg-emerald-500/15 text-emerald-900 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-300",
+    not_interested: "border-red-600/50 bg-red-500/15 text-red-900 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300",
+    snoozed: "border-amber-600/50 bg-amber-500/15 text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300",
+    converted: "border-blue-600/50 bg-blue-500/15 text-blue-900 dark:border-blue-500/30 dark:bg-blue-500/10 dark:text-blue-300",
+    lost: "border-zinc-600/50 bg-zinc-500/15 text-zinc-900 dark:border-zinc-500/30 dark:bg-zinc-500/10 dark:text-zinc-300",
+  };
+  const labels: Record<string, string> = {
+    interested: "Interested",
+    not_interested: "Not interested",
+    snoozed: "Snoozed",
+    converted: "Converted",
+    lost: "Lost",
+  };
+  return (
+    <span
+      className={
+        "inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium shrink-0 " +
+        (styles[outcome] ?? "border-border bg-muted text-foreground")
+      }
+    >
+      {labels[outcome] ?? outcome}
+    </span>
+  );
 }
 
 function timeAgo(dateStr: string): string {
@@ -34,7 +66,7 @@ function timeAgo(dateStr: string): string {
   return new Date(dateStr).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
 }
 
-export function ThreadCard({ leadId, businessName, messages, unreadReplies = 0, onOpen }: Props) {
+export function ThreadCard({ leadId, businessName, messages, unreadReplies = 0, outcome, onOpen }: Props) {
   const [expanded, setExpanded] = useState(true);
 
   useEffect(() => {
@@ -88,6 +120,7 @@ export function ThreadCard({ leadId, businessName, messages, unreadReplies = 0, 
                   {venueCategory.replace(/_/g, " ")}
                 </Badge>
               )}
+              <OutcomePill outcome={outcome} />
             </div>
             <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
               {contactName && <span>{contactName}</span>}
@@ -141,6 +174,9 @@ export function ThreadCard({ leadId, businessName, messages, unreadReplies = 0, 
           )}
         </div>
       </button>
+
+      {/* Triage actions — only when the thread is open and has at least one reply */}
+      {expanded && hasReply && <InboxTriage leadId={leadId} />}
 
       {/* Expanded: show all messages (replies shown via MessageCard's own thread view) */}
       {expanded && (

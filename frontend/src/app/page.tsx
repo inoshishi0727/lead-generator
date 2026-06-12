@@ -23,6 +23,7 @@ import { Upload, Download, RefreshCw, Sparkles, Target, FileText, Send, Loader2 
 import { useAuth } from "@/lib/auth-context";
 import { EditReflectionBanner } from "@/components/edit-reflection-banner";
 import { ScrapeRunningBanner } from "@/components/pipeline-activity";
+import { StaleLeadsCard } from "@/components/stale-leads-card";
 import { useImportQueries, type SearchQueries } from "@/hooks/use-search-queries";
 import { toast } from "sonner";
 import { Sparkline } from "@/components/ui/sparkline";
@@ -351,6 +352,7 @@ export default function DashboardPage() {
 
       <ScrapeRunningBanner />
       <EditReflectionBanner />
+      <StaleLeadsCard />
 
       {/* Stat cards */}
       <div className="sp-grid-4" style={{ marginBottom: 16 }}>
