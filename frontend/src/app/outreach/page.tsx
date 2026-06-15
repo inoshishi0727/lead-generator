@@ -38,6 +38,8 @@ import { ListRail } from "@/components/outreach-list-rail";
 import { useLeads } from "@/hooks/use-leads";
 import { useOutreachPlan } from "@/hooks/use-outreach-plan";
 import { getOutreachMessages } from "@/lib/firestore-api";
+import { db } from "@/lib/firebase";
+import { collection, onSnapshot, query, where } from "firebase/firestore";
 import { EditReflectionBanner } from "@/components/edit-reflection-banner";
 import { ThreadCard } from "@/components/thread-card";
 import { LeadDetailDialog } from "@/components/lead-detail-dialog";
@@ -104,10 +106,19 @@ interface OutreachViewProps {
   titleOverride?: string;
   /** Default to "messages" main-tab when /inbox skips the overview. */
   initialMainTab?: "overview" | "messages";
+  /** Hide the Overview/Messages main tab strip entirely. Used by /inbox so
+   *  the page reads as a single dedicated destination — Gmail-style — and
+   *  doesn't look like a tab inside Outreach. */
+  hideMainTabs?: boolean;
+  /** Inbox-style minimal header: hides the Generate/Regenerate/Approve action
+   *  buttons (irrelevant for inbox), the Drafted/Sent/Replied/Follow-ups/
+   *  Scheduled stat counters, and the Focus Mode discovery strip. Venue/Fit
+   *  filters are preserved so the operator can still narrow conversations. */
+  simplifiedHeader?: boolean;
 }
 
 export function OutreachView(props: OutreachViewProps = {}) {
-  const { forcedTab, hideTabStrip, titleOverride, initialMainTab } = props;
+  const { forcedTab, hideTabStrip, titleOverride, initialMainTab, hideMainTabs, simplifiedHeader } = props;
   const { isAdmin, isMember, user } = useAuth();
   const searchParams = useSearchParams();
   const urlTab = searchParams.get("tab");
@@ -135,6 +146,34 @@ export function OutreachView(props: OutreachViewProps = {}) {
   const [inboxOutcomeFilter, setInboxOutcomeFilter] = useState<
     "all" | "pending" | "interested" | "not_interested" | "snoozed"
   >("all");
+
+  // Generate-drafts progress state. We capture the start timestamp + expected
+  // total when the operator hits Generate; a Firestore listener then counts
+  // every new draft doc whose created_at >= startedAt so the button can show
+  // "Generating 5/20" live as drafts land. After the mutation settles the
+  // captured IDs power a "Just generated" filter the operator can flip on to
+  // review only the new batch.
+  const [generationStartedAt, setGenerationStartedAt] = useState<string | null>(null);
+  const [generationExpectedTotal, setGenerationExpectedTotal] = useState<number>(0);
+  const [newDraftIds, setNewDraftIds] = useState<Set<string>>(new Set());
+  const [focusJustGenerated, setFocusJustGenerated] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (!generationStartedAt) return;
+    const q = query(
+      collection(db, "outreach_messages"),
+      where("status", "==", "draft"),
+    );
+    const unsub = onSnapshot(q, (snap) => {
+      const ids = new Set<string>();
+      snap.forEach((d) => {
+        const data = d.data();
+        if ((data.created_at || "") >= generationStartedAt) ids.add(d.id);
+      });
+      setNewDraftIds(ids);
+    });
+    return unsub;
+  }, [generationStartedAt]);
 
   const isThreadView = statusFilter === "conversations" || (statusFilter === "clients" && !clientsViewAll);
 
@@ -196,7 +235,7 @@ export function OutreachView(props: OutreachViewProps = {}) {
     [allLeads, overviewVenueFilter]
   );
 
-  const { replies: inboundReplies, readMap, markLeadRead } = useReplyNotifications();
+  const { replies: inboundReplies, readMap, markLeadRead, markLeadUnread } = useReplyNotifications();
 
   // Count unread replies per lead using per-lead read timestamps
   const unreadByLead = useMemo(() => {
@@ -278,6 +317,11 @@ export function OutreachView(props: OutreachViewProps = {}) {
     if (leadFilter) {
       result = result.filter((m) => m.lead_id === leadFilter);
     }
+    // "Just generated" pin: when the operator clicks "Review them →" after a
+    // generate-drafts run, narrow the queue to only that batch.
+    if (focusJustGenerated && newDraftIds.size > 0) {
+      result = result.filter((m) => newDraftIds.has(m.id));
+    }
     if (statusFilter === "draft" && outreachPlan) {
       const priorityMap = new Map<string, number>();
       outreachPlan.recommended.forEach((l, i) => priorityMap.set(l.lead_id, i));
@@ -302,7 +346,7 @@ export function OutreachView(props: OutreachViewProps = {}) {
         m.subject?.toLowerCase().includes(q) ||
         m.content?.toLowerCase().includes(q)
     );
-  }, [filteredByStep, debouncedSearchQuery, leadFilter, statusFilter, outreachPlan]);
+  }, [filteredByStep, debouncedSearchQuery, leadFilter, statusFilter, outreachPlan, focusJustGenerated, newDraftIds]);
   function getFitPill(leadId: string): { label: string; color: string } | null {
     const lead = leadMap.get(leadId);
     if (!lead) return null;
@@ -515,6 +559,15 @@ export function OutreachView(props: OutreachViewProps = {}) {
   }, [selectedThread?.leadId, statusFilter]);
 
   function handleGenerate() {
+    const startedAt = new Date().toISOString();
+    // Expected total: in Focus Mode it's exactly the cohort's eligible-lead
+    // count; otherwise default to a typical morning batch.
+    const expected = focusModeLeadIds?.length ?? 20;
+    setGenerationStartedAt(startedAt);
+    setGenerationExpectedTotal(expected);
+    setNewDraftIds(new Set());
+    setFocusJustGenerated(false);
+
     if (focusModeLeadIds && focusModeLeadIds.length > 0) {
       generateMutation.mutate(focusModeLeadIds);
     } else {
@@ -682,30 +735,34 @@ export function OutreachView(props: OutreachViewProps = {}) {
         background: "var(--sp-bg)",
       }}
     >
-      {/* Top-level tab bar */}
-      <div style={{ display: "flex", gap: 0, padding: "8px 28px 0", borderBottom: "1px solid var(--sp-line)" }}>
-        {(["overview", "messages"] as const).map((tab) => (
-          <button
-            key={tab}
-            onClick={() => setMainTab(tab)}
-            style={{
-              padding: "8px 20px",
-              fontSize: 13,
-              fontWeight: mainTab === tab ? 600 : 400,
-              color: mainTab === tab ? "var(--sp-ink)" : "var(--sp-ink-3)",
-              borderBottom: mainTab === tab ? "2px solid var(--sp-accent)" : "2px solid transparent",
-              background: "none",
-              borderLeft: "none",
-              borderRight: "none",
-              borderTop: "none",
-              cursor: "pointer",
-              textTransform: "capitalize",
-            }}
-          >
-            {tab}
-          </button>
-        ))}
-      </div>
+      {/* Top-level tab bar — hidden when the page is being rendered as a
+          single-purpose destination (e.g. /inbox), so it doesn't look like a
+          tab inside Outreach. */}
+      {!hideMainTabs && (
+        <div style={{ display: "flex", gap: 0, padding: "8px 28px 0", borderBottom: "1px solid var(--sp-line)" }}>
+          {(["overview", "messages"] as const).map((tab) => (
+            <button
+              key={tab}
+              onClick={() => setMainTab(tab)}
+              style={{
+                padding: "8px 20px",
+                fontSize: 13,
+                fontWeight: mainTab === tab ? 600 : 400,
+                color: mainTab === tab ? "var(--sp-ink)" : "var(--sp-ink-3)",
+                borderBottom: mainTab === tab ? "2px solid var(--sp-accent)" : "2px solid transparent",
+                background: "none",
+                borderLeft: "none",
+                borderRight: "none",
+                borderTop: "none",
+                cursor: "pointer",
+                textTransform: "capitalize",
+              }}
+            >
+              {tab}
+            </button>
+          ))}
+        </div>
+      )}
 
       {mainTab === "overview" ? (
         /* ===== TAB 1: OVERVIEW ===== */
@@ -895,6 +952,7 @@ export function OutreachView(props: OutreachViewProps = {}) {
           <div className="sp-page-head" style={{ margin: 0, padding: "16px 28px 8px", flexDirection: "column", alignItems: "stretch", gap: 10 }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
               <h1 className="sp-page-title">{titleOverride ?? "Outreach"}</h1>
+              {!simplifiedHeader && (
               <div data-tour="outreach-actions" className="sp-page-actions">
               <Button
                 onClick={handleGenerate}
@@ -911,7 +969,9 @@ export function OutreachView(props: OutreachViewProps = {}) {
                 {generateMutation.isPending
                   ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
                   : <FileText className="mr-1.5 h-4 w-4" />}
-                {focusModeLeadIds && focusModeLeadIds.length > 0 && focusCohortLabel
+                {generateMutation.isPending
+                  ? `Generating ${newDraftIds.size} / ${generationExpectedTotal}…`
+                  : focusModeLeadIds && focusModeLeadIds.length > 0 && focusCohortLabel
                   ? `Generate ${focusModeLeadIds.length} ${focusCohortLabel} drafts`
                   : "Generate Drafts"}
               </Button>
@@ -953,9 +1013,11 @@ export function OutreachView(props: OutreachViewProps = {}) {
                 </Button>
               )}
               </div>
+              )}
             </div>
 
-            {/* Stat cards — venue/fit filtered */}
+            {/* Stat cards — venue/fit filtered. Hidden in inbox-style layout. */}
+            {!simplifiedHeader && (
             <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
               {[
                 { label: "Drafted", value: msgDraftCount },
@@ -978,9 +1040,10 @@ export function OutreachView(props: OutreachViewProps = {}) {
                 </div>
               ))}
             </div>
+            )}
 
-            {/* Focus Mode discovery strip — visible on drafts tab when no venue is selected */}
-            {statusFilter === "draft" && categoryFilter === "" && venueCounts.length > 0 && (
+            {/* Focus Mode discovery strip — visible on drafts tab when no venue is selected. Hidden in inbox-style layout. */}
+            {!simplifiedHeader && statusFilter === "draft" && categoryFilter === "" && venueCounts.length > 0 && (
               <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                 <span style={{
                   fontSize: 11,
@@ -1113,7 +1176,19 @@ export function OutreachView(props: OutreachViewProps = {}) {
           )}
           {(generateMutation.isSuccess || (sendMutation.isSuccess && sendMutation.data) || (followupsMutation.isSuccess && followupsMutation.data)) && (
             <div className="flex items-center gap-3 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-xs text-emerald-700 dark:text-emerald-400" style={{ flexShrink: 0, margin: "0 28px 4px" }}>
-              {generateMutation.isSuccess && <span>Draft generation started.</span>}
+              {generateMutation.isSuccess && newDraftIds.size > 0 && !focusJustGenerated && (
+                <>
+                  <span>Just generated <strong>{newDraftIds.size}</strong> {newDraftIds.size === 1 ? "draft" : "drafts"}.</span>
+                  <button
+                    type="button"
+                    onClick={() => setFocusJustGenerated(true)}
+                    className="rounded-md border border-emerald-500/40 bg-emerald-500/15 px-2 py-0.5 text-xs font-medium text-emerald-800 hover:bg-emerald-500/25 dark:text-emerald-300"
+                  >
+                    Review them →
+                  </button>
+                </>
+              )}
+              {generateMutation.isSuccess && newDraftIds.size === 0 && <span>Draft generation started.</span>}
               {sendMutation.isSuccess && sendMutation.data?.status === "completed" && (
                 <span>Sent {sendMutation.data.sent}, failed {sendMutation.data.failed}{sendMutation.data.skipped_scheduled ? `, skipped ${sendMutation.data.skipped_scheduled}` : ""}.</span>
               )}
@@ -1233,6 +1308,42 @@ export function OutreachView(props: OutreachViewProps = {}) {
                   }}
                 >
                   Reviewing <strong>{focusCohortLabel}</strong> batch — {allMessages.length} draft{allMessages.length === 1 ? "" : "s"} in queue
+                </div>
+              )}
+
+              {/* "Just generated" pin banner — visible after Review them → */}
+              {focusJustGenerated && newDraftIds.size > 0 && (
+                <div
+                  style={{
+                    padding: "8px 14px",
+                    borderLeft: "2px solid #10b981",
+                    background: "rgba(16, 185, 129, 0.06)",
+                    fontSize: 12,
+                    color: "var(--sp-ink-2)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 12,
+                  }}
+                >
+                  <span>
+                    Showing only the <strong>{newDraftIds.size}</strong> draft{newDraftIds.size === 1 ? "" : "s"} from this generation run.
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setFocusJustGenerated(false)}
+                    style={{
+                      fontSize: 11,
+                      padding: "3px 8px",
+                      borderRadius: 4,
+                      border: "1px solid var(--sp-line-strong)",
+                      background: "var(--sp-bg-paper)",
+                      color: "var(--sp-ink-2)",
+                      cursor: "pointer",
+                    }}
+                  >
+                    Show all drafts
+                  </button>
                 </div>
               )}
 
@@ -1364,6 +1475,7 @@ export function OutreachView(props: OutreachViewProps = {}) {
                     unreadReplies={unreadByLead.get(selectedThread.leadId) ?? 0}
                     outcome={leadMap.get(selectedThread.leadId)?.outcome}
                     onOpen={() => markLeadRead(selectedThread.leadId)}
+                    onMarkUnread={() => markLeadUnread(selectedThread.leadId)}
                   />
                 ) : (
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "var(--sp-ink-4)", fontSize: 13 }}>

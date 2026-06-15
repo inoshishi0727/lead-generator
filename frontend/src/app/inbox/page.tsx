@@ -17,6 +17,8 @@ export default function InboxPage() {
     <OutreachView
       forcedTab="conversations"
       hideTabStrip
+      hideMainTabs
+      simplifiedHeader
       titleOverride="Inbox"
       initialMainTab="messages"
     />
