@@ -52,7 +52,7 @@ export interface NavItem {
 export const WORKSPACE_NAV: NavItem[] = [
   { href: "/", label: "Dashboard", Icon: BarChart3 },
   { href: "/leads", label: "Leads", Icon: Search },
-  { href: `/outreach?tab=${OUTREACH_TABS.REVIEW}`, label: "Review", Icon: ClipboardCheck },
+  { href: "/review", label: "Review", Icon: ClipboardCheck },
   {
     href: "/inbox",
     label: "Inbox",

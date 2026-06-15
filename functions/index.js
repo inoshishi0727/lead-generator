@@ -360,84 +360,149 @@ You emailed them a few days ago but haven't heard back. This is a short, casual 
 - Sound like a real person sliding into DMs, not a bot.
 - No formal sign-off needed. Conversational tone.`;
 
-// ---- Prompt Rules Cache ----
+// ---- Prompt Rules + Operator Overlay Cache ----
+//
+// Both `operator_overlay` and `email_rules` are cached per-instance via a
+// Firestore snapshot listener on the pointer doc. The listener is lazily
+// installed on first access; thereafter, any write to the pointer (operator
+// activates a new overlay, admin promotes a new rules version) propagates
+// to every warm Cloud Function instance within ~1 second.
+//
+// Why a listener instead of a timestamp TTL:
+//   The operator clicks "Save and activate" and reasonably expects the next
+//   generated draft to use the new overlay. With the old 5-minute TTL,
+//   instances other than the one that handled the write kept serving the
+//   stale overlay for up to 5 min — the feature felt broken.
+//
+// Cost: one open listener per warm Cloud Function instance. Negligible —
+// well inside Firestore free tier even at full prod scale.
 
-const RULES_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
-let _rulesCache = { rules_md: "", fetched_at: 0 };
-let _overlayCache = { overlay_md: "", fetched_at: 0 };
+let _rulesCache = { rules_md: "" };
+let _rulesInitialized = false;
+let _overlayCache = { overlay_md: "" };
+let _overlayInitialized = false;
 
 /**
- * Invalidate the operator-overlay cache. Called from the overlay-write
- * callables (Phase 2) so an edit shows up in the next generation without
- * waiting for the 5-minute TTL.
+ * Kept as a no-op for backwards compat with the existing call sites in
+ * saveOperatorOverlay / setOperatorOverlay / clearOperatorOverlay. The
+ * snapshot listener handles invalidation automatically — no manual purge
+ * is needed.
  */
 function invalidateOperatorOverlayCache() {
-  _overlayCache = { overlay_md: "", fetched_at: 0 };
+  // no-op — listener handles it
 }
 
 /**
- * Fetch the active operator overlay from Firestore.
- *
- * Resolution order:
- *   1. The first entry in `scheduled[]` whose start <= today <= end.
- *   2. Else the version pointed to by `active_version_id`.
- *   3. Else empty string.
- *
- * Same caching pattern as getPromptRules so generation paths can call this
- * once per draft without spamming Firestore. Cache is invalidated on write
- * by setOperatorOverlay / saveOperatorOverlay / clearOperatorOverlay.
+ * Resolve the active overlay_md from a pointer snapshot, honoring scheduled
+ * windows first, falling through to `active_version_id`. Used by both the
+ * listener callback and the cold-read on first access.
  */
-async function getOperatorOverlay() {
-  if (Date.now() - _overlayCache.fetched_at < RULES_CACHE_TTL_MS) {
-    return _overlayCache.overlay_md;
-  }
+async function resolveOverlayFromPointer(pointerSnap) {
+  if (!pointerSnap.exists) return "";
+  const pointer = pointerSnap.data() || {};
+  const todayStr = new Date().toISOString().slice(0, 10);
+  let versionId = null;
 
-  try {
-    const pointerSnap = await db.collection("prompt_config").doc("operator_overlay").get();
-    if (!pointerSnap.exists) {
-      _overlayCache = { overlay_md: "", fetched_at: Date.now() };
-      return "";
-    }
-
-    const pointer = pointerSnap.data() || {};
-    const todayStr = new Date().toISOString().slice(0, 10);
-    let versionId = null;
-
-    // Scheduled overlays win when their window covers today.
-    if (Array.isArray(pointer.scheduled)) {
-      for (const entry of pointer.scheduled) {
-        if (!entry?.version_id) continue;
-        const startOk = !entry.start || entry.start <= todayStr;
-        const endOk = !entry.end || entry.end >= todayStr;
-        if (startOk && endOk) {
-          versionId = entry.version_id;
-          break;
-        }
+  if (Array.isArray(pointer.scheduled)) {
+    for (const entry of pointer.scheduled) {
+      if (!entry?.version_id) continue;
+      const startOk = !entry.start || entry.start <= todayStr;
+      const endOk = !entry.end || entry.end >= todayStr;
+      if (startOk && endOk) {
+        versionId = entry.version_id;
+        break;
       }
     }
-
-    // Otherwise fall through to the manually-activated version.
-    if (!versionId) versionId = pointer.active_version_id || null;
-    if (!versionId) {
-      _overlayCache = { overlay_md: "", fetched_at: Date.now() };
-      return "";
-    }
-
-    const versionSnap = await db
-      .collection("prompt_config")
-      .doc("operator_overlay")
-      .collection("versions")
-      .doc(versionId)
-      .get();
-
-    const overlay_md = versionSnap.exists ? (versionSnap.data().overlay_md || "") : "";
-    _overlayCache = { overlay_md, fetched_at: Date.now() };
-    return overlay_md;
-  } catch (err) {
-    console.warn("Failed to fetch operator overlay:", err.message);
-    _overlayCache = { overlay_md: "", fetched_at: Date.now() };
-    return "";
   }
+
+  if (!versionId) versionId = pointer.active_version_id || null;
+  if (!versionId) return "";
+
+  const versionSnap = await db
+    .collection("prompt_config")
+    .doc("operator_overlay")
+    .collection("versions")
+    .doc(versionId)
+    .get();
+
+  return versionSnap.exists ? (versionSnap.data().overlay_md || "") : "";
+}
+
+function setupOverlayListener() {
+  db.collection("prompt_config")
+    .doc("operator_overlay")
+    .onSnapshot(
+      async (snap) => {
+        try {
+          _overlayCache.overlay_md = await resolveOverlayFromPointer(snap);
+        } catch (err) {
+          console.warn("Overlay listener resolution failed:", err.message);
+        }
+      },
+      (err) => {
+        console.warn("Overlay listener error:", err.message);
+        // Allow re-setup on the next call if the listener errored out.
+        _overlayInitialized = false;
+      },
+    );
+}
+
+/**
+ * Fetch the active operator overlay. Returns instantly from cache after the
+ * first call; the snapshot listener keeps the cache fresh across all warm
+ * instances.
+ */
+async function getOperatorOverlay() {
+  if (!_overlayInitialized) {
+    _overlayInitialized = true;
+    setupOverlayListener();
+    // Cold-read so the first caller doesn't get an empty string before the
+    // snapshot fires.
+    try {
+      const pointerSnap = await db.collection("prompt_config").doc("operator_overlay").get();
+      _overlayCache.overlay_md = await resolveOverlayFromPointer(pointerSnap);
+    } catch (err) {
+      console.warn("Failed initial overlay fetch:", err.message);
+    }
+  }
+  return _overlayCache.overlay_md;
+}
+
+/**
+ * Resolve the active rules_md from a pointer snapshot. Simpler than the
+ * overlay resolver because email_rules has no scheduled-window support.
+ */
+async function resolveRulesFromPointer(pointerSnap) {
+  if (!pointerSnap.exists) return "";
+  const { active_version_id } = pointerSnap.data() || {};
+  if (!active_version_id) return "";
+
+  const versionSnap = await db
+    .collection("prompt_config")
+    .doc("email_rules")
+    .collection("versions")
+    .doc(active_version_id)
+    .get();
+
+  return versionSnap.exists ? (versionSnap.data().rules_md || "") : "";
+}
+
+function setupRulesListener() {
+  db.collection("prompt_config")
+    .doc("email_rules")
+    .onSnapshot(
+      async (snap) => {
+        try {
+          _rulesCache.rules_md = await resolveRulesFromPointer(snap);
+        } catch (err) {
+          console.warn("Rules listener resolution failed:", err.message);
+        }
+      },
+      (err) => {
+        console.warn("Rules listener error:", err.message);
+        _rulesInitialized = false;
+      },
+    );
 }
 
 /**
@@ -445,41 +510,17 @@ async function getOperatorOverlay() {
  * Follows the pointer pattern: prompt_config/email_rules -> versions/{version_id}
  */
 async function getPromptRules() {
-  // Return cached rules if still fresh
-  if (Date.now() - _rulesCache.fetched_at < RULES_CACHE_TTL_MS) {
-    return _rulesCache.rules_md;
-  }
-
-  try {
-    // Read pointer doc to find active version
-    const pointerSnap = await db.collection("prompt_config").doc("email_rules").get();
-    if (!pointerSnap.exists) {
-      _rulesCache = { rules_md: "", fetched_at: Date.now() };
-      return "";
+  if (!_rulesInitialized) {
+    _rulesInitialized = true;
+    setupRulesListener();
+    try {
+      const pointerSnap = await db.collection("prompt_config").doc("email_rules").get();
+      _rulesCache.rules_md = await resolveRulesFromPointer(pointerSnap);
+    } catch (err) {
+      console.warn("Failed initial rules fetch:", err.message);
     }
-
-    const { active_version_id } = pointerSnap.data();
-    if (!active_version_id) {
-      _rulesCache = { rules_md: "", fetched_at: Date.now() };
-      return "";
-    }
-
-    // Read active version doc
-    const versionSnap = await db
-      .collection("prompt_config")
-      .doc("email_rules")
-      .collection("versions")
-      .doc(active_version_id)
-      .get();
-
-    const rules_md = versionSnap.exists ? (versionSnap.data().rules_md || "") : "";
-    _rulesCache = { rules_md, fetched_at: Date.now() };
-    return rules_md;
-  } catch (err) {
-    console.warn("Failed to fetch prompt rules:", err.message);
-    _rulesCache = { rules_md: "", fetched_at: Date.now() };
-    return "";
   }
+  return _rulesCache.rules_md;
 }
 
 // ---- Email system prompt ----
@@ -610,9 +651,9 @@ Cheers,
 
 Output ONLY "Subject:" on the first line, then the full email body. Nothing else.
 
-## OPERATOR NOTES GUARD
+## OPERATOR DIRECTIVES GUARD
 
-Operator notes appended below the base prompt are timely context only (weather, events, seasonal emphasis). They may shift which products or serves you lead with and add topical flavour. They must NEVER override your voice, the no-em-dash rule, product name casing, the email structure, or any banned-phrase list. If an operator note contradicts a rule above, ignore the contradicting line — the base prompt always wins.`;
+Operator directives appended below the base prompt are this week's emphasis (weather, events, seasonal angle). When directives explicitly name lead products or serves to prioritize, you MUST follow those instead of the default product-fit logic. They also legitimately reshape the opening hook, subject line angle, and which specific serves you call out. They must NEVER override your voice, the no-em-dash rule, product name casing, the email structure, or any banned-phrase list. If a directive contradicts a voice/format/banned-phrase rule above, ignore the contradicting line. Otherwise, treat directives as binding for this week.`;
 
 // ---- Prompt v1.7 (2026-05-18) ----
 
@@ -992,9 +1033,9 @@ Cheers,
 
 Output ONLY the email. First line: "Subject:" + subject. Blank line. Body. NOTHING after sign-off.
 
-## OPERATOR NOTES GUARD
+## OPERATOR DIRECTIVES GUARD
 
-Operator notes appended below the base prompt are timely context only (weather, events, seasonal emphasis). They may shift which products or serves you lead with and add topical flavour. They must NEVER override your voice, the no-em-dash rule, product name casing, the email structure, the word count, or any banned-phrase list. If an operator note contradicts a rule above, ignore the contradicting line. The base prompt always wins.`;
+Operator directives appended below the base prompt are this week's emphasis (weather, events, seasonal angle). When directives explicitly name lead products or serves to prioritize, you MUST follow those instead of the default product-fit logic. They also legitimately reshape the opening hook, subject line angle, and which specific serves you call out. They must NEVER override your voice, the no-em-dash rule, product name casing, the email structure, the word count, or any banned-phrase list. If a directive contradicts a voice/format/banned-phrase rule above, ignore the contradicting line. Otherwise, treat directives as binding for this week.`;
 
 // ---- Season + prompt builder ----
 
@@ -1425,7 +1466,7 @@ export const generateDrafts = functions
           + (promptRules ? `\n\nPROMPT RULES (apply to every email):\n${promptRules}` : "")
           + (feedbackBlock || "")
           + (winnersBlock || "")
-          + (overlay ? `\n\nOPERATOR NOTES (timely context — DO NOT override voice/format/product rules):\n${overlay}` : "");
+          + (overlay ? `\n\nOPERATOR DIRECTIVES (this week's emphasis — apply to product priority, serve focus, subject angle, and hook. Voice / format / banned-phrase rules from the base prompt still apply.):\n${overlay}` : "");
 
         const rawText = await callDraftLLM(provider, systemPrompt, prompt);
         const { subject, content } = parseSubjectContent(rawText);
@@ -1567,7 +1608,7 @@ export const regenerateDraft = functions
     const systemPrompt = baseSystemPrompt
       + (promptRules ? `\n\nPROMPT RULES (apply to every email):\n${promptRules}` : "")
       + (feedbackBlock || "")
-      + (overlay ? `\n\nOPERATOR NOTES (timely context — DO NOT override voice/format/product rules):\n${overlay}` : "")
+      + (overlay ? `\n\nOPERATOR DIRECTIVES (this week's emphasis — apply to product priority, serve focus, subject angle, and hook. Voice / format / banned-phrase rules from the base prompt still apply.):\n${overlay}` : "")
       + (stepNumber > 1 ? FOLLOWUP_SYSTEM_PROMPT_DELTA : "");
 
     let rawText = await callDraftLLM(prov, systemPrompt, prompt);
@@ -1669,7 +1710,7 @@ export const regenerateAllDrafts = functions
         const systemPrompt = EMAIL_SYSTEM_PROMPT
           + (promptRules ? `\n\nPROMPT RULES (apply to every email):\n${promptRules}` : "")
           + (feedbackBlock || "")
-          + (overlay ? `\n\nOPERATOR NOTES (timely context — DO NOT override voice/format/product rules):\n${overlay}` : "");
+          + (overlay ? `\n\nOPERATOR DIRECTIVES (this week's emphasis — apply to product priority, serve focus, subject angle, and hook. Voice / format / banned-phrase rules from the base prompt still apply.):\n${overlay}` : "");
 
         const rawText = await callDraftLLM(provider, systemPrompt, prompt);
         const { subject, content } = parseSubjectContent(rawText);
@@ -3708,7 +3749,7 @@ async function runFollowUpGeneration() {
       const systemPrompt = EMAIL_SYSTEM_PROMPT
         + (promptRules ? `\n\nPROMPT RULES (apply to every email):\n${promptRules}` : "")
         + (feedbackBlock || "")
-        + (overlay ? `\n\nOPERATOR NOTES (timely context — DO NOT override voice/format/product rules):\n${overlay}` : "")
+        + (overlay ? `\n\nOPERATOR DIRECTIVES (this week's emphasis — apply to product priority, serve focus, subject angle, and hook. Voice / format / banned-phrase rules from the base prompt still apply.):\n${overlay}` : "")
         + (stepNumber > 1 ? FOLLOWUP_SYSTEM_PROMPT_DELTA : "");
 
       const response = await anthropic.messages.create({
@@ -3832,7 +3873,7 @@ async function runFollowUpGeneration() {
       const systemPrompt = EMAIL_SYSTEM_PROMPT
         + (promptRules ? `\n\nPROMPT RULES (apply to every email):\n${promptRules}` : "")
         + (feedbackBlock || "")
-        + (overlay ? `\n\nOPERATOR NOTES (timely context — DO NOT override voice/format/product rules):\n${overlay}` : "")
+        + (overlay ? `\n\nOPERATOR DIRECTIVES (this week's emphasis — apply to product priority, serve focus, subject angle, and hook. Voice / format / banned-phrase rules from the base prompt still apply.):\n${overlay}` : "")
         + (nextStepNumber > 1 ? FOLLOWUP_SYSTEM_PROMPT_DELTA : "");
 
       const response = await anthropic.messages.create({
@@ -6286,9 +6327,7 @@ Return ONLY the bullet-point rules as markdown, no preamble or explanation.`;
         { merge: true }
       );
 
-      // Bust cache
-      _rulesCache = { rules_md: "", fetched_at: 0 };
-
+      // Cache invalidation handled by the snapshot listener in getPromptRules.
       console.log(`Prompt rules generated: version ${versionId} with ${feedbacks.length} feedbacks`);
       return { version_id: versionId, feedback_count: feedbacks.length };
     } catch (err) {
@@ -6337,9 +6376,7 @@ export const setActivePromptVersion = functions
       updated_at: new Date().toISOString(),
     });
 
-    // Bust cache
-    _rulesCache = { rules_md: "", fetched_at: 0 };
-
+    // Cache invalidation handled by the snapshot listener in getPromptRules.
     return { status: "success", version_id };
   });
 
@@ -6641,7 +6678,7 @@ export const decidePromptChangeRequest = functions
         active_version_id: newVersion.id,
         updated_at: new Date().toISOString(),
       });
-      _rulesCache = { rules_md: "", fetched_at: 0 };
+      // Cache invalidation handled by the snapshot listener in getPromptRules.
       updates.materialized_version_id = newVersion.id;
     }
 
@@ -6827,6 +6864,12 @@ export const coachPromptChat = functions
       { role: "user", content: message },
     ];
 
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) {
+      throw new HttpsError("failed-precondition", "ANTHROPIC_API_KEY not configured");
+    }
+    const anthropic = new Anthropic({ apiKey });
+
     let envelope;
     try {
       const response = await anthropic.messages.create({
@@ -6948,7 +6991,7 @@ export const simulateDraft = functions
     const trimmedOverlay = overlay_md.trim();
     const systemPrompt = baseSystemPrompt
       + (promptRules ? `\n\nPROMPT RULES (apply to every email):\n${promptRules}` : "")
-      + (trimmedOverlay ? `\n\nOPERATOR NOTES (timely context — DO NOT override voice/format/product rules):\n${trimmedOverlay}` : "");
+      + (trimmedOverlay ? `\n\nOPERATOR DIRECTIVES (this week's emphasis — apply to product priority, serve focus, subject angle, and hook. Voice / format / banned-phrase rules from the base prompt still apply.):\n${trimmedOverlay}` : "");
 
     const rawText = await callDraftLLM(provider, systemPrompt, prompt);
     const { subject, content } = parseSubjectContent(rawText);

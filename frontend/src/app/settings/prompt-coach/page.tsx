@@ -293,18 +293,16 @@ export default function PromptCoachPage() {
         baselineOverlayMd={active?.overlay_md ?? ""}
       />
 
-      {/* Versions list — first 4 only, with See all link to the dedicated page */}
+      {/* Saved overlays — first 4 only, with See all link to the dedicated page */}
       <div className="rounded-lg border border-border/50 bg-card p-4">
         <div className="mb-3 flex items-center justify-between">
-          <h2 className="font-semibold text-sm">Recent versions ({versions.length})</h2>
-          {versions.length > 4 && (
-            <Link
-              href="/settings/prompt-coach/versions"
-              className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
-            >
-              See all {versions.length}
-            </Link>
-          )}
+          <h2 className="font-semibold text-sm">Saved overlays ({versions.length})</h2>
+          <Link
+            href="/settings/prompt-coach/versions"
+            className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
+          >
+            See all{versions.length > 4 ? ` ${versions.length}` : ""}
+          </Link>
         </div>
         {versions.length === 0 ? (
           <p className="text-xs text-muted-foreground italic">No versions saved yet.</p>

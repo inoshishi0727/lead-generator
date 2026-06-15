@@ -40,6 +40,7 @@ export default function PromptCoachVersionsPage() {
   const update = useUpdateOperatorOverlayVersion();
 
   const [search, setSearch] = useState("");
+  const [sortOrder, setSortOrder] = useState<"newest" | "oldest">("newest");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editLabel, setEditLabel] = useState("");
   const [editOverlay, setEditOverlay] = useState("");
@@ -56,13 +57,21 @@ export default function PromptCoachVersionsPage() {
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return versions;
-    return versions.filter(
-      (v) =>
-        v.label.toLowerCase().includes(q) ||
-        v.overlay_md.toLowerCase().includes(q),
-    );
-  }, [versions, search]);
+    const matched = q
+      ? versions.filter(
+          (v) =>
+            v.label.toLowerCase().includes(q) ||
+            v.overlay_md.toLowerCase().includes(q),
+        )
+      : versions;
+    // Sort by created_at according to operator choice. Default newest-first
+    // since that's almost always what the operator wants when triaging a
+    // long list of saved overlays.
+    return [...matched].sort((a, b) => {
+      const cmp = (b.created_at || "").localeCompare(a.created_at || "");
+      return sortOrder === "newest" ? cmp : -cmp;
+    });
+  }, [versions, search, sortOrder]);
 
   if (loading) return <div className="p-6">Loading…</div>;
   if (!isAdmin && !isMember) {
@@ -129,16 +138,29 @@ export default function PromptCoachVersionsPage() {
         </p>
       </div>
 
-      <div className="rounded-lg border border-border/50 bg-card p-3 flex items-center gap-2">
-        <Search size={14} className="text-muted-foreground" />
-        <input
-          type="text"
-          placeholder="Search by label or overlay text…"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
-        />
-        <span className="text-[11px] text-muted-foreground">
+      <div className="rounded-lg border border-border/50 bg-card p-3 flex items-center gap-3 flex-wrap">
+        <div className="flex items-center gap-2 flex-1 min-w-[180px]">
+          <Search size={14} className="text-muted-foreground" />
+          <input
+            type="text"
+            placeholder="Search by label or overlay text…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+          />
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <label className="text-[11px] text-muted-foreground">Sort</label>
+          <select
+            value={sortOrder}
+            onChange={(e) => setSortOrder(e.target.value as "newest" | "oldest")}
+            className="rounded-md border border-input bg-background px-2 py-1 text-xs"
+          >
+            <option value="newest">Newest first</option>
+            <option value="oldest">Oldest first</option>
+          </select>
+        </div>
+        <span className="text-[11px] text-muted-foreground shrink-0">
           {filtered.length} of {versions.length}
         </span>
       </div>

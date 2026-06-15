@@ -6,6 +6,7 @@ import {
   ThumbsUp,
   ThumbsDown,
   Clock,
+  MailOpen,
 } from "lucide-react";
 import { toast } from "sonner";
 import { updateLeadFields } from "@/lib/firestore-api";
@@ -28,9 +29,13 @@ const SNOOZE_OPTIONS = [
 
 interface Props {
   leadId: string;
+  /** When provided, renders a "Mark unread" button alongside the triage
+   *  actions. Wired from ThreadCard so the parent's notifications hook owns
+   *  the read-state mutation. */
+  onMarkUnread?: () => void;
 }
 
-export function InboxTriage({ leadId }: Props) {
+export function InboxTriage({ leadId, onMarkUnread }: Props) {
   const qc = useQueryClient();
   const [snoozeOpen, setSnoozeOpen] = useState(false);
 
@@ -135,6 +140,20 @@ export function InboxTriage({ leadId }: Props) {
             </div>
           )}
         </div>
+        {onMarkUnread && (
+          <button
+            type="button"
+            onClick={() => {
+              onMarkUnread();
+              toast.success("Marked unread");
+            }}
+            className="inline-flex items-center gap-1 rounded-md border border-blue-600/50 bg-blue-500/15 px-2.5 py-1 font-medium text-blue-900 hover:bg-blue-500/25 dark:border-blue-500/30 dark:bg-blue-500/10 dark:text-blue-300 dark:hover:bg-blue-500/20"
+            title="Re-flag this thread as unread"
+          >
+            <MailOpen size={11} />
+            Mark unread
+          </button>
+        )}
       </div>
     </div>
   );

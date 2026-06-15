@@ -248,18 +248,31 @@ export function LeadDetailDialog({ lead, onClose, onEmail }: Props) {
   if (!lead) return null;
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/50 p-4 pt-[8vh] backdrop-blur-sm"
-      onClick={(e) => e.target === e.currentTarget && onClose()}
-    >
-      <div className="relative w-full max-w-xl rounded-lg border border-border/50 bg-card shadow-2xl">
-        <button
-          onClick={onClose}
-          className="absolute right-3 top-3 rounded p-1 text-muted-foreground hover:text-foreground transition-colors"
-        >
-          <X className="h-4 w-4" />
-        </button>
-
+    <>
+      {/* Backdrop — lighter than the old modal blur so the page behind stays
+          legible. Clicking it closes the drawer. */}
+      <div
+        className="fixed inset-0 z-40 bg-black/30 animate-in fade-in duration-150"
+        onClick={onClose}
+      />
+      {/* Right-side drawer. Full width on mobile, 760px on desktop. Sticky
+          header + scrollable middle + sticky footer so the close button and
+          re-enrich action stay reachable while scrolling long enrichment. */}
+      <div className="fixed inset-y-0 right-0 z-50 flex w-full md:w-[760px] flex-col border-l border-border/50 bg-card shadow-2xl animate-in slide-in-from-right duration-200">
+        {/* Sticky header bar */}
+        <div className="shrink-0 flex items-center justify-between border-b border-border/50 bg-card px-4 py-2">
+          <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+            Lead detail
+          </span>
+          <button
+            onClick={onClose}
+            className="rounded p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        {/* Scrollable middle */}
+        <div className="flex-1 overflow-y-auto">
         {/* Header */}
         <div className="p-5 pb-4">
           {editingName ? (
@@ -653,11 +666,11 @@ export function LeadDetailDialog({ lead, onClose, onEmail }: Props) {
           </p>
         </div>
 
-        <div className="border-t" />
+        </div>{/* end scrollable middle */}
 
-        {/* Footer */}
-        <div className="flex items-center justify-between p-4 border-t">
-          <div className="flex items-center gap-3">
+        {/* Sticky footer */}
+        <div className="shrink-0 flex items-center justify-between gap-3 border-t border-border/50 bg-card p-3">
+          <div className="flex items-center gap-3 min-w-0">
             {onEmail && lead?.email && (
               <Button
                 size="sm"
@@ -668,7 +681,7 @@ export function LeadDetailDialog({ lead, onClose, onEmail }: Props) {
                 Email
               </Button>
             )}
-            <p className="text-xs text-muted-foreground">
+            <p className="text-[11px] leading-tight text-muted-foreground line-clamp-2">
               Re-enrich runs the full research pipeline: Gemini searches the web
               for this business, then enriches from any website / Maps listing it
               finds. Takes 30–90 s.
@@ -679,13 +692,13 @@ export function LeadDetailDialog({ lead, onClose, onEmail }: Props) {
             variant="outline"
             onClick={handleReEnrich}
             disabled={scrapeLead.isPending}
-            className="shrink-0 ml-3"
+            className="shrink-0"
           >
             <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${scrapeLead.isPending ? "animate-spin" : ""}`} />
             {scrapeLead.isPending ? "Researching…" : enrichDone ? "Done!" : "Re-enrich"}
           </Button>
         </div>
       </div>
-    </div>
+    </>
   );
 }
