@@ -82,22 +82,6 @@ export const MessageCardThread = memo(function MessageCardThread({ message, canA
                   {isOutbound && (
                     <Badge variant="outline" className="text-[10px] px-1 py-0 border-blue-500/30 text-blue-500">sent</Badge>
                   )}
-                  {!isOutbound && reply.sentiment && (
-                    <Badge
-                      variant="outline"
-                      className={`text-[10px] px-1 py-0 ${
-                        reply.sentiment === "positive"
-                          ? "border-green-500/30 text-green-600 dark:text-green-400"
-                          : reply.sentiment === "negative"
-                          ? "border-red-500/30 text-red-600 dark:text-red-400"
-                          : "border-gray-400/30 text-gray-500"
-                      }`}
-                      title={reply.sentiment_reason || undefined}
-                    >
-                      {reply.sentiment === "positive" ? "+" : reply.sentiment === "negative" ? "−" : "~"}{" "}
-                      {reply.sentiment_reason || reply.sentiment}
-                    </Badge>
-                  )}
                   {canAct && !isOutbound && (
                     <Menu>
                       <MenuTrigger

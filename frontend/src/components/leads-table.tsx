@@ -27,6 +27,7 @@ import {
 } from "lucide-react";
 import { useScrapeLeadNow } from "@/hooks/use-scrape-leads";
 import { Badge } from "@/components/ui/badge";
+import { isStaleEnrichment, daysSince } from "@/lib/stale-thresholds";
 import { LeadDetailDialog } from "@/components/lead-detail-dialog";
 import { updateLeadFields } from "@/lib/firestore-api";
 import { useQueryClient } from "@tanstack/react-query";
@@ -360,6 +361,25 @@ export function LeadsTable({ leads, isLoading, selectable, selectedIds = [], onS
                         Queued — next week
                       </Badge>
                     )}
+                    {(() => {
+                      // Tiny "Xd" age chip on rows stuck in pre-enrichment past
+                      // the threshold. Mirrors the Dashboard's StaleLeadsCard so
+                      // an operator scanning the table can see at a glance which
+                      // rows are the ones bubbling up under "Needs attention".
+                      const stale = isStaleEnrichment(lead);
+                      if (!stale) return null;
+                      const age = daysSince(lead.created_at ?? lead.scraped_at ?? null);
+                      if (age == null) return null;
+                      return (
+                        <Badge
+                          variant="outline"
+                          title={`Stuck in pre-enrichment for ${age} day${age === 1 ? "" : "s"}`}
+                          className="ml-2 text-[9px] border-amber-500/40 text-amber-400 bg-amber-500/10"
+                        >
+                          {age}d
+                        </Badge>
+                      );
+                    })()}
                     {lead.source === "email_ingestion" && (
                       <Badge variant="outline" className="ml-2 text-[9px] border-sky-500/30 text-sky-400 bg-sky-500/10">
                         Via email
