@@ -13,14 +13,50 @@ import {
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { MessageCard } from "@/components/message-card";
-import type { OutreachMessage } from "@/lib/types";
+import { InboxTriage } from "@/components/inbox-triage";
+import type { LeadOutcome, OutreachMessage } from "@/lib/types";
 
 interface Props {
   leadId: string;
   businessName: string;
   messages: OutreachMessage[];
   unreadReplies?: number;
+  outcome?: LeadOutcome | null;
   onOpen?: () => void;
+  /** Gmail-style: lets the operator manually flip a thread back to unread
+   *  after they've already opened it. The auto-mark-read on open is handled
+   *  by the onOpen callback. */
+  onMarkUnread?: () => void;
+}
+
+/** Pill rendering for a lead's triage outcome. Returns null when there's
+ *  nothing meaningful to show (null/ongoing). */
+function OutcomePill({ outcome }: { outcome?: LeadOutcome | null }) {
+  if (!outcome || outcome === "ongoing") return null;
+  const styles: Record<string, string> = {
+    interested: "border-emerald-600/50 bg-emerald-500/15 text-emerald-900 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-300",
+    not_interested: "border-red-600/50 bg-red-500/15 text-red-900 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300",
+    snoozed: "border-amber-600/50 bg-amber-500/15 text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300",
+    converted: "border-blue-600/50 bg-blue-500/15 text-blue-900 dark:border-blue-500/30 dark:bg-blue-500/10 dark:text-blue-300",
+    lost: "border-zinc-600/50 bg-zinc-500/15 text-zinc-900 dark:border-zinc-500/30 dark:bg-zinc-500/10 dark:text-zinc-300",
+  };
+  const labels: Record<string, string> = {
+    interested: "Interested",
+    not_interested: "Not interested",
+    snoozed: "Snoozed",
+    converted: "Converted",
+    lost: "Lost",
+  };
+  return (
+    <span
+      className={
+        "inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium shrink-0 " +
+        (styles[outcome] ?? "border-border bg-muted text-foreground")
+      }
+    >
+      {labels[outcome] ?? outcome}
+    </span>
+  );
 }
 
 function timeAgo(dateStr: string): string {
@@ -34,18 +70,33 @@ function timeAgo(dateStr: string): string {
   return new Date(dateStr).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
 }
 
-export function ThreadCard({ leadId, businessName, messages, unreadReplies = 0, onOpen }: Props) {
+/** How many recent messages render fully expanded by default. Older messages
+ *  in the thread collapse to compact preview rows that expand on click. Bounds
+ *  the work MessageCard does per render — a long thread used to mount 10+
+ *  full cards at once and lag noticeably on Inbox switches. */
+const FULL_RENDER_RECENT_COUNT = 2;
+
+export function ThreadCard({ leadId, businessName, messages, unreadReplies = 0, outcome, onOpen, onMarkUnread }: Props) {
   const [expanded, setExpanded] = useState(true);
+  /** Per-message expand override for the collapsed older rows. */
+  const [openOlderIds, setOpenOlderIds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     setExpanded(true);
+    setOpenOlderIds(new Set());
   }, [leadId]);
 
-  // Sort messages by step_number, then created_at
-  const sorted = [...messages].sort((a, b) => {
+  // Sort messages by step_number ascending then date ascending (chronological).
+  const sortedAsc = [...messages].sort((a, b) => {
     if (a.step_number !== b.step_number) return a.step_number - b.step_number;
     return (a.created_at || "").localeCompare(b.created_at || "");
   });
+  // For the visible-message rendering we put the newest at the top — operator
+  // triaging the Inbox cares about the most recent message first.
+  const sorted = [...sortedAsc].reverse();
+
+  const fullyRendered = sorted.slice(0, FULL_RENDER_RECENT_COUNT);
+  const collapsedOlder = sorted.slice(FULL_RENDER_RECENT_COUNT);
 
   const initial = sorted.find((m) => m.step_number === 1);
   const followUps = sorted.filter((m) => m.step_number > 1);
@@ -88,6 +139,7 @@ export function ThreadCard({ leadId, businessName, messages, unreadReplies = 0, 
                   {venueCategory.replace(/_/g, " ")}
                 </Badge>
               )}
+              <OutcomePill outcome={outcome} />
             </div>
             <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
               {contactName && <span>{contactName}</span>}
@@ -142,12 +194,67 @@ export function ThreadCard({ leadId, businessName, messages, unreadReplies = 0, 
         </div>
       </button>
 
-      {/* Expanded: show all messages (replies shown via MessageCard's own thread view) */}
+      {/* Triage actions — only when the thread is open and has at least one reply */}
+      {expanded && hasReply && (
+        <InboxTriage
+          leadId={leadId}
+          onMarkUnread={
+            onMarkUnread && unreadReplies === 0 ? onMarkUnread : undefined
+          }
+        />
+      )}
+
+      {/* Expanded: render the newest N messages as full MessageCards, then
+          collapse older messages into compact preview rows that expand on
+          click. Cuts the per-render mount work on long threads. */}
       {expanded && (
         <div className="border-t border-border/30 px-2 py-2 space-y-2">
-          {sorted.map((msg) => (
+          {fullyRendered.map((msg) => (
             <MessageCard key={msg.id} message={msg} inConversation />
           ))}
+          {collapsedOlder.length > 0 && (
+            <div className="rounded-md border border-border/30 bg-muted/20 overflow-hidden">
+              <div className="px-3 py-1.5 text-[10px] uppercase tracking-wider font-medium text-muted-foreground border-b border-border/30">
+                {collapsedOlder.length} older message{collapsedOlder.length === 1 ? "" : "s"}
+              </div>
+              {collapsedOlder.map((msg) => {
+                const isOpen = openOlderIds.has(msg.id);
+                if (isOpen) {
+                  return (
+                    <div key={msg.id} className="border-b border-border/30 last:border-b-0 p-2">
+                      <MessageCard message={msg} inConversation />
+                    </div>
+                  );
+                }
+                const preview = msg.content?.split("\n").filter(Boolean)[0]?.slice(0, 80) ?? "";
+                const when = msg.sent_at || msg.created_at;
+                return (
+                  <button
+                    key={msg.id}
+                    type="button"
+                    onClick={() =>
+                      setOpenOlderIds((prev) => {
+                        const next = new Set(prev);
+                        next.add(msg.id);
+                        return next;
+                      })
+                    }
+                    className="flex items-center gap-3 w-full px-3 py-2 text-xs hover:bg-accent/30 transition-colors text-left border-b border-border/30 last:border-b-0"
+                  >
+                    <span className="font-medium shrink-0" style={{ minWidth: 50 }}>
+                      Step {msg.step_number}
+                    </span>
+                    <span className="truncate flex-1 text-muted-foreground">{preview}</span>
+                    {when && (
+                      <span className="shrink-0 text-[10px] text-muted-foreground/70">
+                        {timeAgo(when)}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
     </div>

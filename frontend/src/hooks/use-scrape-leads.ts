@@ -1,7 +1,35 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { toast } from "sonner";
 import type { ScrapeBatchStatus } from "./use-scrape-batch";
+
+/** Survives navigation away from the Dashboard / lead detail / wherever the
+ *  hook was first invoked. Without this, the StaleLeadsCard loses the
+ *  batchId on unmount and the "Re-enriching: N / total" indicator
+ *  disappears even though the backend job is still running. Stored in
+ *  localStorage and read back on mount. Cleared when the batch reaches a
+ *  terminal status (completed / failed). */
+const BATCH_STORAGE_KEY = "scrape_selected_batch_id";
+
+function loadStoredBatchId(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return localStorage.getItem(BATCH_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function storeBatchId(id: string | null) {
+  if (typeof window === "undefined") return;
+  try {
+    if (id) localStorage.setItem(BATCH_STORAGE_KEY, id);
+    else localStorage.removeItem(BATCH_STORAGE_KEY);
+  } catch {
+    // Quota / privacy mode — ignore. Behaviour degrades to "lose state on
+    // navigation", which is the original bug.
+  }
+}
 
 /**
  * Scrape + enrich a single existing lead in place. Synchronous (~45-120s).
@@ -38,8 +66,16 @@ export function useScrapeLeadNow() {
  * Bulk scrape selected existing leads. Returns a batch_id + polling.
  */
 export function useScrapeSelectedLeads() {
-  const [batchId, setBatchId] = useState<string | null>(null);
+  // Rehydrate batchId from localStorage on first mount so navigating away
+  // and coming back doesn't lose track of an in-flight scrape.
+  const [batchId, setBatchIdState] = useState<string | null>(() => loadStoredBatchId());
   const queryClient = useQueryClient();
+
+  // Wrapper so every batchId mutation also writes through to localStorage.
+  const setBatchId = (next: string | null) => {
+    setBatchIdState(next);
+    storeBatchId(next);
+  };
 
   const start = useMutation({
     mutationFn: async (leadIds: string[]): Promise<ScrapeBatchStatus> => {
@@ -68,6 +104,13 @@ export function useScrapeSelectedLeads() {
     queryFn: async (): Promise<ScrapeBatchStatus | null> => {
       if (!batchId) return null;
       const res = await fetch(`/api/scrape-batch/${batchId}`);
+      // 404 from the batch endpoint means the stored batchId is stale (job
+      // expired or backend forgot). Clear it so we stop polling on every
+      // page load forever.
+      if (res.status === 404) {
+        setBatchId(null);
+        return null;
+      }
       if (!res.ok) return null;
       return (await res.json()) as ScrapeBatchStatus;
     },
@@ -80,9 +123,16 @@ export function useScrapeSelectedLeads() {
   });
 
   const final = statusQuery.data?.status;
-  if (final === "completed" || final === "failed") {
-    queryClient.invalidateQueries({ queryKey: ["leads"] });
-  }
+
+  // When the batch reaches a terminal state, invalidate leads (so updated
+  // enrichment shows up) and clear the stored batchId — otherwise the next
+  // page load would re-fetch a stale "completed" status forever.
+  useEffect(() => {
+    if (final === "completed" || final === "failed") {
+      queryClient.invalidateQueries({ queryKey: ["leads"] });
+      storeBatchId(null);
+    }
+  }, [final, queryClient]);
 
   return {
     start: (leadIds: string[]) => start.mutate(leadIds),

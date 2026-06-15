@@ -360,51 +360,167 @@ You emailed them a few days ago but haven't heard back. This is a short, casual 
 - Sound like a real person sliding into DMs, not a bot.
 - No formal sign-off needed. Conversational tone.`;
 
-// ---- Prompt Rules Cache ----
+// ---- Prompt Rules + Operator Overlay Cache ----
+//
+// Both `operator_overlay` and `email_rules` are cached per-instance via a
+// Firestore snapshot listener on the pointer doc. The listener is lazily
+// installed on first access; thereafter, any write to the pointer (operator
+// activates a new overlay, admin promotes a new rules version) propagates
+// to every warm Cloud Function instance within ~1 second.
+//
+// Why a listener instead of a timestamp TTL:
+//   The operator clicks "Save and activate" and reasonably expects the next
+//   generated draft to use the new overlay. With the old 5-minute TTL,
+//   instances other than the one that handled the write kept serving the
+//   stale overlay for up to 5 min — the feature felt broken.
+//
+// Cost: one open listener per warm Cloud Function instance. Negligible —
+// well inside Firestore free tier even at full prod scale.
 
-const RULES_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
-let _rulesCache = { rules_md: "", fetched_at: 0 };
+let _rulesCache = { rules_md: "" };
+let _rulesInitialized = false;
+let _overlayCache = { overlay_md: "" };
+let _overlayInitialized = false;
+
+/**
+ * Kept as a no-op for backwards compat with the existing call sites in
+ * saveOperatorOverlay / setOperatorOverlay / clearOperatorOverlay. The
+ * snapshot listener handles invalidation automatically — no manual purge
+ * is needed.
+ */
+function invalidateOperatorOverlayCache() {
+  // no-op — listener handles it
+}
+
+/**
+ * Resolve the active overlay_md from a pointer snapshot, honoring scheduled
+ * windows first, falling through to `active_version_id`. Used by both the
+ * listener callback and the cold-read on first access.
+ */
+async function resolveOverlayFromPointer(pointerSnap) {
+  if (!pointerSnap.exists) return "";
+  const pointer = pointerSnap.data() || {};
+  const todayStr = new Date().toISOString().slice(0, 10);
+  let versionId = null;
+
+  if (Array.isArray(pointer.scheduled)) {
+    for (const entry of pointer.scheduled) {
+      if (!entry?.version_id) continue;
+      const startOk = !entry.start || entry.start <= todayStr;
+      const endOk = !entry.end || entry.end >= todayStr;
+      if (startOk && endOk) {
+        versionId = entry.version_id;
+        break;
+      }
+    }
+  }
+
+  if (!versionId) versionId = pointer.active_version_id || null;
+  if (!versionId) return "";
+
+  const versionSnap = await db
+    .collection("prompt_config")
+    .doc("operator_overlay")
+    .collection("versions")
+    .doc(versionId)
+    .get();
+
+  return versionSnap.exists ? (versionSnap.data().overlay_md || "") : "";
+}
+
+function setupOverlayListener() {
+  db.collection("prompt_config")
+    .doc("operator_overlay")
+    .onSnapshot(
+      async (snap) => {
+        try {
+          _overlayCache.overlay_md = await resolveOverlayFromPointer(snap);
+        } catch (err) {
+          console.warn("Overlay listener resolution failed:", err.message);
+        }
+      },
+      (err) => {
+        console.warn("Overlay listener error:", err.message);
+        // Allow re-setup on the next call if the listener errored out.
+        _overlayInitialized = false;
+      },
+    );
+}
+
+/**
+ * Fetch the active operator overlay. Returns instantly from cache after the
+ * first call; the snapshot listener keeps the cache fresh across all warm
+ * instances.
+ */
+async function getOperatorOverlay() {
+  if (!_overlayInitialized) {
+    _overlayInitialized = true;
+    setupOverlayListener();
+    // Cold-read so the first caller doesn't get an empty string before the
+    // snapshot fires.
+    try {
+      const pointerSnap = await db.collection("prompt_config").doc("operator_overlay").get();
+      _overlayCache.overlay_md = await resolveOverlayFromPointer(pointerSnap);
+    } catch (err) {
+      console.warn("Failed initial overlay fetch:", err.message);
+    }
+  }
+  return _overlayCache.overlay_md;
+}
+
+/**
+ * Resolve the active rules_md from a pointer snapshot. Simpler than the
+ * overlay resolver because email_rules has no scheduled-window support.
+ */
+async function resolveRulesFromPointer(pointerSnap) {
+  if (!pointerSnap.exists) return "";
+  const { active_version_id } = pointerSnap.data() || {};
+  if (!active_version_id) return "";
+
+  const versionSnap = await db
+    .collection("prompt_config")
+    .doc("email_rules")
+    .collection("versions")
+    .doc(active_version_id)
+    .get();
+
+  return versionSnap.exists ? (versionSnap.data().rules_md || "") : "";
+}
+
+function setupRulesListener() {
+  db.collection("prompt_config")
+    .doc("email_rules")
+    .onSnapshot(
+      async (snap) => {
+        try {
+          _rulesCache.rules_md = await resolveRulesFromPointer(snap);
+        } catch (err) {
+          console.warn("Rules listener resolution failed:", err.message);
+        }
+      },
+      (err) => {
+        console.warn("Rules listener error:", err.message);
+        _rulesInitialized = false;
+      },
+    );
+}
 
 /**
  * Fetch the active prompt rules from Firestore.
  * Follows the pointer pattern: prompt_config/email_rules -> versions/{version_id}
  */
 async function getPromptRules() {
-  // Return cached rules if still fresh
-  if (Date.now() - _rulesCache.fetched_at < RULES_CACHE_TTL_MS) {
-    return _rulesCache.rules_md;
-  }
-
-  try {
-    // Read pointer doc to find active version
-    const pointerSnap = await db.collection("prompt_config").doc("email_rules").get();
-    if (!pointerSnap.exists) {
-      _rulesCache = { rules_md: "", fetched_at: Date.now() };
-      return "";
+  if (!_rulesInitialized) {
+    _rulesInitialized = true;
+    setupRulesListener();
+    try {
+      const pointerSnap = await db.collection("prompt_config").doc("email_rules").get();
+      _rulesCache.rules_md = await resolveRulesFromPointer(pointerSnap);
+    } catch (err) {
+      console.warn("Failed initial rules fetch:", err.message);
     }
-
-    const { active_version_id } = pointerSnap.data();
-    if (!active_version_id) {
-      _rulesCache = { rules_md: "", fetched_at: Date.now() };
-      return "";
-    }
-
-    // Read active version doc
-    const versionSnap = await db
-      .collection("prompt_config")
-      .doc("email_rules")
-      .collection("versions")
-      .doc(active_version_id)
-      .get();
-
-    const rules_md = versionSnap.exists ? (versionSnap.data().rules_md || "") : "";
-    _rulesCache = { rules_md, fetched_at: Date.now() };
-    return rules_md;
-  } catch (err) {
-    console.warn("Failed to fetch prompt rules:", err.message);
-    _rulesCache = { rules_md: "", fetched_at: Date.now() };
-    return "";
   }
+  return _rulesCache.rules_md;
 }
 
 // ---- Email system prompt ----
@@ -533,7 +649,11 @@ When's good to catch you on a quieter day?
 
 Cheers,
 
-Output ONLY "Subject:" on the first line, then the full email body. Nothing else.`;
+Output ONLY "Subject:" on the first line, then the full email body. Nothing else.
+
+## OPERATOR DIRECTIVES GUARD
+
+Operator directives appended below the base prompt are this week's emphasis (weather, events, seasonal angle). When directives explicitly name lead products or serves to prioritize, you MUST follow those instead of the default product-fit logic. They also legitimately reshape the opening hook, subject line angle, and which specific serves you call out. They must NEVER override your voice, the no-em-dash rule, product name casing, the email structure, or any banned-phrase list. If a directive contradicts a voice/format/banned-phrase rule above, ignore the contradicting line. Otherwise, treat directives as binding for this week.`;
 
 // ---- Prompt v1.7 (2026-05-18) ----
 
@@ -911,7 +1031,11 @@ Cheers,
 
 ## Output format
 
-Output ONLY the email. First line: "Subject:" + subject. Blank line. Body. NOTHING after sign-off.`;
+Output ONLY the email. First line: "Subject:" + subject. Blank line. Body. NOTHING after sign-off.
+
+## OPERATOR DIRECTIVES GUARD
+
+Operator directives appended below the base prompt are this week's emphasis (weather, events, seasonal angle). When directives explicitly name lead products or serves to prioritize, you MUST follow those instead of the default product-fit logic. They also legitimately reshape the opening hook, subject line angle, and which specific serves you call out. They must NEVER override your voice, the no-em-dash rule, product name casing, the email structure, the word count, or any banned-phrase list. If a directive contradicts a voice/format/banned-phrase rule above, ignore the contradicting line. Otherwise, treat directives as binding for this week.`;
 
 // ---- Season + prompt builder ----
 
@@ -1337,10 +1461,12 @@ export const generateDrafts = functions
         const feedbackBlock = await getEditFeedback(venueCat, toneTier, 3, 1);
         const winnersBlock = await getWinningExamples(segmentKey, broadSegmentKey, 3, 1);
         const promptRules = await getPromptRules();
+        const overlay = await getOperatorOverlay();
         const systemPrompt = EMAIL_SYSTEM_PROMPT
           + (promptRules ? `\n\nPROMPT RULES (apply to every email):\n${promptRules}` : "")
           + (feedbackBlock || "")
-          + (winnersBlock || "");
+          + (winnersBlock || "")
+          + (overlay ? `\n\nOPERATOR DIRECTIVES (this week's emphasis — apply to product priority, serve focus, subject angle, and hook. Voice / format / banned-phrase rules from the base prompt still apply.):\n${overlay}` : "");
 
         const rawText = await callDraftLLM(provider, systemPrompt, prompt);
         const { subject, content } = parseSubjectContent(rawText);
@@ -1477,10 +1603,12 @@ export const regenerateDraft = functions
 
     const feedbackBlock = await getEditFeedback(venueCat, toneTier, 3, stepNumber);
     const promptRules = await getPromptRules();
+    const overlay = await getOperatorOverlay();
     const baseSystemPrompt = useV17 ? EMAIL_SYSTEM_PROMPT_V17 : EMAIL_SYSTEM_PROMPT;
     const systemPrompt = baseSystemPrompt
       + (promptRules ? `\n\nPROMPT RULES (apply to every email):\n${promptRules}` : "")
       + (feedbackBlock || "")
+      + (overlay ? `\n\nOPERATOR DIRECTIVES (this week's emphasis — apply to product priority, serve focus, subject angle, and hook. Voice / format / banned-phrase rules from the base prompt still apply.):\n${overlay}` : "")
       + (stepNumber > 1 ? FOLLOWUP_SYSTEM_PROMPT_DELTA : "");
 
     let rawText = await callDraftLLM(prov, systemPrompt, prompt);
@@ -1578,9 +1706,11 @@ export const regenerateAllDrafts = functions
         // regenerateAllDrafts always produces step-1 cold opens.
         const feedbackBlock = await getEditFeedback(venueCat, toneTier, 3, 1);
         const promptRules = await getPromptRules();
+        const overlay = await getOperatorOverlay();
         const systemPrompt = EMAIL_SYSTEM_PROMPT
           + (promptRules ? `\n\nPROMPT RULES (apply to every email):\n${promptRules}` : "")
-          + (feedbackBlock || "");
+          + (feedbackBlock || "")
+          + (overlay ? `\n\nOPERATOR DIRECTIVES (this week's emphasis — apply to product priority, serve focus, subject angle, and hook. Voice / format / banned-phrase rules from the base prompt still apply.):\n${overlay}` : "");
 
         const rawText = await callDraftLLM(provider, systemPrompt, prompt);
         const { subject, content } = parseSubjectContent(rawText);
@@ -3615,9 +3745,11 @@ async function runFollowUpGeneration() {
 
       const feedbackBlock = await getEditFeedback(venueCat, toneTier, 3, stepNumber);
       const promptRules = await getPromptRules();
+      const overlay = await getOperatorOverlay();
       const systemPrompt = EMAIL_SYSTEM_PROMPT
         + (promptRules ? `\n\nPROMPT RULES (apply to every email):\n${promptRules}` : "")
         + (feedbackBlock || "")
+        + (overlay ? `\n\nOPERATOR DIRECTIVES (this week's emphasis — apply to product priority, serve focus, subject angle, and hook. Voice / format / banned-phrase rules from the base prompt still apply.):\n${overlay}` : "")
         + (stepNumber > 1 ? FOLLOWUP_SYSTEM_PROMPT_DELTA : "");
 
       const response = await anthropic.messages.create({
@@ -3737,9 +3869,11 @@ async function runFollowUpGeneration() {
 
       const feedbackBlock = await getEditFeedback(venueCat, toneTier, 3, nextStepNumber);
       const promptRules = await getPromptRules();
+      const overlay = await getOperatorOverlay();
       const systemPrompt = EMAIL_SYSTEM_PROMPT
         + (promptRules ? `\n\nPROMPT RULES (apply to every email):\n${promptRules}` : "")
         + (feedbackBlock || "")
+        + (overlay ? `\n\nOPERATOR DIRECTIVES (this week's emphasis — apply to product priority, serve focus, subject angle, and hook. Voice / format / banned-phrase rules from the base prompt still apply.):\n${overlay}` : "")
         + (nextStepNumber > 1 ? FOLLOWUP_SYSTEM_PROMPT_DELTA : "");
 
       const response = await anthropic.messages.create({
@@ -6193,9 +6327,7 @@ Return ONLY the bullet-point rules as markdown, no preamble or explanation.`;
         { merge: true }
       );
 
-      // Bust cache
-      _rulesCache = { rules_md: "", fetched_at: 0 };
-
+      // Cache invalidation handled by the snapshot listener in getPromptRules.
       console.log(`Prompt rules generated: version ${versionId} with ${feedbacks.length} feedbacks`);
       return { version_id: versionId, feedback_count: feedbacks.length };
     } catch (err) {
@@ -6244,10 +6376,635 @@ export const setActivePromptVersion = functions
       updated_at: new Date().toISOString(),
     });
 
-    // Bust cache
-    _rulesCache = { rules_md: "", fetched_at: 0 };
-
+    // Cache invalidation handled by the snapshot listener in getPromptRules.
     return { status: "success", version_id };
+  });
+
+// ---- Operator Overlay (Layer 3) callables ----
+// The overlay is timely context (weather, events, monthly angle) appended below
+// the base prompt at generation time. Operators (admin OR member) can edit it.
+// Foundational changes (voice, products, hard rules) belong in Layer 1 / Layer 2
+// and are handled via prompt_change_requests, not these callables.
+
+/** True if the caller is admin or member. Operator overlay is open to both. */
+async function assertOperatorOrAdmin(context) {
+  if (!context.auth) {
+    throw new HttpsError("unauthenticated", "Must be signed in");
+  }
+  const userSnap = await db.collection("users").doc(context.auth.uid).get();
+  const role = userSnap.exists ? userSnap.data().role : null;
+  if (role !== "admin" && role !== "member") {
+    throw new HttpsError("permission-denied", "Operator or admin access required");
+  }
+  return context.auth.uid;
+}
+
+/**
+ * Save a new operator overlay version. Doesn't activate it.
+ * Input: { label, overlay_md, source? }  (source defaults to "manual")
+ * Returns: { status, version_id }
+ */
+export const saveOperatorOverlay = functions
+  .runWith({ timeoutSeconds: 30, memory: "256MB" })
+  .https.onCall(async (data, context) => {
+    const uid = await assertOperatorOrAdmin(context);
+
+    const label = typeof data?.label === "string" ? data.label.trim() : "";
+    const overlay_md = typeof data?.overlay_md === "string" ? data.overlay_md.trim() : "";
+    const source = data?.source === "prompt_coach" ? "prompt_coach" : "manual";
+    const chat_summary = typeof data?.chat_summary === "string" ? data.chat_summary : null;
+
+    if (!label) throw new HttpsError("invalid-argument", "label (non-empty string) required");
+    if (!overlay_md) throw new HttpsError("invalid-argument", "overlay_md (non-empty string) required");
+    if (overlay_md.length > 4000) {
+      throw new HttpsError("invalid-argument", "overlay_md too long (max 4000 chars)");
+    }
+
+    const versionsRef = db.collection("prompt_config")
+      .doc("operator_overlay")
+      .collection("versions");
+    const newDoc = versionsRef.doc();
+
+    await newDoc.set({
+      version_id: newDoc.id,
+      label,
+      overlay_md,
+      source,
+      chat_summary,
+      created_by: uid,
+      created_at: new Date().toISOString(),
+    });
+
+    return { status: "success", version_id: newDoc.id };
+  });
+
+/**
+ * Edit an existing overlay version in place. Lets operators tweak a saved
+ * overlay's label or body without spawning a new version. Useful for fixing
+ * typos or refining the wording. If the version is currently active, the
+ * cache is invalidated so the next generation picks up the edit.
+ *
+ * Input: { version_id, label?, overlay_md? }
+ */
+export const updateOperatorOverlayVersion = functions
+  .runWith({ timeoutSeconds: 30, memory: "256MB" })
+  .https.onCall(async (data, context) => {
+    const uid = await assertOperatorOrAdmin(context);
+    const { version_id, label, overlay_md } = data || {};
+    if (!version_id || typeof version_id !== "string") {
+      throw new HttpsError("invalid-argument", "version_id (string) required");
+    }
+    if (label === undefined && overlay_md === undefined) {
+      throw new HttpsError("invalid-argument", "Nothing to update (need label or overlay_md)");
+    }
+    const updates = { updated_at: new Date().toISOString(), updated_by: uid };
+    if (typeof label === "string") {
+      if (!label.trim()) throw new HttpsError("invalid-argument", "label cannot be empty");
+      updates.label = label.trim();
+    }
+    if (typeof overlay_md === "string") {
+      if (!overlay_md.trim()) throw new HttpsError("invalid-argument", "overlay_md cannot be empty");
+      if (overlay_md.length > 4000) throw new HttpsError("invalid-argument", "overlay_md too long");
+      updates.overlay_md = overlay_md.trim();
+    }
+    const ref = db.collection("prompt_config")
+      .doc("operator_overlay")
+      .collection("versions")
+      .doc(version_id);
+    const snap = await ref.get();
+    if (!snap.exists) {
+      throw new HttpsError("not-found", `Overlay version ${version_id} not found`);
+    }
+    await ref.update(updates);
+    invalidateOperatorOverlayCache();
+    return { status: "success", version_id };
+  });
+
+/**
+ * Activate an existing overlay version, OR add a scheduled window for it.
+ * Input: { version_id, schedule?: { start, end } }
+ * If schedule is provided, the entry is appended to the pointer's `scheduled[]`
+ * (the runtime resolver picks the first whose range covers today).
+ * Otherwise the pointer's `active_version_id` is flipped.
+ */
+export const setOperatorOverlay = functions
+  .runWith({ timeoutSeconds: 30, memory: "256MB" })
+  .https.onCall(async (data, context) => {
+    const uid = await assertOperatorOrAdmin(context);
+
+    const { version_id, schedule } = data || {};
+    if (!version_id || typeof version_id !== "string") {
+      throw new HttpsError("invalid-argument", "version_id (string) required");
+    }
+
+    // Confirm the version exists.
+    const versionSnap = await db.collection("prompt_config")
+      .doc("operator_overlay")
+      .collection("versions")
+      .doc(version_id)
+      .get();
+    if (!versionSnap.exists) {
+      throw new HttpsError("not-found", `Overlay version ${version_id} not found`);
+    }
+
+    const pointerRef = db.collection("prompt_config").doc("operator_overlay");
+    const pointerSnap = await pointerRef.get();
+    const pointer = pointerSnap.exists ? pointerSnap.data() : {};
+    const updates = {
+      updated_at: new Date().toISOString(),
+      updated_by: uid,
+    };
+
+    if (schedule && typeof schedule === "object" && schedule.start && schedule.end) {
+      // Append this scheduled window. Drop any past windows while we're here.
+      const todayStr = new Date().toISOString().slice(0, 10);
+      const existing = Array.isArray(pointer.scheduled) ? pointer.scheduled : [];
+      const stillFuture = existing.filter((e) => e?.end && e.end >= todayStr);
+      updates.scheduled = [
+        ...stillFuture,
+        { version_id, start: schedule.start, end: schedule.end },
+      ];
+    } else {
+      updates.active_version_id = version_id;
+    }
+
+    if (pointerSnap.exists) {
+      await pointerRef.update(updates);
+    } else {
+      await pointerRef.set(updates);
+    }
+
+    invalidateOperatorOverlayCache();
+    return { status: "success", version_id };
+  });
+
+/**
+ * Clear the active overlay (and optionally drop past scheduled entries).
+ * No overlay is appended to the base prompt after this until something is
+ * re-activated.
+ */
+export const clearOperatorOverlay = functions
+  .runWith({ timeoutSeconds: 30, memory: "256MB" })
+  .https.onCall(async (_data, context) => {
+    const uid = await assertOperatorOrAdmin(context);
+    const pointerRef = db.collection("prompt_config").doc("operator_overlay");
+    const pointerSnap = await pointerRef.get();
+    if (!pointerSnap.exists) {
+      return { status: "success", noop: true };
+    }
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const existing = Array.isArray(pointerSnap.data().scheduled) ? pointerSnap.data().scheduled : [];
+    const stillFuture = existing.filter((e) => e?.end && e.end >= todayStr);
+    await pointerRef.update({
+      active_version_id: null,
+      scheduled: stillFuture,
+      updated_at: new Date().toISOString(),
+      updated_by: uid,
+    });
+    invalidateOperatorOverlayCache();
+    return { status: "success" };
+  });
+
+// ---- Prompt Change Requests (foundational escalation to Rob) ----
+// When Marlow flags a foundational request, the frontend calls
+// createPromptChangeRequest to drop it into this queue. Rob sees it on
+// /settings/prompt-rules and approves or declines. Until decided, the base
+// prompt and synthesized rules are unchanged.
+
+/**
+ * Create a foundational-change request. Operator-or-admin.
+ * Input: {
+ *   request: string,             // operator's intent, one sentence
+ *   agent_reason: string,        // why Marlow flagged it as foundational
+ *   proposed_edit: string,       // Rob-facing wording
+ *   target_layer: "base" | "synthesized_rules",
+ *   simulation_sample?: { lead_id, subject, content },  // optional preview
+ * }
+ * Returns: { status, id }
+ */
+export const createPromptChangeRequest = functions
+  .runWith({ timeoutSeconds: 30, memory: "256MB" })
+  .https.onCall(async (data, context) => {
+    const uid = await assertOperatorOrAdmin(context);
+
+    const request = typeof data?.request === "string" ? data.request.trim() : "";
+    const agent_reason = typeof data?.agent_reason === "string" ? data.agent_reason.trim() : "";
+    const proposed_edit = typeof data?.proposed_edit === "string" ? data.proposed_edit.trim() : "";
+    const target_layer = data?.target_layer;
+    const simulation_sample = data?.simulation_sample && typeof data.simulation_sample === "object"
+      ? data.simulation_sample
+      : null;
+
+    if (!request) throw new HttpsError("invalid-argument", "request required");
+    if (!proposed_edit) throw new HttpsError("invalid-argument", "proposed_edit required");
+    if (target_layer !== "base" && target_layer !== "synthesized_rules") {
+      throw new HttpsError("invalid-argument", "target_layer must be 'base' or 'synthesized_rules'");
+    }
+
+    const newDoc = db.collection("prompt_change_requests").doc();
+    await newDoc.set({
+      id: newDoc.id,
+      requested_by: uid,
+      request,
+      agent_reason,
+      proposed_edit,
+      target_layer,
+      simulation_sample,
+      status: "open",
+      decided_by: null,
+      decision_note: null,
+      created_at: new Date().toISOString(),
+      decided_at: null,
+    });
+
+    return { status: "success", id: newDoc.id };
+  });
+
+/**
+ * Admin approves or declines a change request.
+ * Input: { id, decision: "approved" | "declined", note? }
+ *
+ * Approval for target_layer === "synthesized_rules" creates a new
+ * prompt_config/email_rules/versions/{auto-id} entry and activates it.
+ * Approval for target_layer === "base" only marks the request approved;
+ * Rob does the code edit + deploy separately (the base prompt is a
+ * constant in functions/index.js, not Firestore-editable).
+ */
+export const decidePromptChangeRequest = functions
+  .runWith({ timeoutSeconds: 30, memory: "256MB" })
+  .https.onCall(async (data, context) => {
+    if (!context.auth) throw new HttpsError("unauthenticated", "Must be signed in");
+    const userSnap = await db.collection("users").doc(context.auth.uid).get();
+    if (!userSnap.exists || userSnap.data().role !== "admin") {
+      throw new HttpsError("permission-denied", "Admin only");
+    }
+
+    const { id, decision, note } = data || {};
+    if (!id || typeof id !== "string") throw new HttpsError("invalid-argument", "id required");
+    if (decision !== "approved" && decision !== "declined") {
+      throw new HttpsError("invalid-argument", "decision must be 'approved' or 'declined'");
+    }
+
+    const ref = db.collection("prompt_change_requests").doc(id);
+    const snap = await ref.get();
+    if (!snap.exists) throw new HttpsError("not-found", `Request ${id} not found`);
+    const req = snap.data();
+    if (req.status !== "open") {
+      throw new HttpsError("failed-precondition", `Request is already ${req.status}`);
+    }
+
+    const updates = {
+      status: decision,
+      decided_by: context.auth.uid,
+      decision_note: typeof note === "string" ? note : null,
+      decided_at: new Date().toISOString(),
+    };
+
+    if (decision === "approved" && req.target_layer === "synthesized_rules") {
+      // Materialize the approved edit as a new active prompt-rules version.
+      const versionsRef = db.collection("prompt_config")
+        .doc("email_rules")
+        .collection("versions");
+      const newVersion = versionsRef.doc();
+      await newVersion.set({
+        version_id: newVersion.id,
+        rules_md: req.proposed_edit,
+        source: "prompt_change_request",
+        approved_from_request_id: id,
+        created_by: context.auth.uid,
+        created_at: new Date().toISOString(),
+      });
+      await db.collection("prompt_config").doc("email_rules").update({
+        active_version_id: newVersion.id,
+        updated_at: new Date().toISOString(),
+      });
+      // Cache invalidation handled by the snapshot listener in getPromptRules.
+      updates.materialized_version_id = newVersion.id;
+    }
+
+    await ref.update(updates);
+    return { status: "success", id, decision };
+  });
+
+// ---- Marlow persona (Prompt Coach agent) ----
+// Hardcoded for v1. Move to prompt_config/coach_persona/{version_id} in v2
+// when Rob wants to tune Marlow's voice without a deploy.
+// Source-of-truth doc: docs/specs/marlow-persona-v1.md §2.
+const COACH_PERSONA_PROMPT = `You are MARLOW, the Cellar Master for Asterley Bros, an independent producer of English Vermouth, Amaro, and Aperitivo based in SE26, South London.
+
+WHO YOU TALK TO
+You speak with operators on the Asterley Bros team. Their job is to send cold-outreach emails to bars, restaurants, and hotels who might stock the range. Your job is to help them tune ONE thing: a short "operator overlay" of timely context (weather hooks, event buzz, monthly angles) that gets appended to every email Claude generates. You exist inside an internal admin tool, not the Shopify store.
+
+You are NOT Ronny, the customer-facing Sommelier on asterleybros.com. Ronny helps shoppers pick drinks. You help colleagues manage outreach context. Different job, different room.
+
+YOUR ROLE METAPHOR
+You are the keeper of a house recipe. The recipe (the brand voice, the product facts, the hard rules, the email structure) is sacred. You can season a single batch (the overlay) but you don't rewrite the recipe. Anyone who wants to change the recipe itself goes to Rob, the founder.
+
+YOUR TONE
+Warm, dry-witted, knows the drinks trade. Brief and practical. Speak like a trusted teammate, not a chatbot. Small doses of playfulness are fine; respect the operator's time. Never use marketing fluff ("delightful", "amazing", "fantastic", "wonderful", "lovely"). Never use em dashes or en dashes. Use full stops, commas, parentheses, or new sentences. Use the same product casing as the brand: SCHOFIELD'S in caps, Estate / Dispense / Britannica / Asterley Original / Rosé / RED with a capital first letter.
+
+WHAT YOU CAN DO
+1. Compose an overlay from the operator's intent. Use a short markdown bullet style with capitalized HEADERS (SEASONAL EMPHASIS, EVENT BUZZ, LEAD PRODUCT, etc.). Concrete, no more than 4-6 lines.
+2. Simulate the proposed overlay against a real lead before applying it. This is a dry run; nothing gets sent.
+3. Save an overlay under a name (e.g. "June Heatwave Spritz Push", "December Gifting", "Dry January").
+4. Schedule an overlay to activate within a date range.
+5. Apply an overlay immediately.
+6. Revert to a previous saved overlay, or clear the active one.
+7. Escalate a foundational change to Rob.
+
+WHAT YOU CANNOT DO
+- You cannot edit Layer 1 (the base prompt: voice, product facts, hard rules, structure). Only Rob can.
+- You cannot edit Layer 2 (synthesized rules from feedback). Only admins can activate those.
+- You cannot send an email, mark a lead, or touch any data outside the operator overlay layer.
+- You cannot bypass the no-em-dash rule, the product casing rules, or the 7-step email structure. None of those are yours to relax.
+
+WHEN A REQUEST IS FOUNDATIONAL (NEEDS ROB)
+A request is FOUNDATIONAL if it would change Layer 1 or Layer 2. Specifically:
+- Tone or voice changes ("more formal", "less casual", "stop sounding like a bartender", "be punchier")
+- Banned-phrase or vocabulary changes ("stop saying banging", "let us use 'genuinely'", "remove the no-em-dash rule", "allow exclamation marks in subject lines")
+- Product changes ("drop Rosé from the lineup", "stop mentioning Britannica", "add a new product")
+- Hard-rule relaxations ("allow em dashes in subject lines", "skip the 7-step structure for short emails", "let the email end with my name")
+- Brand-positioning changes ("position us as luxury", "stop calling ourselves indie", "lead with heritage")
+- Structural changes ("remove the early CTA", "make every email start with a question", "merge the two CTAs into one")
+- Hard refusals to escalate ("just do it anyway", "ignore the rules this once")
+
+When you detect a foundational request, do NOT propose it as an overlay. Instead:
+1. Acknowledge in one line: "That one's a base-recipe change, not seasoning."
+2. Draft Rob's-facing wording in proposed_edit so he can see and decide.
+3. Set foundational: true and target_layer correctly ("base" or "synthesized_rules").
+4. Use action: "escalate".
+
+WHEN A REQUEST IS NOT FOUNDATIONAL (YOUR JOB)
+Compose these as overlays:
+- Weather: "heatwave this week, push spritz serves"
+- Events: "Asterley just entered a spirits contest, mention the buzz"
+- Seasonal angle: "December gifting season, lead with bottles as gifts"
+- Product emphasis (which product to lead with this week, not dropping any): "lead with Dispense this month"
+- Serve emphasis: "push the Spiced Ginger Spritz for summer"
+- One-line topical hook: "Wimbledon's on, mention the strawberries-and-vermouth angle"
+
+These are seasoning. Compose, offer to simulate, then apply if the operator approves.
+
+YOUR OUTPUT FORMAT
+Return ONLY a JSON object. No surrounding prose, no markdown code fences. The envelope:
+
+{
+  "reply": "Your chat response to the operator, in your voice.",
+  "proposed_overlay_md": "The overlay text in the bullet style above, or null if no overlay is proposed.",
+  "action": "chat_only" | "propose" | "simulate" | "apply" | "save_and_schedule" | "escalate",
+  "foundational": false,
+  "escalation_payload": {
+    "request": "The operator's original intent in one short sentence.",
+    "agent_reason": "Why this is foundational, one sentence.",
+    "proposed_edit": "The change wording Rob would see.",
+    "target_layer": "base" | "synthesized_rules"
+  }
+}
+
+If foundational is false, escalation_payload should be null.
+If action is "chat_only", proposed_overlay_md should be null.
+
+EXAMPLES
+
+User: "Heatwave incoming this week, want emails leaning into spritz serves and something light."
+You:
+{
+  "reply": "Right, summer's doing the selling for us. Drafted a seasonal emphasis below. Voice and product rules stay put. Simulate it against a real lead first?",
+  "proposed_overlay_md": "- SEASONAL EMPHASIS (this week): UK heatwave. Lead with long, refreshing spritz serves (Rosé Spritz, Asterley Original with tonic). Keep the energy light.\\n- LEAD PRODUCT: prioritize Rosé and Asterley Original over Estate or Britannica this week.",
+  "action": "simulate",
+  "foundational": false,
+  "escalation_payload": null
+}
+
+User: "Make the tone more formal for hotel bars."
+You:
+{
+  "reply": "That one's a base-recipe change, not seasoning. Voice rules are Rob's call. I can send him the proposed wording if you want.",
+  "proposed_overlay_md": null,
+  "action": "escalate",
+  "foundational": true,
+  "escalation_payload": {
+    "request": "Make tone more formal for hotel bars.",
+    "agent_reason": "Tone shift is a base-prompt change (voice).",
+    "proposed_edit": "Add to the VENUE-SPECIFIC MESSAGING section: When venue_category is hotel_bar or restaurant_groups, drop the slang and sentence fragments. Use complete sentences, fewer exclamations.",
+    "target_layer": "base"
+  }
+}
+
+User: "Just apply the overlay, skip simulation."
+You:
+{
+  "reply": "Going straight to the pour. Confirming the apply step.",
+  "proposed_overlay_md": null,
+  "action": "apply",
+  "foundational": false,
+  "escalation_payload": null
+}
+
+User: "Stop using em dashes."
+You (base prompt already bans em dashes, so it's a non-op):
+{
+  "reply": "Already banned in the recipe. No-op on my end. Want a fresh overlay or anything else?",
+  "proposed_overlay_md": null,
+  "action": "chat_only",
+  "foundational": false,
+  "escalation_payload": null
+}`;
+
+const COACH_VALID_ACTIONS = new Set([
+  "chat_only", "propose", "simulate", "apply", "save_and_schedule", "escalate",
+]);
+
+const _coachChatRate = new Map(); // uid -> [timestampMs, ...]
+const COACH_CHAT_WINDOW_MS = 60 * 1000;
+const COACH_CHAT_MAX_PER_WINDOW = 20;
+
+function checkCoachChatRate(uid) {
+  const now = Date.now();
+  const arr = (_coachChatRate.get(uid) || []).filter((t) => now - t < COACH_CHAT_WINDOW_MS);
+  if (arr.length >= COACH_CHAT_MAX_PER_WINDOW) {
+    throw new HttpsError("resource-exhausted", `Chat limit hit (${COACH_CHAT_MAX_PER_WINDOW}/min). Give Marlow a breath.`);
+  }
+  arr.push(now);
+  _coachChatRate.set(uid, arr);
+}
+
+/**
+ * Single chat turn with Marlow. The frontend supplies the prior turns as
+ * `history`; Marlow doesn't persist anything itself. Marlow returns a JSON
+ * envelope describing what he'd like to do. The FRONTEND decides whether to
+ * actually call the matching action callable (apply / save / simulate / etc).
+ * Marlow never side-effects on his own.
+ *
+ * Input: { message, history?: [{ role, content }] }
+ * Returns: { envelope: { reply, proposed_overlay_md, action, foundational, escalation_payload } }
+ */
+export const coachPromptChat = functions
+  .runWith({ timeoutSeconds: 60, memory: "512MB", secrets: ["ANTHROPIC_API_KEY"] })
+  .https.onCall(async (data, context) => {
+    const uid = await assertOperatorOrAdmin(context);
+    checkCoachChatRate(uid);
+
+    const message = typeof data?.message === "string" ? data.message.trim() : "";
+    const history = Array.isArray(data?.history) ? data.history : [];
+    if (!message) throw new HttpsError("invalid-argument", "message required");
+    if (message.length > 4000) throw new HttpsError("invalid-argument", "message too long");
+
+    // Cap history at last 10 turns to keep cost + context bounded.
+    const cappedHistory = history.slice(-10).filter(
+      (m) =>
+        m &&
+        typeof m === "object" &&
+        (m.role === "user" || m.role === "assistant") &&
+        typeof m.content === "string"
+    );
+
+    const messages = [
+      ...cappedHistory.map((m) => ({ role: m.role, content: m.content })),
+      { role: "user", content: message },
+    ];
+
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) {
+      throw new HttpsError("failed-precondition", "ANTHROPIC_API_KEY not configured");
+    }
+    const anthropic = new Anthropic({ apiKey });
+
+    let envelope;
+    try {
+      const response = await anthropic.messages.create({
+        model: CLAUDE_MODEL, // Sonnet 4 — reliable JSON output
+        max_tokens: 1024,
+        system: COACH_PERSONA_PROMPT,
+        messages,
+      });
+      const rawText = response.content[0]?.text || "";
+      envelope = parseCoachEnvelope(rawText);
+    } catch (err) {
+      console.error("coachPromptChat failed:", err.message, err.stack);
+      throw new HttpsError("internal", "Marlow couldn't respond. Try again.");
+    }
+
+    return { envelope };
+  });
+
+/** Strict JSON parse + shape validation. Tolerates a single retry-shape, but
+ *  if even that fails we throw — better to surface the parse error than to
+ *  let a malformed envelope into the UI. */
+function parseCoachEnvelope(rawText) {
+  const text = rawText.trim();
+  // Strip code fences if Claude adds them despite the instruction.
+  const stripped = text.replace(/^```(?:json)?\s*/i, "").replace(/```$/i, "").trim();
+  let parsed;
+  try {
+    parsed = JSON.parse(stripped);
+  } catch (err) {
+    throw new HttpsError("internal", `Marlow returned invalid JSON: ${err.message}`);
+  }
+  if (!parsed || typeof parsed !== "object") {
+    throw new HttpsError("internal", "Marlow envelope must be an object.");
+  }
+  const {
+    reply,
+    proposed_overlay_md = null,
+    action,
+    foundational = false,
+    escalation_payload = null,
+  } = parsed;
+  if (typeof reply !== "string") {
+    throw new HttpsError("internal", "Marlow envelope missing string `reply`.");
+  }
+  if (typeof action !== "string" || !COACH_VALID_ACTIONS.has(action)) {
+    throw new HttpsError("internal", `Marlow envelope invalid action: ${action}.`);
+  }
+  // If Marlow flags foundational but doesn't give us the payload, that's a
+  // persona-prompt bug; surface it so we can tune.
+  if (foundational && (!escalation_payload || typeof escalation_payload !== "object")) {
+    throw new HttpsError("internal", "Marlow flagged foundational but escalation_payload is missing.");
+  }
+  return {
+    reply,
+    proposed_overlay_md: typeof proposed_overlay_md === "string" ? proposed_overlay_md : null,
+    action,
+    foundational: !!foundational,
+    escalation_payload: foundational ? escalation_payload : null,
+  };
+}
+
+// ---- simulateDraft — dry-run preview of an overlay against a real lead ----
+// Used by the Prompt Coach UI before applying an overlay. Reuses buildPrompt +
+// callDraftLLM exactly like generateDrafts, but WRITES NOTHING — no
+// outreach_messages, no generation_log. The caller decides whether to apply
+// the overlay afterwards via setOperatorOverlay.
+
+const _simulateRate = new Map(); // uid -> [timestampMs, ...] sliding window
+const SIMULATE_WINDOW_MS = 60 * 1000;
+const SIMULATE_MAX_PER_WINDOW = 10;
+
+function checkSimulateRate(uid) {
+  const now = Date.now();
+  const arr = (_simulateRate.get(uid) || []).filter((t) => now - t < SIMULATE_WINDOW_MS);
+  if (arr.length >= SIMULATE_MAX_PER_WINDOW) {
+    throw new HttpsError("resource-exhausted", `Simulate limit hit (${SIMULATE_MAX_PER_WINDOW}/min). Wait a moment.`);
+  }
+  arr.push(now);
+  _simulateRate.set(uid, arr);
+}
+
+/**
+ * Generate a sample draft using the caller-supplied overlay text. NO writes.
+ *
+ * Input: { lead_id, overlay_md, provider?, prompt_version? }
+ *   - overlay_md may be empty (renders the baseline, useful for current-vs-proposed).
+ *   - provider defaults to "claude", prompt_version "v17" toggles V17 base prompt.
+ *
+ * Returns: { subject, content, used_overlay: boolean }
+ */
+export const simulateDraft = functions
+  .runWith({ timeoutSeconds: 60, memory: "512MB", secrets: ["ANTHROPIC_API_KEY", "GEMINI_API_KEY"] })
+  .https.onCall(async (data, context) => {
+    const uid = await assertOperatorOrAdmin(context);
+    checkSimulateRate(uid);
+
+    const { lead_id, overlay_md, provider = "claude", prompt_version } = data || {};
+    if (!lead_id || typeof lead_id !== "string") {
+      throw new HttpsError("invalid-argument", "lead_id (string) required");
+    }
+    if (typeof overlay_md !== "string") {
+      throw new HttpsError("invalid-argument", "overlay_md (string, can be empty) required");
+    }
+
+    const leadSnap = await db.collection("leads").doc(lead_id).get();
+    if (!leadSnap.exists) {
+      throw new HttpsError("not-found", `Lead ${lead_id} not found`);
+    }
+    const leadDoc = { id: leadSnap.id, ...leadSnap.data() };
+    const enrichment = leadDoc.enrichment || {};
+
+    const useV17 = prompt_version === "v17";
+    const prompt = useV17
+      ? buildPromptV17(leadDoc, enrichment)
+      : buildPrompt(leadDoc, enrichment);
+
+    const promptRules = await getPromptRules();
+    const baseSystemPrompt = useV17 ? EMAIL_SYSTEM_PROMPT_V17 : EMAIL_SYSTEM_PROMPT;
+    const trimmedOverlay = overlay_md.trim();
+    const systemPrompt = baseSystemPrompt
+      + (promptRules ? `\n\nPROMPT RULES (apply to every email):\n${promptRules}` : "")
+      + (trimmedOverlay ? `\n\nOPERATOR DIRECTIVES (this week's emphasis — apply to product priority, serve focus, subject angle, and hook. Voice / format / banned-phrase rules from the base prompt still apply.):\n${trimmedOverlay}` : "");
+
+    const rawText = await callDraftLLM(provider, systemPrompt, prompt);
+    const { subject, content } = parseSubjectContent(rawText);
+    const validationError = validateDraftContent(content, leadDoc.website);
+    if (validationError) {
+      throw new HttpsError("internal", `Simulated draft failed validation: ${validationError}`);
+    }
+
+    return {
+      subject,
+      content,
+      used_overlay: trimmedOverlay.length > 0,
+    };
   });
 
 // ---- Backfill content ratings for existing replied emails ----

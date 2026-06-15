@@ -40,6 +40,7 @@ export interface NotificationState {
   readMap: Record<string, string>;
   markAllRead: () => void;
   markLeadRead: (leadId: string) => void;
+  markLeadUnread: (leadId: string) => void;
 }
 
 export function useReplyNotifications(): NotificationState {
@@ -76,6 +77,21 @@ export function useReplyNotifications(): NotificationState {
     setReadMap(next);
     setReadMapState(next);
     const nowUnread = current.filter((r) => r.lead_id && !isReplyRead(r, next)).length;
+    setUnreadCount(nowUnread);
+  }, []);
+
+  /** Mark a lead unread by removing its read-timestamp from the map. The
+   *  __global__ baseline still applies — if a reply is older than the global
+   *  baseline, removing the lead key won't bring it back as unread. That's
+   *  intentional and matches Gmail's behavior for very old read history. */
+  const markLeadUnread = useCallback((leadId: string) => {
+    const map = getReadMap();
+    if (!(leadId in map)) return;
+    const next = { ...map };
+    delete next[leadId];
+    setReadMap(next);
+    setReadMapState(next);
+    const nowUnread = repliesRef.current.filter((r) => r.lead_id && !isReplyRead(r, next)).length;
     setUnreadCount(nowUnread);
   }, []);
 
@@ -126,5 +142,5 @@ export function useReplyNotifications(): NotificationState {
     return unsub;
   }, []);
 
-  return { unreadCount, replies, lastReadAt, readMap, markAllRead, markLeadRead };
+  return { unreadCount, replies, lastReadAt, readMap, markAllRead, markLeadRead, markLeadUnread };
 }

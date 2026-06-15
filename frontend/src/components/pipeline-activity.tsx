@@ -1,9 +1,13 @@
 "use client";
 
+import { useState } from "react";
 import { useLiveScrapeRun, usePipelineActivity } from "@/hooks/use-scrape";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { CheckCircle2, XCircle, Loader2, Clock, SkipForward, Activity } from "lucide-react";
+import { CheckCircle2, XCircle, Loader2, Clock, SkipForward, Activity, AlertTriangle, X } from "lucide-react";
+import { dismissScrapeRun } from "@/lib/firestore-api";
+import { SCRAPE_STALE_MS, msSince } from "@/lib/stale-thresholds";
+import { toast } from "sonner";
 
 const JOB_LABELS: Record<string, string> = {
   scheduled_followups: "Follow-up drafts",
@@ -55,10 +59,63 @@ function StatusIcon({ status }: { status: string }) {
   return <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-400" />;
 }
 
-/** Banner showing live scrape status — always visible on the dashboard. */
+/** Banner showing live scrape status — always visible on the dashboard.
+ *  Switches to an amber "may be stuck" state when a `status: running` doc has
+ *  been hanging around longer than SCRAPE_STALE_MS, with a Dismiss action
+ *  that writes `dismissed_at` so it stops showing without changing status.
+ */
 export function ScrapeRunningBanner() {
   const run = useLiveScrapeRun();
+  const [dismissing, setDismissing] = useState(false);
   const isRunning = run?.status === "running";
+  const isDismissed = !!run?.dismissed_at;
+  const ageMs = run?.started_at ? msSince(run.started_at) : null;
+  const isStale = isRunning && !isDismissed && ageMs !== null && ageMs > SCRAPE_STALE_MS;
+
+  async function handleDismiss() {
+    if (!run?.id) return;
+    setDismissing(true);
+    try {
+      await dismissScrapeRun(run.id);
+      toast.info("Scrape banner dismissed. Reach for it again if a fresh run starts.");
+    } catch (err) {
+      toast.error(
+        `Could not dismiss the scrape run. ${err instanceof Error ? err.message : "Try again."}`
+      );
+    } finally {
+      setDismissing(false);
+    }
+  }
+
+  if (isRunning && isDismissed) {
+    return null;
+  }
+
+  if (isStale) {
+    const hours = Math.round((ageMs ?? 0) / (60 * 60 * 1000));
+    const ageLabel = hours >= 24 ? `${Math.floor(hours / 24)} day${hours >= 48 ? "s" : ""} ago` : `${hours}h ago`;
+    return (
+      <div className="flex items-center gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm">
+        <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-500 shrink-0" />
+        <div className="flex-1">
+          <span className="font-medium text-amber-900 dark:text-amber-300">Scrape may be stuck</span>
+          {run?.source && (
+            <span className="ml-2 capitalize text-amber-800 dark:text-amber-400/70">{run.source.replace(/_/g, " ")}</span>
+          )}
+          <span className="ml-2 text-amber-800 dark:text-amber-400/70">Started {ageLabel}</span>
+        </div>
+        <button
+          type="button"
+          onClick={handleDismiss}
+          disabled={dismissing}
+          className="inline-flex items-center gap-1 rounded-md border border-amber-500/40 px-2 py-1 text-xs font-medium text-amber-900 dark:text-amber-300 hover:bg-amber-500/10 disabled:opacity-50"
+        >
+          <X size={12} />
+          Dismiss
+        </button>
+      </div>
+    );
+  }
 
   if (isRunning) {
     return (

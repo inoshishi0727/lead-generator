@@ -124,6 +124,14 @@ function rejectionLabel(reason: string): string {
 
 export function MessageCard({ message, inConversation, emailCapReached, isDuplicate, defaultExpanded, fitLabel, fitColor }: Props) {
   const [showTimeline, setShowTimeline] = useState(false);
+  /** Collapse state for the current draft (the row labeled "Init email" /
+   *  "Follow-up #N" — the one being reviewed). Default open; the operator
+   *  can collapse if they want to focus on metadata. */
+  const [bodyOpen, setBodyOpen] = useState(true);
+  /** Per-id expand state for the previous (sent) emails in the unified
+   *  Emails list. Default empty — older messages stay collapsed until
+   *  the operator clicks to expand them for context. */
+  const [openEmailIds, setOpenEmailIds] = useState<Set<string>>(new Set());
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [editContent, setEditContent] = useState("");
@@ -133,7 +141,6 @@ export function MessageCard({ message, inConversation, emailCapReached, isDuplic
   const [menuOpen, setMenuOpen] = useState(false);
   const [activeAction, setActiveAction] = useState<string | null>(null);
   const [replyContent, setReplyContent] = useState("");
-  const [originalExpanded, setOriginalExpanded] = useState(defaultExpanded ?? false);
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [scheduleDay, setScheduleDay] = useState(() => message.scheduled_send_date?.slice(0, 10) ?? "");
   const [scheduleHour, setScheduleHour] = useState(() => {
@@ -436,56 +443,6 @@ export function MessageCard({ message, inConversation, emailCapReached, isDuplic
           </div>
         )}
 
-        {/* Follow-up context — show previous emails in the sequence */}
-        {message.step_number > 1 && (leadMessages ?? []).length > 0 && (() => {
-          const previousMessages = (leadMessages ?? [])
-            .filter((m) => m.step_number < message.step_number && m.id !== message.id && m.status === "sent")
-            .sort((a, b) => a.step_number - b.step_number);
-          if (previousMessages.length === 0) return null;
-          return (
-            <div className="rounded-md border border-border/30 bg-muted/20 overflow-hidden">
-              <button
-                onClick={() => setOriginalExpanded((o) => !o)}
-                className="w-full flex items-center justify-between px-3 py-2 text-xs text-muted-foreground hover:bg-muted/30 transition-colors"
-              >
-                <span>
-                  Follow-up #{message.step_number - 1} · {previousMessages.length} previous email{previousMessages.length !== 1 ? "s" : ""}
-                </span>
-                {originalExpanded
-                  ? <ChevronUp className="h-3 w-3 shrink-0" />
-                  : <ChevronDown className="h-3 w-3 shrink-0" />
-                }
-              </button>
-              {originalExpanded && (
-                <div className="border-t border-border/20">
-                  {previousMessages.map((prev, i) => (
-                    <div key={prev.id} className={`px-3 py-2 space-y-1 ${i > 0 ? "border-t border-border/10" : ""}`}>
-                      <div className="flex items-center gap-2 text-xs">
-                        <Badge variant="secondary" className="text-[9px]">
-                          {prev.step_number === 1 ? "Original" : `Follow-up #${prev.step_number - 1}`}
-                        </Badge>
-                        <span className="font-medium text-foreground text-xs">{prev.subject || "No subject"}</span>
-                        {prev.status === "sent" && prev.sent_at && (
-                          <span className="text-muted-foreground">sent {formatDate(prev.sent_at)}</span>
-                        )}
-                        {prev.opened && (
-                          <span className="text-emerald-400">opened {prev.open_count || 1}x</span>
-                        )}
-                        {prev.has_reply && (
-                          <span className="text-blue-400">{prev.reply_count || 1} reply</span>
-                        )}
-                      </div>
-                      <div className="text-xs text-muted-foreground whitespace-pre-wrap bg-muted/30 rounded p-2 max-h-32 overflow-y-auto">
-                        {prev.content}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          );
-        })()}
-
         {/* Context row */}
         {(message.contact_name || message.context_notes || message.recipient_email || message.website) && (
           <div className="text-xs text-muted-foreground space-y-0.5">
@@ -575,15 +532,6 @@ export function MessageCard({ message, inConversation, emailCapReached, isDuplic
           </div>
         )}
 
-        {/* Subject (email only) */}
-        {message.channel === "email" && (
-          <div>
-            <p className="text-xs text-muted-foreground mb-0.5">Subject</p>
-            <p className="text-sm font-medium">
-              {message.subject || "(no subject)"}
-            </p>
-          </div>
-        )}
       </div>
 
       {/* Scrollable body — message content + action buttons */}
@@ -600,63 +548,259 @@ export function MessageCard({ message, inConversation, emailCapReached, isDuplic
           />
         )}
 
-        {/* Subject input when editing (only emails have subjects) */}
-        {isEditing && message.subject !== null && (
-          <div>
-            <p className="text-xs text-muted-foreground mb-1">Subject</p>
-            <input
-              className="w-full rounded-md border border-border bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-              value={editSubject}
-              onChange={(e) => setEditSubject(e.target.value)}
-            />
-          </div>
-        )}
+        {/* Unified Emails list — every email in this lead's chain in one
+            section. Previous (sent) emails are collapsed by default; the
+            current draft / message being reviewed is the last row and
+            expanded by default. The action buttons sit directly below this
+            list so they visually pair with the current draft row. */}
+        {(() => {
+          const stepLabel = (n?: number) =>
+            (n ?? 1) === 1 ? "Init email" : `Follow-up #${(n ?? 1) - 1}`;
+          const previousSent = (leadMessages ?? [])
+            .filter((m) =>
+              m.id !== message.id
+              && m.status === "sent"
+              && (m.step_number ?? 1) < (message.step_number ?? 1)
+            )
+            .sort((a, b) => (a.step_number ?? 1) - (b.step_number ?? 1));
+          const isCurrentExpanded = bodyOpen || isEditing;
+          return (
+            <div className="rounded-md border border-border/60 overflow-hidden">
+              <div className="bg-muted/10 px-3 py-1.5 text-[10px] uppercase tracking-wider font-medium text-muted-foreground border-b border-border/30">
+                Emails ({previousSent.length + 1})
+              </div>
 
-        {/* Message content */}
-        <div>
-          <div className="flex items-center justify-between mb-0.5">
-            <p className="text-xs text-muted-foreground">Message</p>
-            {isEditing && (
-              <span className={`text-xs tabular-nums ${
-                editContent.trim().split(/\s+/).length >= 60 && editContent.trim().split(/\s+/).length <= 160
-                  ? "text-emerald-600 dark:text-emerald-400"
-                  : "text-amber-600 dark:text-amber-400"
-              }`}>
-                {editContent.trim().split(/\s+/).filter(Boolean).length} words (target: 60–160)
-              </span>
-            )}
-          </div>
-          {isEditing ? (
-            <textarea
-              className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm leading-relaxed resize-y focus:outline-none focus:ring-2 focus:ring-ring"
-              rows={14}
-              value={editContent}
-              onChange={(e) => setEditContent(e.target.value)}
-            />
-          ) : isRegenerating ? (
-            <div className="flex items-center justify-center rounded bg-muted/30 p-8">
-              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-              <span className="ml-2 text-sm text-muted-foreground">Regenerating draft...</span>
-            </div>
-          ) : (
-            <div className="whitespace-pre-wrap text-sm leading-relaxed rounded bg-muted/30 p-3">
-              {message.content}
-            </div>
-          )}
-        </div>
+              {/* Previous sent emails — collapsed by default */}
+              {previousSent.map((prev) => {
+                const isOpen = openEmailIds.has(prev.id);
+                return (
+                  <div key={prev.id} className="border-b border-border/30">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setOpenEmailIds((s) => {
+                          const next = new Set(s);
+                          if (next.has(prev.id)) next.delete(prev.id);
+                          else next.add(prev.id);
+                          return next;
+                        })
+                      }
+                      className="flex w-full items-center justify-between gap-2 bg-muted/20 px-3 py-2 text-xs font-medium text-foreground hover:bg-muted/40 transition-colors"
+                    >
+                      <span className="flex items-center gap-2 min-w-0 flex-1">
+                        <span className="shrink-0">{stepLabel(prev.step_number)}</span>
+                        <span className="truncate font-normal text-muted-foreground">
+                          — {prev.subject || "(no subject)"}
+                        </span>
+                        {prev.sent_at && (
+                          <span className="shrink-0 text-[10px] text-muted-foreground/70">
+                            sent {formatDate(prev.sent_at)}
+                          </span>
+                        )}
+                        {prev.opened && (
+                          <span className="shrink-0 text-[10px] text-emerald-600 dark:text-emerald-400">
+                            opened {prev.open_count || 1}x
+                          </span>
+                        )}
+                        {prev.has_reply && (
+                          <span className="shrink-0 text-[10px] text-blue-600 dark:text-blue-400">
+                            {prev.reply_count || 1} reply
+                          </span>
+                        )}
+                      </span>
+                      {isOpen
+                        ? <ChevronUp className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                        : <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                      }
+                    </button>
+                    {isOpen && (
+                      <div className="border-t border-border/20 p-3 bg-muted/5">
+                        <div className="text-xs text-muted-foreground whitespace-pre-wrap bg-muted/30 rounded p-2 max-h-64 overflow-y-auto">
+                          {prev.content}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
 
-        {/* Inline edit save/cancel */}
-        {isEditing && (
-          <div className="flex gap-2 pt-1">
-            <Button size="sm" onClick={handleInlineSave} disabled={isPending}>
-              {isPending ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : null}
-              Save Edit
-            </Button>
-            <Button size="sm" variant="outline" onClick={() => setIsEditing(false)} disabled={isPending}>
-              Cancel
-            </Button>
-          </div>
-        )}
+              {/* Current draft / message — last row, expanded by default */}
+              <div>
+                <button
+                  type="button"
+                  onClick={() => setBodyOpen((o) => !o)}
+                  disabled={isEditing}
+                  className="flex w-full items-center justify-between gap-2 bg-blue-500/5 dark:bg-blue-500/10 px-3 py-2 text-xs font-medium text-foreground hover:bg-blue-500/10 dark:hover:bg-blue-500/15 transition-colors disabled:cursor-default"
+                >
+                  <span className="flex items-center gap-2 min-w-0 flex-1">
+                    <span className="shrink-0">{stepLabel(message.step_number)}</span>
+                    <span className="truncate font-normal text-muted-foreground">
+                      — {message.subject || "(no subject)"}
+                    </span>
+                    <Badge variant="outline" className="shrink-0 text-[9px] border-blue-500/50 text-blue-700 dark:text-blue-400">
+                      {message.status === "draft" ? "Reviewing" : message.status}
+                    </Badge>
+                    {isEditing && (
+                      <span className={`text-[10px] tabular-nums font-normal ${
+                        editContent.trim().split(/\s+/).length >= 60 && editContent.trim().split(/\s+/).length <= 160
+                          ? "text-emerald-600 dark:text-emerald-400"
+                          : "text-amber-600 dark:text-amber-400"
+                      }`}>
+                        {editContent.trim().split(/\s+/).filter(Boolean).length}w
+                      </span>
+                    )}
+                  </span>
+                  {isCurrentExpanded
+                    ? <ChevronUp className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                    : <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                  }
+                </button>
+                {isCurrentExpanded && (
+                  <div className="border-t border-border/30 p-3 space-y-3">
+                    {/* Subject input when editing — moved inside the row so
+                        edit affordances stay grouped with the email body. */}
+                    {isEditing && message.subject !== null && (
+                      <div>
+                        <p className="text-xs text-muted-foreground mb-1">Subject</p>
+                        <input
+                          className="w-full rounded-md border border-border bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                          value={editSubject}
+                          onChange={(e) => setEditSubject(e.target.value)}
+                        />
+                      </div>
+                    )}
+
+                    {/* Body — textarea while editing, otherwise the draft text */}
+                    {isEditing ? (
+                      <textarea
+                        className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm leading-relaxed resize-y focus:outline-none focus:ring-2 focus:ring-ring"
+                        rows={14}
+                        value={editContent}
+                        onChange={(e) => setEditContent(e.target.value)}
+                      />
+                    ) : isRegenerating ? (
+                      <div className="flex items-center justify-center rounded bg-muted/30 p-8">
+                        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                        <span className="ml-2 text-sm text-muted-foreground">Regenerating draft...</span>
+                      </div>
+                    ) : (
+                      <div className="whitespace-pre-wrap text-sm leading-relaxed rounded bg-muted/30 p-3">
+                        {message.content}
+                      </div>
+                    )}
+
+                    {/* Edit Save / Cancel — when editing this draft */}
+                    {isEditing && (
+                      <div className="flex gap-2 pt-1">
+                        <Button size="sm" onClick={handleInlineSave} disabled={isPending}>
+                          {isPending ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : null}
+                          Save Edit
+                        </Button>
+                        <Button size="sm" variant="outline" onClick={() => setIsEditing(false)} disabled={isPending}>
+                          Cancel
+                        </Button>
+                      </div>
+                    )}
+
+                    {/* Action buttons — only for draft status, paired with the
+                        email being reviewed so they don't read as universal. */}
+                    {!isEditing && message.status === "draft" && (
+                      <div className="flex items-center gap-2 flex-wrap pt-1">
+                        {canAct && (
+                          <Button
+                            size="sm"
+                            variant="default"
+                            className="bg-emerald-600 hover:bg-emerald-700"
+                            onClick={handleApprove}
+                            disabled={isPending || (emailCapReached && message.channel === "email")}
+                            title={emailCapReached && message.channel === "email" ? "20 emails already approved — unapprove or reject some first" : undefined}
+                          >
+                            {activeAction === "approve" ? (
+                              <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <Check className="mr-1 h-3.5 w-3.5" />
+                            )}
+                            {activeAction === "approve" ? "Approving..." : "Approve"}
+                          </Button>
+                        )}
+                        {canAct && (
+                          <Button
+                            size="sm"
+                            variant="destructive"
+                            onClick={() => setRejectOpen((v) => !v)}
+                            disabled={isPending}
+                          >
+                            {activeAction === "reject" ? (
+                              <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <X className="mr-1 h-3.5 w-3.5" />
+                            )}
+                            {activeAction === "reject" ? "Rejecting..." : "Reject"}
+                          </Button>
+                        )}
+                        <Menu>
+                          <MenuTrigger
+                            disabled={isPending}
+                            render={
+                              <Button size="sm" variant="outline" disabled={isPending}>
+                                {isRegenerating ? (
+                                  <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                                ) : (
+                                  <RefreshCw className="mr-1 h-3.5 w-3.5" />
+                                )}
+                                {isRegenerating ? "Regenerating..." : "Regenerate"}
+                                <ChevronDown className="ml-0.5 h-3 w-3" />
+                              </Button>
+                            }
+                          />
+                          <MenuContent side="bottom" align="start" sideOffset={4}>
+                            <MenuItem onClick={() => handleRegenerate("claude")}>
+                              <ClaudeIcon className="h-3.5 w-3.5 text-orange-500" />
+                              Regenerate with Claude
+                            </MenuItem>
+                            <MenuItem onClick={() => handleRegenerate("claude", "v17")}>
+                              <Sparkles className="h-3.5 w-3.5 text-purple-500" />
+                              Generate with new prompt
+                            </MenuItem>
+                            <MenuItem onClick={() => handleRegenerate("gemini")}>
+                              <GeminiIcon className="h-3.5 w-3.5 text-blue-500" />
+                              Regenerate with Gemini
+                            </MenuItem>
+                          </MenuContent>
+                        </Menu>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={startEditing}
+                          disabled={isPending}
+                        >
+                          <Pencil className="mr-1 h-3.5 w-3.5" />
+                          Edit
+                        </Button>
+                        {canAct && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="text-red-400 hover:text-red-300 hover:bg-red-500/10"
+                            onClick={() => deleteMutation.mutate(message.id)}
+                            disabled={isPending || deleteMutation.isPending}
+                          >
+                            {deleteMutation.isPending ? (
+                              <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <Trash2 className="mr-1 h-3.5 w-3.5" />
+                            )}
+                            {deleteMutation.isPending ? "Deleting..." : "Delete"}
+                          </Button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })()}
 
         {/* Generation history */}
         <button
@@ -746,22 +890,6 @@ export function MessageCard({ message, inConversation, emailCapReached, isDuplic
                         )}
                         {isOutbound && (
                           <Badge variant="outline" className="text-[10px] px-1 py-0 border-blue-500/30 text-blue-500">sent</Badge>
-                        )}
-                        {!isOutbound && reply.sentiment && (
-                          <Badge
-                            variant="outline"
-                            className={`text-[10px] px-1 py-0 ${
-                              reply.sentiment === "positive"
-                                ? "border-green-500/30 text-green-600 dark:text-green-400"
-                                : reply.sentiment === "negative"
-                                ? "border-red-500/30 text-red-600 dark:text-red-400"
-                                : "border-gray-400/30 text-gray-500"
-                            }`}
-                            title={reply.sentiment_reason || undefined}
-                          >
-                            {reply.sentiment === "positive" ? "+" : reply.sentiment === "negative" ? "−" : "~"}{" "}
-                            {reply.sentiment_reason || reply.sentiment}
-                          </Badge>
                         )}
                         {canAct && !isOutbound && (
                           <Menu>
@@ -933,97 +1061,6 @@ export function MessageCard({ message, inConversation, emailCapReached, isDuplic
                   {activeAction === "reject" ? "Rejecting..." : "Reject"}
                 </Button>
               </>
-            )}
-          </div>
-        )}
-        {!isEditing && message.status === "draft" && (
-          <div className="flex items-center gap-2 pt-1">
-            {canAct && (
-              <Button
-                size="sm"
-                variant="default"
-                className="bg-emerald-600 hover:bg-emerald-700"
-                onClick={handleApprove}
-                disabled={isPending || (emailCapReached && message.channel === "email")}
-                title={emailCapReached && message.channel === "email" ? "20 emails already approved — unapprove or reject some first" : undefined}
-              >
-                {activeAction === "approve" ? (
-                  <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <Check className="mr-1 h-3.5 w-3.5" />
-                )}
-                {activeAction === "approve" ? "Approving..." : "Approve"}
-              </Button>
-            )}
-            {canAct && (
-              <Button
-                size="sm"
-                variant="destructive"
-                onClick={() => setRejectOpen((v) => !v)}
-                disabled={isPending}
-              >
-                {activeAction === "reject" ? (
-                  <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <X className="mr-1 h-3.5 w-3.5" />
-                )}
-                {activeAction === "reject" ? "Rejecting..." : "Reject"}
-              </Button>
-            )}
-            <Menu>
-              <MenuTrigger
-                disabled={isPending}
-                render={
-                  <Button size="sm" variant="outline" disabled={isPending}>
-                    {isRegenerating ? (
-                      <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <RefreshCw className="mr-1 h-3.5 w-3.5" />
-                    )}
-                    {isRegenerating ? "Regenerating..." : "Regenerate"}
-                    <ChevronDown className="ml-0.5 h-3 w-3" />
-                  </Button>
-                }
-              />
-              <MenuContent side="bottom" align="start" sideOffset={4}>
-                <MenuItem onClick={() => handleRegenerate("claude")}>
-                  <ClaudeIcon className="h-3.5 w-3.5 text-orange-500" />
-                  Regenerate with Claude
-                </MenuItem>
-                <MenuItem onClick={() => handleRegenerate("claude", "v17")}>
-                  <Sparkles className="h-3.5 w-3.5 text-purple-500" />
-                  Generate with new prompt
-                </MenuItem>
-                <MenuItem onClick={() => handleRegenerate("gemini")}>
-                  <GeminiIcon className="h-3.5 w-3.5 text-blue-500" />
-                  Regenerate with Gemini
-                </MenuItem>
-              </MenuContent>
-            </Menu>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={startEditing}
-              disabled={isPending}
-            >
-              <Pencil className="mr-1 h-3.5 w-3.5" />
-              Edit
-            </Button>
-            {canAct && (
-              <Button
-                size="sm"
-                variant="ghost"
-                className="text-red-400 hover:text-red-300 hover:bg-red-500/10"
-                onClick={() => deleteMutation.mutate(message.id)}
-                disabled={isPending || deleteMutation.isPending}
-              >
-                {deleteMutation.isPending ? (
-                  <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <Trash2 className="mr-1 h-3.5 w-3.5" />
-                )}
-                {deleteMutation.isPending ? "Deleting..." : "Delete"}
-              </Button>
             )}
           </div>
         )}

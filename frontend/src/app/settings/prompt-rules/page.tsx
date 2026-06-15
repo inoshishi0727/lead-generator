@@ -12,6 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Loader2, Check } from "lucide-react";
 import { getDocs, collection, query, orderBy } from "firebase/firestore";
+import { ChangeRequestsInbox } from "@/components/change-requests-inbox";
 
 interface PromptRuleVersion {
   version_id: string;
@@ -107,6 +108,10 @@ export default function PromptRulesPage() {
           Manage synthesized writing rules generated from team feedback. Rules are automatically synthesized every Monday at 6am.
         </p>
       </div>
+
+      {/* Marlow change-request inbox — admin only, surfaced here so foundational
+       *  prompt edits live next to the synthesized-rules editor. */}
+      <ChangeRequestsInbox />
 
       {error && (
         <div className="rounded-lg border border-red-500/20 bg-red-50 dark:bg-red-950/20 p-4">

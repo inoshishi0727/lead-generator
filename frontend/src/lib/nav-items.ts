@@ -9,6 +9,7 @@ import {
   MessageCircle,
   Search,
   Settings,
+  Sparkles,
   TrendingUp,
   Users,
   type LucideIcon,
@@ -51,15 +52,16 @@ export interface NavItem {
 export const WORKSPACE_NAV: NavItem[] = [
   { href: "/", label: "Dashboard", Icon: BarChart3 },
   { href: "/leads", label: "Leads", Icon: Search },
-  { href: `/outreach?tab=${OUTREACH_TABS.REVIEW}`, label: "Review", Icon: ClipboardCheck },
+  { href: "/review", label: "Review", Icon: ClipboardCheck },
   {
-    href: `/outreach?tab=${OUTREACH_TABS.INBOX}`,
+    href: "/inbox",
     label: "Inbox",
     Icon: Inbox,
     badgeKey: "outreachReplies",
   },
   { href: "/campaigns", label: "Campaigns", Icon: Megaphone },
   { href: "/clients", label: "Clients", Icon: Building2 },
+  { href: "/settings/prompt-coach", label: "Marlow", Icon: Sparkles },
   {
     href: "/analytics",
     label: "Analytics",
