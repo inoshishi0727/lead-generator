@@ -183,8 +183,12 @@ export function OutreachView(props: OutreachViewProps = {}) {
 
   const isThreadView = statusFilter === "conversations" || (statusFilter === "clients" && !clientsViewAll);
 
-  // Member auto-scopes to own messages
-  const assignedTo = isMember ? user?.uid : undefined;
+  // Member auto-scopes to own messages — except on the Inbox tab. Replies are
+  // operational and the whole team should see every one regardless of who
+  // owns the outgoing thread; otherwise unassigned replies (or replies on
+  // messages assigned to another teammate) silently disappear from a member's
+  // Inbox while the daily digest still counts them.
+  const assignedTo = isMember && statusFilter !== "conversations" ? user?.uid : undefined;
 
   // "conversations", "follow-ups", "clients", "scheduled" are client-side filters — fetch all and filter below
   const firestoreFilter = statusFilter === "all" || statusFilter === "conversations" || statusFilter === "follow-ups" || statusFilter === "clients" || statusFilter === "scheduled"
