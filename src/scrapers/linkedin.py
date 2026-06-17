@@ -259,6 +259,26 @@ class LinkedInCompanyScraper(BaseScraper):
 
     # ---------------------------------------------------------------- session
 
+    def _clear_stale_singleton_locks(self) -> None:
+        """Remove Chromium singleton lock files left behind by a crashed prior
+        run. SingletonLock / SingletonCookie / SingletonSocket are how Chromium
+        ensures only one instance touches a profile at a time; if a previous
+        launch crashed (OOM, SIGKILL, container restart), the files remain and
+        every subsequent launch fails with "Failed to create a ProcessSingleton
+        for your profile directory". On a VPS cron there's no concurrent legit
+        Chromium using this profile, so clearing them is safe.
+        """
+        for name in ("SingletonLock", "SingletonCookie", "SingletonSocket"):
+            stale = self.profile_dir / name
+            try:
+                if stale.exists() or stale.is_symlink():
+                    stale.unlink()
+                    log.info("linkedin_cleared_stale_singleton", file=name)
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                log.warning("linkedin_singleton_unlink_failed", file=name, error=str(exc))
+
     async def _launch_persistent_browser(self, headless: bool = False) -> Any:
         """Open a cloakbrowser persistent context for LinkedIn.
 
@@ -271,6 +291,7 @@ class LinkedInCompanyScraper(BaseScraper):
         from src.scrapers.browser import get_proxy_config, get_sticky_proxy_config
 
         self.profile_dir.mkdir(parents=True, exist_ok=True)
+        self._clear_stale_singleton_locks()
 
         proxy: dict | None = None
         if not self.no_proxy:
