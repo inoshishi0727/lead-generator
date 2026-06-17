@@ -3460,6 +3460,71 @@ export const processInboundEmail = functions
         created_at: new Date().toISOString(),
       });
 
+      // Forward matched customer replies to admins. We send to every admin
+      // user in Firestore PLUS the hardcoded fallback list below — the fallback
+      // is here because some admins have stale `@absolutionlabs.com` emails on
+      // their user docs; until those are fixed, the hardcoded entries make
+      // sure Rob (and anyone else listed) still gets the notification.
+      //
+      // Skips auto-replies and unmatched emails (noise). Failures are
+      // non-blocking — the reply is already stored, we don't want forwarding
+      // to trigger Resend webhook retries.
+      const REPLY_FORWARD_FALLBACK = [
+        "rob@asterleybros.com",
+      ];
+
+      if (matchedLead && !isAutoReply && process.env.RESEND_API_KEY) {
+        try {
+          const adminSnap = await db.collection("users").where("role", "==", "admin").get();
+          const recipients = new Set([
+            ...adminSnap.docs.map((d) => d.data().email).filter(Boolean),
+            ...REPLY_FORWARD_FALLBACK,
+          ]);
+
+          if (recipients.size > 0) {
+            const businessName = matchedLead.business_name || "(unknown business)";
+            const trimmedBody = (parsedBody || "").trim().slice(0, 5000);
+            const subjectLine = subject || "(no subject)";
+            const dashboardLink = `https://asterleyleadgen.netlify.app/inbox`;
+            const senderLabel = fromName ? `${fromName} <${fromEmail}>` : fromEmail;
+
+            const text = [
+              `From: ${senderLabel}`,
+              `Business: ${businessName}`,
+              `Subject: ${subjectLine}`,
+              ``,
+              trimmedBody,
+              ``,
+              `———`,
+              `View in dashboard: ${dashboardLink}`,
+            ].join("\n");
+
+            await Promise.all(
+              Array.from(recipients).map((to) =>
+                fetch("https://api.resend.com/emails", {
+                  method: "POST",
+                  headers: {
+                    Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+                    "Content-Type": "application/json",
+                  },
+                  body: JSON.stringify({
+                    from: `${SENDER_NAME} <${SENDER_EMAIL}>`,
+                    to,
+                    subject: `[Asterley Reply] ${businessName}: ${subjectLine}`,
+                    text,
+                  }),
+                }).catch((err) => {
+                  console.warn(`[replyForward] Send to ${to} failed:`, err.message);
+                })
+              )
+            );
+            console.log(`[replyForward] Notified ${recipients.size} admin(s) for lead ${matchedLead.id}`);
+          }
+        } catch (err) {
+          console.warn("[replyForward] Failed to forward reply:", err.message);
+        }
+      }
+
       console.log("Inbound reply processed", {
         replyId,
         matched: !!matchedLead,
