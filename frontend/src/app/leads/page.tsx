@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useMemo, useEffect, Suspense } from "react";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { LeadsTable } from "@/components/leads-table";
 import { useLeads, useEnrichLeads } from "@/hooks/use-leads";
@@ -18,6 +18,145 @@ import { getTeamMembers } from "@/lib/auth-admin";
 import { Search, Sparkles, Loader2, Plus, Settings2, Link2Off, Mail, X, RefreshCw, MoreHorizontal } from "lucide-react";
 import { Menu, MenuTrigger, MenuContent, MenuItem } from "@/components/ui/menu";
 import { LeadsFilterBanner, type ActiveFilter } from "@/components/leads-filter-banner";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { useViewedLeads } from "@/lib/lead-viewed";
+import type { Lead } from "@/lib/types";
+
+type SortOption =
+  | "newest"
+  | "oldest"
+  | "recent_24h"
+  | "last_7d"
+  | "highest_score"
+  | "needs_attention";
+
+const SORT_OPTIONS: { value: SortOption; label: string }[] = [
+  { value: "newest", label: "Newest first" },
+  { value: "oldest", label: "Oldest first" },
+  { value: "recent_24h", label: "Recently added (24h)" },
+  { value: "last_7d", label: "Last 7 days" },
+  { value: "highest_score", label: "Highest score" },
+  { value: "needs_attention", label: "Needs attention" },
+];
+
+const VALID_SORTS = new Set<SortOption>(SORT_OPTIONS.map((o) => o.value));
+
+function parseSort(value: string | null): SortOption {
+  if (value && VALID_SORTS.has(value as SortOption)) return value as SortOption;
+  return "newest";
+}
+
+function ts(s: string | null | undefined): number | null {
+  if (!s) return null;
+  const t = new Date(s).getTime();
+  return Number.isFinite(t) ? t : null;
+}
+
+function compareNullsLast(a: number | null, b: number | null, dir: "asc" | "desc"): number {
+  if (a === null && b === null) return 0;
+  if (a === null) return 1;
+  if (b === null) return -1;
+  return dir === "desc" ? b - a : a - b;
+}
+
+function applySort(input: Lead[], sort: SortOption): Lead[] {
+  const now = Date.now();
+  const arr = [...input];
+  switch (sort) {
+    case "newest":
+      arr.sort((a, b) => compareNullsLast(ts(a.created_at), ts(b.created_at), "desc"));
+      return arr;
+    case "oldest":
+      arr.sort((a, b) => compareNullsLast(ts(a.created_at), ts(b.created_at), "asc"));
+      return arr;
+    case "recent_24h": {
+      const cutoff = now - 24 * 60 * 60 * 1000;
+      return arr
+        .filter((l) => {
+          const t = ts(l.created_at);
+          return t !== null && t >= cutoff;
+        })
+        .sort((a, b) => compareNullsLast(ts(a.created_at), ts(b.created_at), "desc"));
+    }
+    case "last_7d": {
+      const cutoff = now - 7 * 24 * 60 * 60 * 1000;
+      return arr
+        .filter((l) => {
+          const t = ts(l.created_at);
+          return t !== null && t >= cutoff;
+        })
+        .sort((a, b) => compareNullsLast(ts(a.created_at), ts(b.created_at), "desc"));
+    }
+    case "highest_score":
+      arr.sort((a, b) => {
+        const s = compareNullsLast(a.score, b.score, "desc");
+        if (s !== 0) return s;
+        return compareNullsLast(ts(a.created_at), ts(b.created_at), "desc");
+      });
+      return arr;
+    case "needs_attention": {
+      const staleCutoff = now - 14 * 24 * 60 * 60 * 1000;
+      return arr
+        .filter((l) => {
+          if (l.enrichment_status !== "success") return true;
+          const t = ts(l.created_at);
+          if (t !== null && t < staleCutoff && !l.email) return true;
+          return false;
+        })
+        .sort((a, b) => compareNullsLast(ts(a.created_at), ts(b.created_at), "desc"));
+    }
+  }
+}
+
+function computeLatestCohort(leads: Lead[]): Set<string> {
+  if (leads.length === 0) return new Set();
+  const withBatch = leads.filter((l) => l.batch_id);
+  if (withBatch.length > 0) {
+    const counts = new Map<string, { count: number; latest: number }>();
+    for (const l of withBatch) {
+      const t = ts(l.created_at) ?? 0;
+      const prev = counts.get(l.batch_id!);
+      if (prev) {
+        prev.count += 1;
+        if (t > prev.latest) prev.latest = t;
+      } else {
+        counts.set(l.batch_id!, { count: 1, latest: t });
+      }
+    }
+    let topBatch: string | null = null;
+    let topLatest = -Infinity;
+    for (const [batchId, info] of counts) {
+      if (info.latest > topLatest) {
+        topLatest = info.latest;
+        topBatch = batchId;
+      }
+    }
+    if (topBatch) {
+      return new Set(leads.filter((l) => l.batch_id === topBatch).map((l) => l.id));
+    }
+  }
+  let max = -Infinity;
+  for (const l of leads) {
+    const t = ts(l.created_at);
+    if (t !== null && t > max) max = t;
+  }
+  if (max === -Infinity) return new Set();
+  const windowStart = max - 60 * 60 * 1000;
+  return new Set(
+    leads
+      .filter((l) => {
+        const t = ts(l.created_at);
+        return t !== null && t >= windowStart;
+      })
+      .map((l) => l.id)
+  );
+}
 
 const SOURCE_OPTIONS = [
   { value: "", label: "All Sources" },
@@ -60,15 +199,30 @@ const STAGE_GROUPS = [
 function LeadsPageInner() {
   const { isAdmin, isMember, user, workspaceId } = useAuth();
   const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
   const [source, setSource] = useState("");
   const [stage, setStage] = useState("");
   const [search, setSearch] = useState(() => searchParams.get("q") ?? "");
+  const [sort, setSort] = useState<SortOption>(() => parseSort(searchParams.get("sort")));
   const debouncedSearch = useDebounce(search, 300);
+  const viewedSet = useViewedLeads();
 
   useEffect(() => {
     const q = searchParams.get("q");
     if (q) setSearch(q);
+    const s = parseSort(searchParams.get("sort"));
+    setSort((curr) => (curr === s ? curr : s));
   }, [searchParams]);
+
+  const handleSortChange = (value: SortOption) => {
+    setSort(value);
+    const params = new URLSearchParams(searchParams.toString());
+    if (value === "newest") params.delete("sort");
+    else params.set("sort", value);
+    const qs = params.toString();
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+  };
   const [category, setCategory] = useState("");
   const [fit, setFit] = useState("");
   const [postcode, setPostcode] = useState("");
@@ -180,8 +334,10 @@ function LeadsPageInner() {
     if (assignedToFilter === "__unassigned__") filtered = filtered.filter((l) => !l.assigned_to);
     if (noMenuUrl) filtered = filtered.filter((l) => !l.menu_url || l.menu_url === "not_found");
     if (newLeadIds) filtered = filtered.filter((l) => newLeadIds.has(l.id));
-    return filtered;
-  }, [allLeads, source, stage, emailOnly, category, fit, postcode, assignedToFilter, noMenuUrl, newLeadIds]);
+    return applySort(filtered, sort);
+  }, [allLeads, source, stage, emailOnly, category, fit, postcode, assignedToFilter, noMenuUrl, newLeadIds, sort]);
+
+  const latestCohort = useMemo(() => computeLatestCohort(allLeads), [allLeads]);
 
   const total = leads.length;
   const totalRaw = allLeads.length;
@@ -494,6 +650,25 @@ function LeadsPageInner() {
             />
           </div>
 
+          <div className="flex items-center gap-2 text-sm">
+            <span className="text-muted-foreground">Sort:</span>
+            <Select
+              value={sort}
+              onValueChange={(v) => handleSortChange(v as SortOption)}
+            >
+              <SelectTrigger className="w-48" aria-label="Sort leads">
+                <SelectValue placeholder="Newest first" />
+              </SelectTrigger>
+              <SelectContent>
+                {SORT_OPTIONS.map((opt) => (
+                  <SelectItem key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
           <label className="flex items-center gap-2 text-sm">
             <input
               type="checkbox"
@@ -624,6 +799,8 @@ function LeadsPageInner() {
           onSelectionChange={setSelectedLeadIds}
           openLeadId={openLeadId}
           onLeadOpened={() => setOpenLeadId(null)}
+          latestCohort={latestCohort}
+          viewedSet={viewedSet}
         />
       </div>
 

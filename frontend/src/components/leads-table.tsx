@@ -43,6 +43,8 @@ interface Props {
   onSelectionChange?: (ids: string[]) => void;
   openLeadId?: string | null;
   onLeadOpened?: () => void;
+  latestCohort?: Set<string>;
+  viewedSet?: Set<string>;
 }
 
 const REJECTION_LABELS: Record<string, string> = {
@@ -68,7 +70,7 @@ const rejectionColors: Record<string, string> = {
   in_discussion: "border-sky-500/30 text-sky-400 bg-sky-500/10",
 };
 
-export function LeadsTable({ leads, isLoading, selectable, selectedIds = [], onSelectionChange, openLeadId, onLeadOpened }: Props) {
+export function LeadsTable({ leads, isLoading, selectable, selectedIds = [], onSelectionChange, openLeadId, onLeadOpened, latestCohort, viewedSet }: Props) {
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
   const scrapeLeadNow = useScrapeLeadNow();
   const [scrapingLeadId, setScrapingLeadId] = useState<string | null>(null);
@@ -356,6 +358,21 @@ export function LeadsTable({ leads, isLoading, selectable, selectedIds = [], onS
                   {/* Business name */}
                   <TableCell className="font-medium text-primary truncate">
                     <span className="truncate">{lead.business_name}</span>
+                    {(() => {
+                      if (!lead.created_at) return null;
+                      const ageMs = Date.now() - new Date(lead.created_at).getTime();
+                      if (!(ageMs >= 0 && ageMs <= 24 * 60 * 60 * 1000)) return null;
+                      if (!latestCohort?.has(lead.id)) return null;
+                      if (viewedSet?.has(lead.id)) return null;
+                      return (
+                        <Badge
+                          variant="outline"
+                          className="ml-2 text-[9px] bg-amber-500/20 text-amber-900 dark:text-amber-200 border-amber-500/40"
+                        >
+                          NEW
+                        </Badge>
+                      );
+                    })()}
                     {lead.source === "manual" && lead.enrichment_status !== "success" && (
                       <Badge variant="outline" className="ml-2 text-[9px] border-orange-500/30 text-orange-400 bg-orange-500/10">
                         Queued — next week
