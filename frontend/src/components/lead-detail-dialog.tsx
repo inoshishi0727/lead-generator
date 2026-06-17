@@ -20,12 +20,23 @@ import {
   Users,
   ExternalLink,
   Briefcase,
+  Loader2,
+  Tag,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { TagInput } from "@/components/tag-input";
 import { useEnrichLeads } from "@/hooks/use-leads";
 import { useScrapeLeadNow } from "@/hooks/use-scrape-leads";
 import { useLinkedInEmployees } from "@/hooks/use-linkedin-employees";
+import { useTagIndex } from "@/hooks/use-tag-index";
 import { updateLeadFields } from "@/lib/firestore-api";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -38,11 +49,42 @@ interface Props {
 }
 
 const FIT_COLORS: Record<string, string> = {
-  strong: "bg-emerald-500/15 text-emerald-400 border-emerald-500/20",
-  moderate: "bg-amber-500/15 text-amber-400 border-amber-500/20",
-  weak: "bg-red-500/15 text-red-400 border-red-500/20",
-  unknown: "bg-zinc-500/15 text-zinc-400 border-zinc-500/20",
+  strong: "bg-emerald-500/20 text-emerald-300 border-emerald-500/40",
+  moderate: "bg-amber-500/20 text-amber-300 border-amber-500/40",
+  weak: "bg-rose-500/20 text-rose-300 border-rose-500/40",
+  unknown: "bg-slate-500/15 text-slate-400 border-slate-500/30",
 };
+
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+const VENUE_CATEGORIES = [
+  "cocktail_bar",
+  "wine_bar",
+  "italian_restaurant",
+  "gastropub",
+  "hotel_bar",
+  "bottle_shop",
+  "deli_farm_shop",
+  "events_catering",
+  "rtd",
+  "restaurant_groups",
+  "festival_operators",
+  "cookery_schools",
+  "corporate_gifting",
+  "membership_clubs",
+  "airlines_trains",
+  "subscription_boxes",
+  "film_tv_theatre",
+  "yacht_charter",
+  "luxury_food_retail",
+  "grocery",
+] as const;
+
+function formatCategoryLabel(slug: string): string {
+  return slug
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   if (!children) return null;
@@ -160,6 +202,17 @@ export function LeadDetailDialog({ lead, onClose, onEmail }: Props) {
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState("");
   const [savingName, setSavingName] = useState(false);
+  const [editingEmail, setEditingEmail] = useState(false);
+  const [emailDraft, setEmailDraft] = useState("");
+  const [savingEmail, setSavingEmail] = useState(false);
+  const [editingContactEmail, setEditingContactEmail] = useState(false);
+  const [contactEmailDraft, setContactEmailDraft] = useState("");
+  const [savingContactEmail, setSavingContactEmail] = useState(false);
+  const [editingCategory, setEditingCategory] = useState(false);
+  const [categoryDraft, setCategoryDraft] = useState("");
+  const [savingCategory, setSavingCategory] = useState(false);
+  const [savingTags, setSavingTags] = useState(false);
+  const { tags: knownTags } = useTagIndex();
 
   async function handleSaveMenuUrl() {
     if (!lead) return;
@@ -219,6 +272,85 @@ export function LeadDetailDialog({ lead, onClose, onEmail }: Props) {
       });
     } finally {
       setSavingName(false);
+    }
+  }
+
+  async function handleSaveEmail() {
+    if (!lead) return;
+    const trimmed = emailDraft.trim();
+    if (trimmed && !EMAIL_REGEX.test(trimmed)) {
+      toast.error("Invalid email address");
+      return;
+    }
+    setSavingEmail(true);
+    try {
+      await updateLeadFields(lead.id, { email: trimmed || null });
+      setEditingEmail(false);
+      await queryClient.invalidateQueries({ queryKey: ["leads"] });
+      toast.success(trimmed ? "Email saved" : "Email cleared");
+    } catch (err) {
+      toast.error("Couldn't save email", {
+        description: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setSavingEmail(false);
+    }
+  }
+
+  async function handleSaveContactEmail() {
+    if (!lead) return;
+    const trimmed = contactEmailDraft.trim();
+    if (trimmed && !EMAIL_REGEX.test(trimmed)) {
+      toast.error("Invalid contact email address");
+      return;
+    }
+    setSavingContactEmail(true);
+    try {
+      await updateLeadFields(lead.id, { contact_email: trimmed || null });
+      setEditingContactEmail(false);
+      await queryClient.invalidateQueries({ queryKey: ["leads"] });
+      toast.success(trimmed ? "Contact email saved" : "Contact email cleared");
+    } catch (err) {
+      toast.error("Couldn't save contact email", {
+        description: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setSavingContactEmail(false);
+    }
+  }
+
+  async function handleSaveCategory(next: string) {
+    if (!lead) return;
+    setSavingCategory(true);
+    try {
+      await updateLeadFields(lead.id, {
+        venue_category: next,
+        "enrichment.venue_category": null,
+      });
+      setEditingCategory(false);
+      await queryClient.invalidateQueries({ queryKey: ["leads"] });
+      toast.success("Category saved");
+    } catch (err) {
+      toast.error("Couldn't save category", {
+        description: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setSavingCategory(false);
+    }
+  }
+
+  async function handleTagsChange(nextTags: string[]) {
+    if (!lead) return;
+    setSavingTags(true);
+    try {
+      await updateLeadFields(lead.id, { tags: nextTags });
+      await queryClient.invalidateQueries({ queryKey: ["leads"] });
+    } catch (err) {
+      toast.error("Couldn't save tags", {
+        description: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setSavingTags(false);
     }
   }
 
@@ -314,12 +446,7 @@ export function LeadDetailDialog({ lead, onClose, onEmail }: Props) {
               </button>
             </h2>
           )}
-          <div className="mt-2 flex flex-wrap gap-1.5">
-            {lead.venue_category && (
-              <Badge variant="secondary" className="text-[11px] capitalize">
-                {lead.venue_category.replace(/_/g, " ")}
-              </Badge>
-            )}
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
             {lead.score != null && (
               <Badge variant="outline" className="text-[11px] tabular-nums">
                 Score {lead.score}
@@ -373,6 +500,24 @@ export function LeadDetailDialog({ lead, onClose, onEmail }: Props) {
 
         <div className="border-t" />
 
+        {/* Tags */}
+        <div className="p-5 space-y-2">
+          <h3 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+            <Tag className="h-3 w-3" /> Tags
+            {savingTags && (
+              <Loader2 className="h-3 w-3 animate-spin text-muted-foreground/60" />
+            )}
+          </h3>
+          <TagInput
+            value={lead.tags ?? []}
+            onChange={handleTagsChange}
+            knownTags={knownTags}
+            disabled={savingTags}
+          />
+        </div>
+
+        <div className="border-t" />
+
         {/* AI Analysis */}
         <div className="p-5 space-y-3">
           <h3 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
@@ -418,11 +563,153 @@ export function LeadDetailDialog({ lead, onClose, onEmail }: Props) {
 
         {/* Contact + Location */}
         <div className="p-5 space-y-2">
+          <Row label="Category">
+            {editingCategory ? (
+              <span className="flex items-center gap-1.5">
+                <Select
+                  value={categoryDraft}
+                  onValueChange={(v) => {
+                    const next = typeof v === "string" ? v : "";
+                    setCategoryDraft(next);
+                    if (next) handleSaveCategory(next);
+                  }}
+                >
+                  <SelectTrigger size="sm" className="h-7 text-xs flex-1">
+                    <SelectValue placeholder="Select category" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {VENUE_CATEGORIES.map((slug) => (
+                      <SelectItem key={slug} value={slug}>
+                        {formatCategoryLabel(slug)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <button
+                  onClick={() => setEditingCategory(false)}
+                  disabled={savingCategory}
+                  className="text-muted-foreground hover:text-foreground transition-colors"
+                  title="Cancel"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </span>
+            ) : (
+              <span className="flex items-center gap-1.5">
+                {lead.venue_category ? (
+                  <span className="text-sm capitalize">{lead.venue_category.replace(/_/g, " ")}</span>
+                ) : (
+                  <span className="text-muted-foreground text-sm">Not set</span>
+                )}
+                <button
+                  onClick={() => {
+                    setCategoryDraft(lead.venue_category ?? "");
+                    setEditingCategory(true);
+                  }}
+                  className="text-muted-foreground hover:text-foreground transition-colors"
+                  title="Edit category"
+                >
+                  <Pencil className="h-3 w-3" />
+                </button>
+              </span>
+            )}
+          </Row>
           <Row label="Email">
-            {lead.email && (
-              <a href={`mailto:${lead.email}`} className="text-primary hover:underline flex items-center gap-1">
-                <Mail className="h-3 w-3" /> {lead.email}
-              </a>
+            {editingEmail ? (
+              <span className="flex items-center gap-1.5">
+                <input
+                  autoFocus
+                  type="email"
+                  value={emailDraft}
+                  onChange={(e) => setEmailDraft(e.target.value)}
+                  placeholder="name@example.com"
+                  className="flex-1 min-w-0 rounded border border-input bg-background px-2 py-0.5 text-sm"
+                  onKeyDown={(e) => { if (e.key === "Enter") handleSaveEmail(); if (e.key === "Escape") setEditingEmail(false); }}
+                />
+                <button
+                  onClick={handleSaveEmail}
+                  disabled={savingEmail}
+                  className="text-emerald-400 hover:text-emerald-300 transition-colors"
+                >
+                  <Check className="h-3.5 w-3.5" />
+                </button>
+                <button onClick={() => setEditingEmail(false)} className="text-muted-foreground hover:text-foreground transition-colors">
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </span>
+            ) : lead.email ? (
+              <span className="flex items-center gap-1.5">
+                <a href={`mailto:${lead.email}`} className="text-primary hover:underline flex items-center gap-1">
+                  <Mail className="h-3 w-3" /> {lead.email}
+                </a>
+                <button
+                  onClick={() => { setEmailDraft(lead.email ?? ""); setEditingEmail(true); }}
+                  className="text-muted-foreground hover:text-foreground transition-colors"
+                  title="Edit email"
+                >
+                  <Pencil className="h-3 w-3" />
+                </button>
+              </span>
+            ) : (
+              <span className="flex items-center gap-1.5">
+                <span className="text-muted-foreground text-sm">Not set</span>
+                <button
+                  onClick={() => { setEmailDraft(""); setEditingEmail(true); }}
+                  className="text-muted-foreground hover:text-foreground transition-colors"
+                  title="Add email"
+                >
+                  <Pencil className="h-3 w-3" />
+                </button>
+              </span>
+            )}
+          </Row>
+          <Row label="Contact email">
+            {editingContactEmail ? (
+              <span className="flex items-center gap-1.5">
+                <input
+                  autoFocus
+                  type="email"
+                  value={contactEmailDraft}
+                  onChange={(e) => setContactEmailDraft(e.target.value)}
+                  placeholder="name@example.com"
+                  className="flex-1 min-w-0 rounded border border-input bg-background px-2 py-0.5 text-sm"
+                  onKeyDown={(e) => { if (e.key === "Enter") handleSaveContactEmail(); if (e.key === "Escape") setEditingContactEmail(false); }}
+                />
+                <button
+                  onClick={handleSaveContactEmail}
+                  disabled={savingContactEmail}
+                  className="text-emerald-400 hover:text-emerald-300 transition-colors"
+                >
+                  <Check className="h-3.5 w-3.5" />
+                </button>
+                <button onClick={() => setEditingContactEmail(false)} className="text-muted-foreground hover:text-foreground transition-colors">
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </span>
+            ) : lead.contact_email ? (
+              <span className="flex items-center gap-1.5">
+                <a href={`mailto:${lead.contact_email}`} className="text-primary hover:underline flex items-center gap-1">
+                  <Mail className="h-3 w-3" /> {lead.contact_email}
+                </a>
+                <button
+                  onClick={() => { setContactEmailDraft(lead.contact_email ?? ""); setEditingContactEmail(true); }}
+                  className="text-muted-foreground hover:text-foreground transition-colors"
+                  title="Edit contact email"
+                >
+                  <Pencil className="h-3 w-3" />
+                </button>
+              </span>
+            ) : (
+              <span className="flex items-center gap-1.5">
+                <span className="text-muted-foreground text-sm">(not set)</span>
+                <button
+                  onClick={() => { setContactEmailDraft(""); setEditingContactEmail(true); }}
+                  className="text-muted-foreground hover:text-foreground transition-colors"
+                  title="Add contact email"
+                >
+                  <Pencil className="h-3 w-3" />
+                </button>
+              </span>
             )}
           </Row>
           <Row label="Phone">

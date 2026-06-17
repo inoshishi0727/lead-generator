@@ -443,96 +443,12 @@ export function MessageCard({ message, inConversation, emailCapReached, isDuplic
           </div>
         )}
 
-        {/* Context row */}
-        {(message.contact_name || message.context_notes || message.recipient_email || message.website) && (
-          <div className="text-xs text-muted-foreground space-y-0.5">
-            {message.recipient_email && (
-              <p>
-                To: <span className="font-medium text-foreground">{message.recipient_email}</span>
-              </p>
-            )}
-            {message.website && (
-              <p>
-                Venue: <a href={message.website} target="_blank" rel="noopener noreferrer" className="font-medium text-blue-600 hover:underline dark:text-blue-400">{message.website.replace(/^https?:\/\/(www\.)?/, "").replace(/\/$/, "")}</a>
-              </p>
-            )}
-            {message.menu_url && (
-              <p>
-                Menu: <a href={message.menu_url} target="_blank" rel="noopener noreferrer" className="font-medium text-emerald-600 hover:underline dark:text-emerald-400">{message.menu_url.replace(/^https?:\/\/(www\.)?/, "").replace(/\/$/, "")}</a>
-                {message.menu_fit && (
-                  <span className={`ml-2 inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
-                    message.menu_fit === "strong" ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300" :
-                    message.menu_fit === "moderate" ? "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-300" :
-                    "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"
-                  }`}>
-                    {message.menu_fit} fit
-                  </span>
-                )}
-              </p>
-            )}
-            {!message.menu_url && (
-              <p className="text-muted-foreground/60 text-sm">Menu: link not found</p>
-            )}
-            {message.contact_name && (
-              <p>
-                Contact: <span className="font-medium text-foreground">{message.contact_name}</span>
-              </p>
-            )}
-            {message.context_notes && <p>{message.context_notes}</p>}
-          </div>
-        )}
-
-        {/* Products */}
-        {message.lead_products.length > 0 && (
-          <div className="flex gap-1.5 flex-wrap">
-            {message.lead_products.map((p) => (
-              <Badge key={p} variant="outline" className="text-xs">
-                {p}
-              </Badge>
-            ))}
-          </div>
-        )}
-
-        {/* Drinks programme toggle */}
-        <button
-          className="flex w-full items-center justify-between rounded border border-border/60 bg-muted/20 px-2.5 py-1.5 text-xs font-medium text-foreground hover:bg-muted/40 transition-colors"
-          onClick={() => setMenuOpen((o) => !o)}
-        >
-          <span className="flex items-center gap-1.5">
-            🍸 Venue drinks programme
-            {drinksProgramme && !menuOpen && (
-              <span className="text-muted-foreground font-normal truncate max-w-[300px]">
-                — {drinksProgramme.split(";")[0].trim()}{drinksProgramme.includes(";") ? ", ..." : ""}
-              </span>
-            )}
-            {!drinksProgramme && !leadQuery.isLoading && (
-              <span className="text-muted-foreground font-normal">— none scraped</span>
-            )}
-          </span>
-          {menuOpen ? <ChevronUp className="h-3.5 w-3.5 shrink-0 text-muted-foreground" /> : <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
-        </button>
-
-        {menuOpen && (
-          <div className="rounded border border-border bg-muted/20 p-2.5 text-xs text-muted-foreground">
-            {leadQuery.isLoading ? (
-              <span className="flex items-center gap-1.5">
-                <Loader2 className="h-3 w-3 animate-spin" /> Loading...
-              </span>
-            ) : drinksProgramme ? (
-              <div className="flex flex-wrap gap-1">
-                {drinksProgramme.split(";").map((item) => item.trim()).filter(Boolean).map((item) => (
-                  <Badge key={item} variant="outline" className="text-[10px] font-normal">
-                    {item}
-                  </Badge>
-                ))}
-              </div>
-            ) : (
-              <span>No drinks programme scraped for this venue.</span>
-            )}
-          </div>
-        )}
-
       </div>
+
+      {/* Below the head: side-by-side on md+. Body on the left, lead info
+          (context, products, drinks programme) on the right as a sidebar so
+          the operator doesn't have to scroll past metadata to reach the email. */}
+      <div className="md:grid md:grid-cols-[1fr_280px]">
 
       {/* Scrollable body — message content + action buttons */}
       <div className="space-y-3 p-4">
@@ -1295,6 +1211,103 @@ export function MessageCard({ message, inConversation, emailCapReached, isDuplic
             </button>
           </div>
         )}
+      </div>
+
+      {/* Right sidebar — lead info (context, products, drinks programme).
+          Sticky on md+ so it stays visible while the body scrolls. */}
+      <aside className="border-t md:border-t-0 md:border-l border-border bg-muted/10 p-4 space-y-3 md:sticky md:top-0 md:self-start md:max-h-[calc(100vh-7rem)] md:overflow-y-auto">
+        {(message.contact_name || message.context_notes || message.recipient_email || message.website) && (
+          <div className="text-xs text-muted-foreground space-y-1.5">
+            {message.recipient_email && (
+              <p>
+                <span className="text-[10px] uppercase tracking-wider text-muted-foreground/70">To</span><br />
+                <span className="font-medium text-foreground">{message.recipient_email}</span>
+              </p>
+            )}
+            {message.website && (
+              <p>
+                <span className="text-[10px] uppercase tracking-wider text-muted-foreground/70">Venue</span><br />
+                <a href={message.website} target="_blank" rel="noopener noreferrer" className="font-medium text-blue-600 hover:underline dark:text-blue-400">{message.website.replace(/^https?:\/\/(www\.)?/, "").replace(/\/$/, "")}</a>
+              </p>
+            )}
+            {message.menu_url && (
+              <p>
+                <span className="text-[10px] uppercase tracking-wider text-muted-foreground/70">Menu</span><br />
+                <a href={message.menu_url} target="_blank" rel="noopener noreferrer" className="font-medium text-emerald-600 hover:underline dark:text-emerald-400 break-words">{message.menu_url.replace(/^https?:\/\/(www\.)?/, "").replace(/\/$/, "")}</a>
+                {message.menu_fit && (
+                  <span className={`ml-2 inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                    message.menu_fit === "strong" ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-500/20 dark:text-emerald-300" :
+                    message.menu_fit === "moderate" ? "bg-amber-100 text-amber-800 dark:bg-amber-500/20 dark:text-amber-300" :
+                    message.menu_fit === "weak" ? "bg-rose-100 text-rose-800 dark:bg-rose-500/20 dark:text-rose-300" :
+                    "bg-slate-100 text-slate-600 dark:bg-slate-500/15 dark:text-slate-400"
+                  }`}>
+                    {message.menu_fit} fit
+                  </span>
+                )}
+              </p>
+            )}
+            {!message.menu_url && (
+              <p className="text-muted-foreground/60">Menu: link not found</p>
+            )}
+            {message.contact_name && (
+              <p>
+                <span className="text-[10px] uppercase tracking-wider text-muted-foreground/70">Contact</span><br />
+                <span className="font-medium text-foreground">{message.contact_name}</span>
+              </p>
+            )}
+            {message.context_notes && <p className="text-muted-foreground/80">{message.context_notes}</p>}
+          </div>
+        )}
+
+        {message.lead_products.length > 0 && (
+          <div>
+            <p className="text-[10px] uppercase tracking-wider text-muted-foreground/70 mb-1.5">Products</p>
+            <div className="flex gap-1.5 flex-wrap">
+              {message.lead_products.map((p) => (
+                <Badge key={p} variant="outline" className="text-[10px]">
+                  {p}
+                </Badge>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div>
+          <button
+            className="flex w-full items-center justify-between rounded border border-border/60 bg-muted/20 px-2.5 py-1.5 text-xs font-medium text-foreground hover:bg-muted/40 transition-colors"
+            onClick={() => setMenuOpen((o) => !o)}
+          >
+            <span className="flex items-center gap-1.5">
+              🍸 Drinks programme
+              {!drinksProgramme && !leadQuery.isLoading && (
+                <span className="text-muted-foreground font-normal text-[10px]">none</span>
+              )}
+            </span>
+            {menuOpen ? <ChevronUp className="h-3.5 w-3.5 shrink-0 text-muted-foreground" /> : <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
+          </button>
+
+          {menuOpen && (
+            <div className="mt-2 rounded border border-border bg-muted/20 p-2.5 text-xs text-muted-foreground">
+              {leadQuery.isLoading ? (
+                <span className="flex items-center gap-1.5">
+                  <Loader2 className="h-3 w-3 animate-spin" /> Loading...
+                </span>
+              ) : drinksProgramme ? (
+                <div className="flex flex-wrap gap-1">
+                  {drinksProgramme.split(";").map((item) => item.trim()).filter(Boolean).map((item) => (
+                    <Badge key={item} variant="outline" className="text-[10px] font-normal">
+                      {item}
+                    </Badge>
+                  ))}
+                </div>
+              ) : (
+                <span>No drinks programme scraped for this venue.</span>
+              )}
+            </div>
+          )}
+        </div>
+      </aside>
+
       </div>
 
       {editDialogOpen && (

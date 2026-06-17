@@ -767,8 +767,15 @@ export function OutreachView(props: OutreachViewProps = {}) {
       {mainTab === "overview" ? (
         /* ===== TAB 1: OVERVIEW ===== */
         <div style={{ flex: 1, overflowY: "auto", padding: "16px 28px" }}>
-          {/* Stat cards — global, not venue-filtered */}
-          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
+          {/* Stat cards — global, not venue-filtered. Grid spreads them evenly
+              across the available width so the row doesn't leave a hard gap on
+              the right; collapses to 2 columns on narrow viewports. */}
+          <div style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(5, minmax(0, 1fr))",
+            gap: 12,
+            marginBottom: 16,
+          }} className="outreach-stat-row">
             {[
               { label: "Drafted", value: draftCount },
               { label: "Sent this week", value: sentThisWeek },
@@ -781,9 +788,7 @@ export function OutreachView(props: OutreachViewProps = {}) {
                 border: "1px solid var(--sp-line)",
                 borderRadius: 10,
                 padding: "12px 20px",
-                minWidth: 100,
                 textAlign: "center",
-                flexShrink: 0,
               }}>
                 <div style={{ fontSize: 22, fontWeight: 600, color: "var(--sp-ink)", lineHeight: 1.2 }}>{value}</div>
                 <div style={{ fontSize: 11, color: "var(--sp-ink-3)", marginTop: 4, whiteSpace: "nowrap" }}>{label}</div>
@@ -1016,9 +1021,15 @@ export function OutreachView(props: OutreachViewProps = {}) {
               )}
             </div>
 
-            {/* Stat cards — venue/fit filtered. Hidden in inbox-style layout. */}
+            {/* Stat cards — venue/fit filtered. Hidden in inbox-style layout.
+                Grid spreads them evenly across the available width so the row
+                doesn't leave a hard gap on the right. */}
             {!simplifiedHeader && (
-            <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+            <div style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(5, minmax(0, 1fr))",
+              gap: 12,
+            }}>
               {[
                 { label: "Drafted", value: msgDraftCount },
                 { label: "Sent this week", value: msgSentThisWeek },
@@ -1031,9 +1042,7 @@ export function OutreachView(props: OutreachViewProps = {}) {
                   border: "1px solid var(--sp-line)",
                   borderRadius: 10,
                   padding: "12px 20px",
-                  minWidth: 100,
                   textAlign: "center",
-                  flexShrink: 0,
                 }}>
                   <div style={{ fontSize: 22, fontWeight: 600, color: "var(--sp-ink)", lineHeight: 1.2 }}>{value}</div>
                   <div style={{ fontSize: 11, color: "var(--sp-ink-3)", marginTop: 4, whiteSpace: "nowrap" }}>{label}</div>
@@ -1042,46 +1051,10 @@ export function OutreachView(props: OutreachViewProps = {}) {
             </div>
             )}
 
-            {/* Focus Mode discovery strip — visible on drafts tab when no venue is selected. Hidden in inbox-style layout. */}
-            {!simplifiedHeader && statusFilter === "draft" && categoryFilter === "" && venueCounts.length > 0 && (
-              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                <span style={{
-                  fontSize: 11,
-                  color: "var(--sp-ink-3)",
-                  whiteSpace: "nowrap",
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: 4,
-                }}>
-                  <Target style={{ width: 12, height: 12 }} />
-                  Focus next batch on
-                </span>
-                {venueCounts.slice(0, 5).map(({ value, label, count }) => (
-                  <button
-                    key={value}
-                    type="button"
-                    onClick={() => setCategoryFilter(value)}
-                    title={`Generate the next batch from ${count} ${label} leads only`}
-                    style={{
-                      fontSize: 12,
-                      padding: "4px 10px",
-                      borderRadius: 999,
-                      border: "1px solid var(--sp-line-strong)",
-                      background: "var(--sp-bg-sunken)",
-                      color: "var(--sp-ink-2)",
-                      cursor: "pointer",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    {label}
-                    <span style={{ color: "var(--sp-ink-3)", marginLeft: 4 }}>· {count}</span>
-                  </button>
-                ))}
-              </div>
-            )}
-
-            {/* Venue + Fit filters */}
-            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            {/* Venue + Fit filters, followed inline by the Focus pills strip
+                (only on drafts tab when no venue is selected). Single row keeps
+                related controls together; wraps to a second line on narrow widths. */}
+            <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                 <label style={{
                   fontSize: 11,
@@ -1152,6 +1125,46 @@ export function OutreachView(props: OutreachViewProps = {}) {
                   </div>
                 ) : null;
               })()}
+
+              {/* Focus Mode discovery strip — same row as Venue/Fit when the
+                  drafts tab has no venue chosen. Hidden in inbox-style layout. */}
+              {!simplifiedHeader && statusFilter === "draft" && categoryFilter === "" && venueCounts.length > 0 && (
+                <>
+                  <span style={{
+                    fontSize: 11,
+                    color: "var(--sp-ink-3)",
+                    whiteSpace: "nowrap",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 4,
+                    marginLeft: 4,
+                  }}>
+                    <Target style={{ width: 12, height: 12 }} />
+                    Focus next batch on
+                  </span>
+                  {venueCounts.slice(0, 5).map(({ value, label, count }) => (
+                    <button
+                      key={value}
+                      type="button"
+                      onClick={() => setCategoryFilter(value)}
+                      title={`Generate the next batch from ${count} ${label} leads only`}
+                      style={{
+                        fontSize: 12,
+                        padding: "4px 10px",
+                        borderRadius: 999,
+                        border: "1px solid var(--sp-line-strong)",
+                        background: "var(--sp-bg-sunken)",
+                        color: "var(--sp-ink-2)",
+                        cursor: "pointer",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {label}
+                      <span style={{ color: "var(--sp-ink-3)", marginLeft: 4 }}>· {count}</span>
+                    </button>
+                  ))}
+                </>
+              )}
             </div>
           </div>
 
@@ -1392,6 +1405,9 @@ export function OutreachView(props: OutreachViewProps = {}) {
                     ? new Map((conversationThreads ?? []).map((t) => [t.leadId, leadMap.get(t.leadId)?.outcome ?? null]))
                     : undefined
                 }
+                categoryByLead={
+                  new Map((conversationThreads ?? []).map((t) => [t.leadId, leadMap.get(t.leadId)?.venue_category ?? null]))
+                }
                 selectedLeadId={selectedLeadId}
                 onSelectThread={(leadId) => { setSelectedLeadId(leadId); markLeadRead(leadId); }}
                 unreadByLead={unreadByLead}
@@ -1424,9 +1440,12 @@ export function OutreachView(props: OutreachViewProps = {}) {
                         {(() => {
                           const fit = getFitPill(msg.lead_id);
                           // Hide the venue pill in Focus Mode — it would just
-                          // repeat the cohort label on every row.
-                          const showVenue = !categoryFilter && !!msg.venue_category;
-                          const venueLabel = showVenue ? formatVenueLabel(msg.venue_category) : "";
+                          // repeat the cohort label on every row. Fall back to
+                          // the lead's venue_category if the message doc didn't
+                          // carry one denormalized.
+                          const cat = msg.venue_category ?? (msg.lead_id ? leadMap.get(msg.lead_id)?.venue_category ?? null : null);
+                          const showVenue = !categoryFilter && !!cat;
+                          const venueLabel = showVenue ? formatVenueLabel(cat) : "";
                           if (!fit && !venueLabel) return null;
                           return (
                             <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 2, flexWrap: "wrap" }}>
