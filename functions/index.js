@@ -13,7 +13,7 @@ const HttpsError = functions.https.HttpsError;
 initializeApp();
 const db = getFirestore();
 
-const CLAUDE_MODEL = "claude-sonnet-4-20250514";
+const CLAUDE_MODEL = "claude-sonnet-4-6";
 const GEMINI_DRAFT_MODEL = "gemini-2.5-flash";
 
 async function callDraftLLM(provider, systemPrompt, userPrompt) {
