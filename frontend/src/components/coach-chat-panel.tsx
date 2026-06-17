@@ -11,21 +11,24 @@ import {
 interface Props extends MarlowActionCallbacks {}
 
 const SUGGESTION_PILLS: { label: string; prompt: string }[] = [
-  { label: "Create an overlay", prompt: "Create an overlay for " },
-  { label: "Draft a message for", prompt: "Draft a message for " },
   {
-    label: "Simulate current overlay",
-    prompt: "Simulate the current overlay on a lead",
+    label: "Tune Marlow's voice",
+    prompt: "Make Marlow's drafts more ",
+  },
+  { label: "Draft a message for…", prompt: "Draft a message for " },
+  {
+    label: "Update a lead",
+    prompt: "Change {lead name}'s category to ",
   },
   {
-    label: "Tag leads",
+    label: "Find leads…",
+    prompt: "Find leads with no email after 7 days",
+  },
+  {
+    label: "Tag a batch of leads",
     prompt: "Tag every cocktail bar in Brixton as south-london",
   },
   { label: "Snooze a lead", prompt: "Snooze {lead name} for 2 weeks" },
-  {
-    label: "Find stuck leads",
-    prompt: "Show me leads with no email after 7 days",
-  },
 ];
 
 export function CoachChatPanel({

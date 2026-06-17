@@ -9,8 +9,8 @@ import type { OutreachMessage } from "@/lib/types";
 const FIT_COLORS: Record<string, string> = {
   strong: "text-emerald-400",
   moderate: "text-amber-400",
-  weak: "text-zinc-500",
-  unknown: "text-zinc-600",
+  weak: "text-rose-400",
+  unknown: "text-slate-500",
 };
 
 interface Props {

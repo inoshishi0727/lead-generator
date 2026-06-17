@@ -7,6 +7,7 @@ import {
   Inbox,
   Megaphone,
   MessageCircle,
+  Radar,
   Search,
   Settings,
   Sparkles,
@@ -83,6 +84,7 @@ export const WORKSPACE_NAV: NavItem[] = [
 export const SYSTEM_NAV: NavItem[] = [
   { href: "/settings", label: "Settings", Icon: Settings },
   { href: "/conversations", label: "Sommelier", Icon: MessageCircle },
+  { href: "/scrapes", label: "Scrapes", Icon: Radar },
   { href: "/log", label: "Diagnostics", Icon: ClipboardList, adminOnly: true },
 ];
 
