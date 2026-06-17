@@ -28,12 +28,35 @@ import {
 import { useScrapeLeadNow } from "@/hooks/use-scrape-leads";
 import { Badge } from "@/components/ui/badge";
 import { isStaleEnrichment, daysSince } from "@/lib/stale-thresholds";
+import {
+  PRIORITY_TIER_CLASS,
+  PRIORITY_TIER_LABEL,
+  priorityScore,
+  priorityTier,
+} from "@/lib/priority-score";
 import { LeadDetailDialog } from "@/components/lead-detail-dialog";
 import { updateLeadFields } from "@/lib/firestore-api";
 import { useQueryClient } from "@tanstack/react-query";
 import { useGenerateDrafts } from "@/hooks/use-outreach";
 import { toast } from "sonner";
 import type { Lead } from "@/lib/types";
+
+function relativeTime(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const diffMs = Date.now() - new Date(iso).getTime();
+  if (!Number.isFinite(diffMs) || diffMs < 0) return "just now";
+  const secs = Math.floor(diffMs / 1000);
+  if (secs < 60) return `${secs}s ago`;
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  if (days < 30) return `${days}d ago`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `${months}mo ago`;
+  return `${Math.floor(months / 12)}y ago`;
+}
 
 interface Props {
   leads: Lead[];
@@ -286,8 +309,9 @@ export function LeadsTable({ leads, isLoading, selectable, selectedIds = [], onS
                 <TableHead className="w-[18%]">Business</TableHead>
                 <TableHead className="w-[12%]">Category</TableHead>
                 <TableHead className="w-[6%]">Fit</TableHead>
-                <TableHead className="w-[20%]">Email</TableHead>
-                <TableHead className="w-[12%]">Postcode</TableHead>
+                <TableHead className="w-[17%]">Email</TableHead>
+                <TableHead className="w-[10%]">Postcode</TableHead>
+                <TableHead className="w-[7%]">Added</TableHead>
                 <TableHead className="w-[5%] text-right">Score</TableHead>
                 {selectable && <TableHead className="w-[9%]">Assigned</TableHead>}
                 <TableHead className="w-[120px] text-center">Actions</TableHead>
@@ -421,10 +445,11 @@ export function LeadsTable({ leads, isLoading, selectable, selectedIds = [], onS
                   {/* Menu fit */}
                   <TableCell>
                     {lead.menu_fit ? (
-                      <span className={`text-xs font-medium ${
+                      <span className={`text-xs font-semibold ${
                         lead.menu_fit === "strong" ? "text-emerald-400" :
                         lead.menu_fit === "moderate" ? "text-amber-400" :
-                        "text-zinc-500"
+                        lead.menu_fit === "weak" ? "text-rose-400" :
+                        "text-slate-500"
                       }`}>
                         {lead.menu_fit}
                       </span>
@@ -444,9 +469,38 @@ export function LeadsTable({ leads, isLoading, selectable, selectedIds = [], onS
                   <TableCell className="text-xs text-muted-foreground truncate">
                     {lead.location_postcode ?? "\u2014"}
                   </TableCell>
-                  {/* Score */}
+                  {/* Added (relative time from created_at, falls back to scraped_at) */}
+                  <TableCell
+                    className="text-xs text-muted-foreground whitespace-nowrap"
+                    title={
+                      lead.created_at
+                        ? new Date(lead.created_at).toLocaleString()
+                        : lead.scraped_at
+                        ? new Date(lead.scraped_at).toLocaleString()
+                        : ""
+                    }
+                  >
+                    {relativeTime(lead.created_at ?? lead.scraped_at ?? null)}
+                  </TableCell>
+                  {/* Score + Priority tier */}
                   <TableCell className="text-right font-mono text-xs">
-                    {lead.score ?? "\u2014"}
+                    <div className="flex items-center justify-end gap-1.5">
+                      {(() => {
+                        const p = priorityScore(lead);
+                        if (p <= 0) return null;
+                        const tier = priorityTier(p);
+                        return (
+                          <Badge
+                            variant="outline"
+                            title={`Priority: ${p.toFixed(1)} (${PRIORITY_TIER_LABEL[tier]})`}
+                            className={`text-[9px] px-1 py-0 ${PRIORITY_TIER_CLASS[tier]}`}
+                          >
+                            {PRIORITY_TIER_LABEL[tier]}
+                          </Badge>
+                        );
+                      })()}
+                      <span>{lead.score ?? "\u2014"}</span>
+                    </div>
                   </TableCell>
                   {selectable && (
                     <TableCell className="text-xs text-muted-foreground truncate">

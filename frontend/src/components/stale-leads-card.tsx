@@ -1,10 +1,12 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AlertCircle, Sparkles, CheckCircle2, ChevronDown, ChevronUp, Loader2, Check, X } from "lucide-react";
 import { useLeads } from "@/hooks/use-leads";
 import { useScrapeSelectedLeads } from "@/hooks/use-scrape-leads";
 import { isStaleEnrichment, daysSince, ENRICHMENT_STALE_DAYS } from "@/lib/stale-thresholds";
+
+const COLLAPSED_KEY = "stale-leads-card:collapsed";
 
 /**
  * Surfaces the leads that are stuck in pre-enrichment past the threshold.
@@ -25,7 +27,15 @@ import { isStaleEnrichment, daysSince, ENRICHMENT_STALE_DAYS } from "@/lib/stale
 export function StaleLeadsCard() {
   const { data: leads = [] } = useLeads();
   const scrapeMany = useScrapeSelectedLeads();
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    return window.localStorage.getItem(COLLAPSED_KEY) === "1";
+  });
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(COLLAPSED_KEY, collapsed ? "1" : "0");
+  }, [collapsed]);
 
   const stale = useMemo(() => {
     return leads
@@ -37,20 +47,6 @@ export function StaleLeadsCard() {
       })
       .slice(0, 5);
   }, [leads]);
-
-  if (stale.length === 0) {
-    return (
-      <div className="flex items-center gap-3 rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-4 py-3 text-sm">
-        <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0" />
-        <span className="text-emerald-300">
-          No leads stuck over {ENRICHMENT_STALE_DAYS} days. Pipeline is clean.
-        </span>
-      </div>
-    );
-  }
-
-  const allStaleIds = leads.filter((l) => isStaleEnrichment(l)).map((l) => l.id);
-  const batchRunning = scrapeMany.status?.status === "running" || scrapeMany.status?.status === "pending";
 
   // Map lead_id → per-item batch status so each row can show a live indicator
   // of what's happening to it specifically (pending / running / added / error).
@@ -69,6 +65,20 @@ export function StaleLeadsCard() {
     const lead = leads.find((l) => l.id === item.lead_id);
     return lead?.business_name || item.business_name || "(unnamed)";
   }, [scrapeMany.status, leads]);
+
+  if (stale.length === 0) {
+    return (
+      <div className="flex items-center gap-3 rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-4 py-3 text-sm">
+        <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0" />
+        <span className="text-emerald-300">
+          No leads stuck over {ENRICHMENT_STALE_DAYS} days. Pipeline is clean.
+        </span>
+      </div>
+    );
+  }
+
+  const allStaleIds = leads.filter((l) => isStaleEnrichment(l)).map((l) => l.id);
+  const batchRunning = scrapeMany.status?.status === "running" || scrapeMany.status?.status === "pending";
   const handleReEnrichAll = () => {
     if (allStaleIds.length === 0) return;
     scrapeMany.start(allStaleIds);

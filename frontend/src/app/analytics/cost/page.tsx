@@ -252,9 +252,9 @@ export default function CostAnalyticsPage() {
                   return (
                     <div key={d.date} className="flex items-center gap-3 text-xs">
                       <span className="w-24 text-muted-foreground tabular-nums">{d.date}</span>
-                      <div className="flex-1 bg-zinc-900 rounded h-5 relative overflow-hidden">
+                      <div className="flex-1 bg-muted/40 rounded h-4 relative overflow-hidden">
                         <div
-                          className="h-full bg-emerald-500/30 border-r border-emerald-500"
+                          className="h-full bg-emerald-500/50 dark:bg-emerald-500/40 rounded-sm transition-[width]"
                           style={{ width: `${pct}%` }}
                         />
                       </div>

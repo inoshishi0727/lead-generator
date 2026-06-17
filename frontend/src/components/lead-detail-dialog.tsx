@@ -49,10 +49,10 @@ interface Props {
 }
 
 const FIT_COLORS: Record<string, string> = {
-  strong: "bg-emerald-500/15 text-emerald-400 border-emerald-500/20",
-  moderate: "bg-amber-500/15 text-amber-400 border-amber-500/20",
-  weak: "bg-red-500/15 text-red-400 border-red-500/20",
-  unknown: "bg-zinc-500/15 text-zinc-400 border-zinc-500/20",
+  strong: "bg-emerald-500/20 text-emerald-300 border-emerald-500/40",
+  moderate: "bg-amber-500/20 text-amber-300 border-amber-500/40",
+  weak: "bg-rose-500/20 text-rose-300 border-rose-500/40",
+  unknown: "bg-slate-500/15 text-slate-400 border-slate-500/30",
 };
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -447,59 +447,6 @@ export function LeadDetailDialog({ lead, onClose, onEmail }: Props) {
             </h2>
           )}
           <div className="mt-2 flex flex-wrap items-center gap-1.5">
-            {editingCategory ? (
-              <span className="flex items-center gap-1.5">
-                <Select
-                  value={categoryDraft}
-                  onValueChange={(v) => {
-                    const next = typeof v === "string" ? v : "";
-                    setCategoryDraft(next);
-                    if (next) handleSaveCategory(next);
-                  }}
-                >
-                  <SelectTrigger size="sm" className="h-6 text-[11px]">
-                    <SelectValue placeholder="Select category" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {VENUE_CATEGORIES.map((slug) => (
-                      <SelectItem key={slug} value={slug}>
-                        {formatCategoryLabel(slug)}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <button
-                  onClick={() => setEditingCategory(false)}
-                  disabled={savingCategory}
-                  className="text-muted-foreground hover:text-foreground transition-colors"
-                  title="Cancel"
-                >
-                  <X className="h-3 w-3" />
-                </button>
-              </span>
-            ) : (
-              <span className="group flex items-center gap-1">
-                {lead.venue_category ? (
-                  <Badge variant="secondary" className="text-[11px] capitalize">
-                    {lead.venue_category.replace(/_/g, " ")}
-                  </Badge>
-                ) : (
-                  <Badge variant="outline" className="text-[11px] text-muted-foreground">
-                    No category
-                  </Badge>
-                )}
-                <button
-                  onClick={() => {
-                    setCategoryDraft(lead.venue_category ?? "");
-                    setEditingCategory(true);
-                  }}
-                  className="text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity hover:text-foreground"
-                  title="Edit category"
-                >
-                  <Pencil className="h-3 w-3" />
-                </button>
-              </span>
-            )}
             {lead.score != null && (
               <Badge variant="outline" className="text-[11px] tabular-nums">
                 Score {lead.score}
@@ -616,6 +563,57 @@ export function LeadDetailDialog({ lead, onClose, onEmail }: Props) {
 
         {/* Contact + Location */}
         <div className="p-5 space-y-2">
+          <Row label="Category">
+            {editingCategory ? (
+              <span className="flex items-center gap-1.5">
+                <Select
+                  value={categoryDraft}
+                  onValueChange={(v) => {
+                    const next = typeof v === "string" ? v : "";
+                    setCategoryDraft(next);
+                    if (next) handleSaveCategory(next);
+                  }}
+                >
+                  <SelectTrigger size="sm" className="h-7 text-xs flex-1">
+                    <SelectValue placeholder="Select category" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {VENUE_CATEGORIES.map((slug) => (
+                      <SelectItem key={slug} value={slug}>
+                        {formatCategoryLabel(slug)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <button
+                  onClick={() => setEditingCategory(false)}
+                  disabled={savingCategory}
+                  className="text-muted-foreground hover:text-foreground transition-colors"
+                  title="Cancel"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </span>
+            ) : (
+              <span className="flex items-center gap-1.5">
+                {lead.venue_category ? (
+                  <span className="text-sm capitalize">{lead.venue_category.replace(/_/g, " ")}</span>
+                ) : (
+                  <span className="text-muted-foreground text-sm">Not set</span>
+                )}
+                <button
+                  onClick={() => {
+                    setCategoryDraft(lead.venue_category ?? "");
+                    setEditingCategory(true);
+                  }}
+                  className="text-muted-foreground hover:text-foreground transition-colors"
+                  title="Edit category"
+                >
+                  <Pencil className="h-3 w-3" />
+                </button>
+              </span>
+            )}
+          </Row>
           <Row label="Email">
             {editingEmail ? (
               <span className="flex items-center gap-1.5">

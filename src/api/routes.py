@@ -148,6 +148,7 @@ def _run_gmaps_scrape(run_id: str, queries: list[str], limit: int, headless: boo
     from uuid import UUID
     from src.db.firestore import save_scrape_run, update_scrape_run
     from src.db.models import LeadSource, RunStatus, ScrapeRun
+    from src.scrape.telemetry import ProgressReporter
 
     # Persist a scrape_runs Firestore doc keyed on the API run_id so manual
     # scrapes from the app show up in the history list alongside CLI runs.
@@ -162,6 +163,8 @@ def _run_gmaps_scrape(run_id: str, queries: list[str], limit: int, headless: boo
     except Exception as exc:
         log.warning("scrape_run_persist_failed", run_id=run_id, error=str(exc))
 
+    reporter = ProgressReporter(run_id=run_id)
+
     try:
         _scrape_runs[run_id]["status"] = "running"
 
@@ -175,7 +178,9 @@ def _run_gmaps_scrape(run_id: str, queries: list[str], limit: int, headless: boo
             if run:
                 run.update({k: v for k, v in kwargs.items() if v is not None})
 
-        orchestrator = ParallelScrapeOrchestrator(config=config, on_progress=on_progress)
+        orchestrator = ParallelScrapeOrchestrator(
+            config=config, on_progress=on_progress, telemetry=reporter
+        )
 
         async def _full_pipeline():
             # Phase 1: Scrape
@@ -261,6 +266,15 @@ def _run_gmaps_scrape(run_id: str, queries: list[str], limit: int, headless: boo
         )
         log.info("scrape_thread_done", run_id=run_id, leads=len(lead_responses))
 
+        # Force a final telemetry post so the dashboard sees the run finish even
+        # if we never crossed the 15s throttle window for the last update.
+        reporter.report(
+            phase="done",
+            progress=100,
+            leads_found=len(lead_responses),
+            force=True,
+        )
+
         try:
             update_scrape_run(run_id, {
                 "status": RunStatus.COMPLETED.value,
@@ -277,6 +291,7 @@ def _run_gmaps_scrape(run_id: str, queries: list[str], limit: int, headless: boo
             completed_at=datetime.now(),
         )
         log.exception("scrape_thread_failed", run_id=run_id)
+        reporter.report(phase="done", progress=100, force=True)
 
         try:
             update_scrape_run(run_id, {

@@ -11,6 +11,7 @@ from src.config.loader import AppConfig, load_config, load_search_queries
 from src.db.dedup import SharedDedupSet, get_all_dedup_keys
 from src.db.exclusions import ExclusionSet, load_exclusion_set
 from src.db.models import Lead
+from src.scrape.telemetry import ProgressReporter
 from src.scrapers.base import TransientScraperError
 from src.scrapers.bing import BingSearchScraper
 from src.scrapers.directory import DirectoryScraper
@@ -94,9 +95,11 @@ class ParallelScrapeOrchestrator:
         config: AppConfig | None = None,
         on_progress: callable | None = None,
         skip_gmaps_types: set[str] | None = None,
+        telemetry: ProgressReporter | None = None,
     ) -> None:
         self.config = config or load_config()
         self._on_progress = on_progress or (lambda **kw: None)
+        self._telemetry = telemetry
         self._exclusion_set = self._load_exclusions()
         self._skip_gmaps_types = skip_gmaps_types or set()
 
@@ -151,6 +154,7 @@ class ParallelScrapeOrchestrator:
                         on_progress=self._on_progress,
                         shared_dedup=shared_dedup,
                         skip_gmaps_types=self._skip_gmaps_types,
+                        telemetry=self._telemetry,
                     )
                     return await scraper.run()
 
@@ -214,6 +218,7 @@ class ParallelScrapeOrchestrator:
                         config=worker_config,
                         on_progress=self._on_progress,
                         shared_dedup=shared_dedup,
+                        telemetry=self._telemetry,
                     )
                     return await scraper.run()
 
@@ -276,6 +281,7 @@ class ParallelScrapeOrchestrator:
                         config=worker_config,
                         on_progress=self._on_progress,
                         shared_dedup=shared_dedup,
+                        telemetry=self._telemetry,
                     )
                     return await scraper.run()
 
@@ -337,6 +343,7 @@ class ParallelScrapeOrchestrator:
                         config=worker_config,
                         on_progress=self._on_progress,
                         shared_dedup=shared_dedup,
+                        telemetry=self._telemetry,
                     )
                     return await scraper.run()
 
@@ -392,6 +399,7 @@ class ParallelScrapeOrchestrator:
                         config=worker_config,
                         on_progress=self._on_progress,
                         shared_dedup=shared_dedup,
+                        telemetry=self._telemetry,
                     )
                     return await scraper.run()
 

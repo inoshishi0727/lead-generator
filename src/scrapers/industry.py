@@ -23,6 +23,7 @@ from src.db.client import get_firestore_client
 from src.db.dedup import SharedDedupSet, build_dedup_key, get_all_dedup_keys, record_dedup_key
 from src.db.firestore import save_lead_immediate, save_leads
 from src.db.models import Lead, LeadSource, PipelineStage
+from src.scrape.telemetry import ProgressReporter
 from src.scrapers.base import BaseScraper
 from src.scrapers.email_extractor import extract_email_from_website
 from src.scrapers.humanize.scroll import smooth_scroll
@@ -41,11 +42,27 @@ class IndustrySiteScraper(BaseScraper):
         config: AppConfig | None = None,
         on_progress: callable | None = None,
         shared_dedup: SharedDedupSet | None = None,
+        telemetry: ProgressReporter | None = None,
     ) -> None:
         super().__init__(config)
         self.industry_config = self.config.scraping.industry_sites
         self.collected_leads: list[Lead] = []
-        self._on_progress = on_progress or (lambda **kw: None)
+        self._telemetry = telemetry
+        raw_on_progress = on_progress or (lambda **kw: None)
+
+        _TELEMETRY_KEYS = {"phase", "progress", "current_query", "current_lead", "leads_found"}
+
+        def _on_progress(**kwargs):
+            raw_on_progress(**kwargs)
+            if self._telemetry is not None:
+                try:
+                    self._telemetry.report(
+                        **{k: v for k, v in kwargs.items() if k in _TELEMETRY_KEYS}
+                    )
+                except Exception:
+                    pass
+
+        self._on_progress = _on_progress
         self._shared_dedup = shared_dedup
 
     def _get_selectors(self, site_name: str) -> dict[str, str] | None:
