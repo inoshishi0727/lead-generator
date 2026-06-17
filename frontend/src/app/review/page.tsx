@@ -3,18 +3,19 @@
 import { OutreachView } from "../outreach/page";
 
 /**
- * Review is its own sidebar destination focused on a single workflow:
- * approving generated drafts. The status tab strip (Draft / Approved /
- * Scheduled / Sent / etc.) is hidden so the operator can only see drafts
- * here — no risk of accidentally landing in conversations or sent history.
- * Keeps the Generate Drafts / Approve all action buttons and the stat
- * cards visible since those are central to the daily review loop.
+ * Review is its own sidebar destination focused on the approval loop. The tab
+ * strip is narrowed to Draft + Approved so the operator can switch between
+ * the queue waiting for approval and approved drafts pending send — without
+ * exposing Sent / Inbox / Rejected / Follow-ups / Clients (those live on the
+ * full /outreach page).
+ *
+ * Defaults to the Draft tab on first load; Approved is one click away.
  */
 export default function ReviewPage() {
   return (
     <OutreachView
       forcedTab="draft"
-      hideTabStrip
+      allowedStatusTabs={["draft", "approved"]}
       hideMainTabs
       titleOverride="Review"
       initialMainTab="messages"

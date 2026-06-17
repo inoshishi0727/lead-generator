@@ -115,10 +115,16 @@ interface OutreachViewProps {
    *  Scheduled stat counters, and the Focus Mode discovery strip. Venue/Fit
    *  filters are preserved so the operator can still narrow conversations. */
   simplifiedHeader?: boolean;
+  /** When set, the in-page status tab strip renders only this subset of tabs
+   *  (in this order) instead of the full STATUS_FILTERS list. Used by /review
+   *  to show only Draft + Approved so the operator can spot-check approved
+   *  drafts before they go out, without exposing Sent / Inbox / Rejected on
+   *  the daily review page. Ignored when hideTabStrip is true. */
+  allowedStatusTabs?: readonly string[];
 }
 
 export function OutreachView(props: OutreachViewProps = {}) {
-  const { forcedTab, hideTabStrip, titleOverride, initialMainTab, hideMainTabs, simplifiedHeader } = props;
+  const { forcedTab, hideTabStrip, titleOverride, initialMainTab, hideMainTabs, simplifiedHeader, allowedStatusTabs } = props;
   const { isAdmin, isMember, user } = useAuth();
   const searchParams = useSearchParams();
   const urlTab = searchParams.get("tab");
@@ -1219,7 +1225,7 @@ export function OutreachView(props: OutreachViewProps = {}) {
               Hidden on /inbox so the page reads as a single-purpose destination. */}
           {!hideTabStrip && (
             <div className="sp-email-status-bar">
-              {STATUS_FILTERS.map((s) => (
+              {(allowedStatusTabs ?? STATUS_FILTERS).map((s) => (
                 <button
                   key={s}
                   className={`sp-email-status-tab${statusFilter === s ? " active" : ""}`}
