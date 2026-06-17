@@ -37,7 +37,7 @@ import { BulkConfirmDialog } from "@/components/bulk-confirm-dialog";
 import { ListRail } from "@/components/outreach-list-rail";
 import { useLeads } from "@/hooks/use-leads";
 import { useOutreachPlan } from "@/hooks/use-outreach-plan";
-import { getOutreachMessages } from "@/lib/firestore-api";
+import { getOutreachMessages, watchRecentReplies } from "@/lib/firestore-api";
 import { db } from "@/lib/firebase";
 import { collection, onSnapshot, query, where } from "firebase/firestore";
 import { EditReflectionBanner } from "@/components/edit-reflection-banner";
@@ -529,6 +529,27 @@ export function OutreachView(props: OutreachViewProps = {}) {
 
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null);
 
+  // Map lead_id -> latest matched inbound reply timestamp. Used to sort the
+  // Inbox by "most recent customer reply" instead of "most recent outbound
+  // send" — without this, a thread we re-sent to last week appears above a
+  // thread that got a fresh reply yesterday, because the sort key is on the
+  // outreach_messages doc which doesn't carry the reply timestamp.
+  const [latestReplyByLead, setLatestReplyByLead] = useState<Map<string, string>>(new Map());
+
+  useEffect(() => {
+    if (!isThreadView) return;
+    const unsub = watchRecentReplies((replies) => {
+      const next = new Map<string, string>();
+      for (const r of replies) {
+        if (!r.lead_id || !r.created_at) continue;
+        const prev = next.get(r.lead_id);
+        if (!prev || r.created_at > prev) next.set(r.lead_id, r.created_at);
+      }
+      setLatestReplyByLead(next);
+    }, 100);
+    return unsub;
+  }, [isThreadView]);
+
   const conversationThreads = useMemo(() => {
     if (!isThreadView) return null;
     const threads = new Map<string, { leadId: string; businessName: string; messages: typeof allMessages }>();
@@ -539,9 +560,18 @@ export function OutreachView(props: OutreachViewProps = {}) {
       threads.get(msg.lead_id)!.messages.push(msg);
     }
     const all = Array.from(threads.values()).sort((a, b) => {
-      const latest = (msgs: typeof allMessages) =>
-        msgs.reduce((m, x) => { const t = x.sent_at || x.created_at || ""; return t > m ? t : m; }, "");
-      return latest(b.messages).localeCompare(latest(a.messages));
+      const latest = (leadId: string, msgs: typeof allMessages) => {
+        // Reply timestamp wins when present — that's the "most recent activity"
+        // the operator actually cares about. Falls back to outbound send time
+        // for threads we haven't received a reply on yet (clients view, etc).
+        const replyTs = latestReplyByLead.get(leadId) ?? "";
+        const sendTs = msgs.reduce((m, x) => {
+          const t = x.sent_at || x.created_at || "";
+          return t > m ? t : m;
+        }, "");
+        return replyTs > sendTs ? replyTs : sendTs;
+      };
+      return latest(b.leadId, b.messages).localeCompare(latest(a.leadId, a.messages));
     });
     // Apply the inbox outcome filter only on the inbox view (statusFilter ===
     // "conversations"). The "clients" thread view shouldn't be affected.
