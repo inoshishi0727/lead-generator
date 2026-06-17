@@ -2597,6 +2597,7 @@ export const assignLeads = functions
     // Audit log
     await db.collection("activity_log").add({
       action: "assign_leads",
+      actor: "user",
       lead_ids,
       assigned_to,
       assigned_to_name: assignedToName,
@@ -2664,6 +2665,7 @@ export const unassignLeads = functions
 
     await db.collection("activity_log").add({
       action: "unassign_leads",
+      actor: "user",
       lead_ids,
       performed_by: context.auth.uid,
       created_at: now,
@@ -3156,6 +3158,7 @@ export const processLeadIngestion = functions
 
         await db.collection("activity_log").add({
           type: "lead_ingested_via_email",
+          actor: "system",
           lead_id: leadId,
           business_name: lead.business_name,
           from_email: fromEmail,
@@ -3447,6 +3450,7 @@ export const processInboundEmail = functions
       // Activity log
       await db.collection("activity_log").add({
         type: "inbound_reply",
+        actor: "system",
         lead_id: matchedLead?.id || null,
         reply_id: replyId,
         matched: !!matchedLead,
@@ -3532,6 +3536,7 @@ export const logReply = functions
 
     await db.collection("activity_log").add({
       type: "manual_reply_logged",
+      actor: "user",
       lead_id,
       reply_id: replyId,
       logged_by: context.auth.uid,
@@ -3571,6 +3576,7 @@ export const updateLeadOutcome = functions
 
     await db.collection("activity_log").add({
       type: "outcome_updated",
+      actor: "user",
       lead_id,
       outcome,
       updated_by: context.auth.uid,
@@ -6751,18 +6757,35 @@ Return ONLY a JSON object. No surrounding prose, no markdown code fences. The en
 {
   "reply": "Your chat response to the operator, in your voice.",
   "proposed_overlay_md": "The overlay text in the bullet style above, or null if no overlay is proposed.",
-  "action": "chat_only" | "propose" | "simulate" | "apply" | "save_and_schedule" | "escalate",
+  "action": "chat_only" | "propose" | "simulate" | "apply" | "save_and_schedule" | "escalate" | "update_lead" | "search_leads" | "snooze_lead" | "bulk_tag",
   "foundational": false,
   "escalation_payload": {
     "request": "The operator's original intent in one short sentence.",
     "agent_reason": "Why this is foundational, one sentence.",
     "proposed_edit": "The change wording Rob would see.",
     "target_layer": "base" | "synthesized_rules"
+  },
+  "plan": {
+    "summary": "Human-readable one-liner of what's about to happen.",
+    "target_count": 1,
+    "target_ids": ["lead_id_1"],
+    "fields": { "field_name": "value" },
+    "tag": "tag-string",
+    "filter": { "stage": "qualified" },
+    "query": { "stage": "qualified" }
   }
 }
 
 If foundational is false, escalation_payload should be null.
 If action is "chat_only", proposed_overlay_md should be null.
+
+TOOL ACTIONS (non-overlay flows)
+For these actions you MUST include a "plan" object describing exactly what will run:
+- "update_lead": single-lead field edit. plan needs target_ids (array of one), fields (object with allowed keys only: email, contact_email, venue_category, tags, client_status), summary.
+- "search_leads": read-only query. plan needs query (object, supported keys: stage, venue_category, client_status, has_email, tags_include), summary.
+- "snooze_lead": sets client_status to "snoozed". plan needs target_ids (array of one), summary.
+- "bulk_tag": adds a tag to many leads. plan needs target_ids (1-500 lead ids), tag (non-empty string), target_count, filter (object describing how target_ids were derived), summary. The UI confirms anything over 5 leads.
+For all other actions (chat_only, propose, simulate, apply, save_and_schedule, escalate) omit plan.
 
 EXAMPLES
 
@@ -6813,6 +6836,19 @@ You (base prompt already bans em dashes, so it's a non-op):
 
 const COACH_VALID_ACTIONS = new Set([
   "chat_only", "propose", "simulate", "apply", "save_and_schedule", "escalate",
+  "update_lead", "search_leads", "snooze_lead", "bulk_tag",
+]);
+
+const COACH_TOOL_ACTIONS = new Set([
+  "update_lead", "search_leads", "snooze_lead", "bulk_tag",
+]);
+
+const MARLOW_UPDATE_LEAD_FIELDS = new Set([
+  "email", "contact_email", "venue_category", "tags", "client_status",
+]);
+
+const MARLOW_SEARCH_FILTER_KEYS = new Set([
+  "stage", "venue_category", "client_status", "has_email", "tags_include",
 ]);
 
 const _coachChatRate = new Map(); // uid -> [timestampMs, ...]
@@ -6910,6 +6946,7 @@ function parseCoachEnvelope(rawText) {
     action,
     foundational = false,
     escalation_payload = null,
+    plan = null,
   } = parsed;
   if (typeof reply !== "string") {
     throw new HttpsError("internal", "Marlow envelope missing string `reply`.");
@@ -6922,12 +6959,23 @@ function parseCoachEnvelope(rawText) {
   if (foundational && (!escalation_payload || typeof escalation_payload !== "object")) {
     throw new HttpsError("internal", "Marlow flagged foundational but escalation_payload is missing.");
   }
+  let normalizedPlan = null;
+  if (COACH_TOOL_ACTIONS.has(action)) {
+    if (!plan || typeof plan !== "object" || Array.isArray(plan)) {
+      throw new HttpsError("internal", `Marlow envelope missing plan for action ${action}`);
+    }
+    if (typeof plan.summary !== "string" || !plan.summary.trim()) {
+      throw new HttpsError("internal", `Marlow envelope missing plan for action ${action}`);
+    }
+    normalizedPlan = plan;
+  }
   return {
     reply,
     proposed_overlay_md: typeof proposed_overlay_md === "string" ? proposed_overlay_md : null,
     action,
     foundational: !!foundational,
     escalation_payload: foundational ? escalation_payload : null,
+    plan: normalizedPlan,
   };
 }
 
@@ -7005,6 +7053,171 @@ export const simulateDraft = functions
       content,
       used_overlay: trimmedOverlay.length > 0,
     };
+  });
+
+// ---- executeMarlowAction — Marlow-proposed tool dispatch ----
+
+async function marlowUpdateLead(plan, uid) {
+  const targetIds = Array.isArray(plan?.target_ids) ? plan.target_ids : null;
+  if (!targetIds || targetIds.length !== 1 || typeof targetIds[0] !== "string" || !targetIds[0]) {
+    throw new HttpsError("invalid-argument", "update_lead requires plan.target_ids with a single lead id.");
+  }
+  const fields = plan?.fields;
+  if (!fields || typeof fields !== "object" || Array.isArray(fields)) {
+    throw new HttpsError("invalid-argument", "update_lead requires plan.fields object.");
+  }
+  const fieldKeys = Object.keys(fields);
+  if (fieldKeys.length === 0) {
+    throw new HttpsError("invalid-argument", "update_lead plan.fields is empty.");
+  }
+  for (const key of fieldKeys) {
+    if (!MARLOW_UPDATE_LEAD_FIELDS.has(key)) {
+      throw new HttpsError("invalid-argument", `Field not allowed for marlow update_lead: ${key}`);
+    }
+  }
+  const leadId = targetIds[0];
+  const leadRef = db.collection("leads").doc(leadId);
+  const leadSnap = await leadRef.get();
+  if (!leadSnap.exists) throw new HttpsError("not-found", `Lead ${leadId} not found.`);
+
+  await leadRef.update({ ...fields, updated_at: new Date().toISOString() });
+
+  await db.collection("activity_log").add({
+    action: "marlow_update_lead",
+    actor: "marlow",
+    lead_id: leadId,
+    fields_changed: fieldKeys,
+    performed_by: uid,
+    created_at: new Date().toISOString(),
+  });
+
+  return { status: "ok", lead_id: leadId };
+}
+
+async function marlowSearchLeads(plan, uid) {
+  const query = plan?.query;
+  if (!query || typeof query !== "object" || Array.isArray(query)) {
+    throw new HttpsError("invalid-argument", "search_leads requires plan.query object.");
+  }
+  for (const key of Object.keys(query)) {
+    if (!MARLOW_SEARCH_FILTER_KEYS.has(key)) {
+      throw new HttpsError("invalid-argument", `Filter not supported for marlow search_leads: ${key}`);
+    }
+  }
+
+  let ref = db.collection("leads");
+  if (typeof query.stage === "string" && query.stage) {
+    ref = ref.where("stage", "==", query.stage);
+  }
+  if (typeof query.venue_category === "string" && query.venue_category) {
+    ref = ref.where("venue_category", "==", query.venue_category);
+  }
+  if (typeof query.client_status === "string" && query.client_status) {
+    ref = ref.where("client_status", "==", query.client_status);
+  }
+  if (typeof query.tags_include === "string" && query.tags_include) {
+    ref = ref.where("tags", "array-contains", query.tags_include);
+  }
+
+  const snap = await ref.limit(200).get();
+  let results = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  if (typeof query.has_email === "boolean") {
+    results = results.filter((lead) => {
+      const hasEmail = !!(lead.email || lead.contact_email);
+      return query.has_email ? hasEmail : !hasEmail;
+    });
+  }
+  results = results.slice(0, 50);
+
+  await db.collection("activity_log").add({
+    action: "marlow_search_leads",
+    actor: "marlow",
+    query,
+    result_count: results.length,
+    performed_by: uid,
+    created_at: new Date().toISOString(),
+  });
+
+  return { results, count: results.length };
+}
+
+async function marlowSnoozeLead(plan, uid) {
+  const targetIds = Array.isArray(plan?.target_ids) ? plan.target_ids : null;
+  if (!targetIds || targetIds.length !== 1 || typeof targetIds[0] !== "string" || !targetIds[0]) {
+    throw new HttpsError("invalid-argument", "snooze_lead requires plan.target_ids with a single lead id.");
+  }
+  const leadId = targetIds[0];
+  const leadRef = db.collection("leads").doc(leadId);
+  const leadSnap = await leadRef.get();
+  if (!leadSnap.exists) throw new HttpsError("not-found", `Lead ${leadId} not found.`);
+
+  await leadRef.update({
+    client_status: "snoozed",
+    updated_at: new Date().toISOString(),
+  });
+
+  await db.collection("activity_log").add({
+    action: "marlow_snooze_lead",
+    actor: "marlow",
+    lead_id: leadId,
+    performed_by: uid,
+    created_at: new Date().toISOString(),
+  });
+
+  return { status: "ok", lead_id: leadId };
+}
+
+async function marlowBulkTag(plan, uid) {
+  const targetIds = Array.isArray(plan?.target_ids) ? plan.target_ids : null;
+  if (!targetIds || targetIds.length < 1 || targetIds.length > 500) {
+    throw new HttpsError("invalid-argument", "bulk_tag requires plan.target_ids of length 1-500.");
+  }
+  if (!targetIds.every((id) => typeof id === "string" && id)) {
+    throw new HttpsError("invalid-argument", "bulk_tag plan.target_ids must all be non-empty strings.");
+  }
+  const tag = typeof plan?.tag === "string" ? plan.tag.trim() : "";
+  if (!tag) throw new HttpsError("invalid-argument", "bulk_tag requires non-empty plan.tag string.");
+
+  const BATCH_LIMIT = 500;
+  for (let i = 0; i < targetIds.length; i += BATCH_LIMIT) {
+    const batch = db.batch();
+    const chunk = targetIds.slice(i, i + BATCH_LIMIT);
+    for (const id of chunk) {
+      batch.update(db.collection("leads").doc(id), {
+        tags: FieldValue.arrayUnion(tag),
+        updated_at: new Date().toISOString(),
+      });
+    }
+    await batch.commit();
+  }
+
+  await db.collection("activity_log").add({
+    action: "marlow_bulk_tag",
+    actor: "marlow",
+    lead_count: targetIds.length,
+    tag,
+    performed_by: uid,
+    created_at: new Date().toISOString(),
+  });
+
+  return { status: "ok", lead_count: targetIds.length };
+}
+
+export const executeMarlowAction = functions
+  .runWith({ timeoutSeconds: 60, memory: "256MB" })
+  .https.onCall(async (data, context) => {
+    if (!context.auth) throw new HttpsError("unauthenticated", "Sign in required.");
+    const { action, plan } = data || {};
+    if (typeof action !== "string") throw new HttpsError("invalid-argument", "Missing action.");
+    if (!plan || typeof plan !== "object") throw new HttpsError("invalid-argument", "Missing plan.");
+
+    switch (action) {
+      case "update_lead": return await marlowUpdateLead(plan, context.auth.uid);
+      case "search_leads": return await marlowSearchLeads(plan, context.auth.uid);
+      case "snooze_lead": return await marlowSnoozeLead(plan, context.auth.uid);
+      case "bulk_tag": return await marlowBulkTag(plan, context.auth.uid);
+      default: throw new HttpsError("invalid-argument", `Unknown action: ${action}`);
+    }
   });
 
 // ---- Backfill content ratings for existing replied emails ----
@@ -7478,5 +7691,93 @@ Return ONLY valid JSON in this exact shape (no markdown, no commentary):
       console.error("applyDraftSuggestions failed:", err.message, err.stack);
       throw new HttpsError("internal", "Failed to rewrite draft.");
     }
+  });
+
+// ---- recordScrapeProgress (HTTP, bearer-token auth) ----
+// VPS scraper POSTs phase/progress every ~15s during a run. Kept as onRequest
+// (not callable) because the VPS isn't a Firebase Auth user. Shared-secret
+// bearer token lives in process.env.SCRAPE_PROGRESS_TOKEN.
+
+const SCRAPE_PHASES = new Set(["warmup", "scrolling", "extracting", "saving", "done"]);
+
+export const recordScrapeProgress = functions
+  .runWith({ timeoutSeconds: 30, memory: "128MB" })
+  .https.onRequest(async (req, res) => {
+    if (req.method !== "POST") {
+      res.status(405).json({ error: "method_not_allowed" });
+      return;
+    }
+    const expected = process.env.SCRAPE_PROGRESS_TOKEN;
+    if (!expected) {
+      console.error("recordScrapeProgress: SCRAPE_PROGRESS_TOKEN not configured");
+      res.status(500).json({ error: "server_misconfigured" });
+      return;
+    }
+    const auth = req.get("Authorization") || "";
+    const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+    if (token !== expected) {
+      res.status(401).json({ error: "unauthorized" });
+      return;
+    }
+
+    const body = req.body || {};
+    const runId = typeof body.run_id === "string" ? body.run_id.trim() : "";
+    if (!runId) {
+      res.status(400).json({ error: "missing_run_id" });
+      return;
+    }
+
+    const updates = {};
+    if (typeof body.phase === "string" && SCRAPE_PHASES.has(body.phase)) {
+      updates.phase = body.phase;
+    }
+    if (typeof body.progress_pct === "number" && body.progress_pct >= 0 && body.progress_pct <= 100) {
+      updates.progress_pct = body.progress_pct;
+    }
+    if (typeof body.current_query === "string") {
+      updates.current_query = body.current_query.slice(0, 200);
+    }
+    if (typeof body.current_lead === "string") {
+      updates.current_lead = body.current_lead.slice(0, 200);
+    }
+    if (typeof body.leads_found === "number" && body.leads_found >= 0) {
+      updates.leads_found = body.leads_found;
+    }
+    updates.progress_updated_at = new Date().toISOString();
+
+    try {
+      await db.collection("scrape_runs").doc(runId).set(updates, { merge: true });
+      res.status(200).json({ ok: true });
+    } catch (err) {
+      console.error("recordScrapeProgress write failed:", err.message);
+      res.status(500).json({ error: "write_failed" });
+    }
+  });
+
+// ---- tag_index maintenance (Firestore trigger) ----
+// Maintains a single tag_index/counts doc with usage counts per tag. Used by
+// the smart-suggest autocomplete to surface existing tags + near-matches.
+
+export const onLeadWrite_updateTagIndex = functions.firestore
+  .document("leads/{leadId}")
+  .onWrite(async (change) => {
+    const before = change.before.exists ? change.before.data() : {};
+    const after = change.after.exists ? change.after.data() : {};
+    const beforeTags = Array.isArray(before.tags) ? before.tags : [];
+    const afterTags = Array.isArray(after.tags) ? after.tags : [];
+
+    const beforeSet = new Set(beforeTags);
+    const afterSet = new Set(afterTags);
+    const added = afterTags.filter((t) => typeof t === "string" && t && !beforeSet.has(t));
+    const removed = beforeTags.filter((t) => typeof t === "string" && t && !afterSet.has(t));
+
+    if (added.length === 0 && removed.length === 0) return null;
+
+    const updates = {};
+    for (const t of added) updates[t] = FieldValue.increment(1);
+    for (const t of removed) updates[t] = FieldValue.increment(-1);
+
+    await db.collection("tag_index").doc("counts").set(updates, { merge: true });
+    return null;
   });
 

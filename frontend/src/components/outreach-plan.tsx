@@ -31,8 +31,8 @@ const SEASON_ICONS: Record<string, React.ElementType> = {
 const FIT_COLORS: Record<string, string> = {
   strong: "text-emerald-400",
   moderate: "text-amber-400",
-  weak: "text-zinc-500",
-  unknown: "text-zinc-600",
+  weak: "text-rose-400",
+  unknown: "text-slate-500",
 };
 
 export function LeadRow({ lead, rank, onClick }: { lead: OutreachLead; rank: number; onClick?: () => void }) {

@@ -590,6 +590,11 @@ export interface ScrapeRunRecord {
   /** Set client-side from the stale-banner Dismiss action. When present, the
    *  banner hides the run even if status is still "running". */
   dismissed_at?: string | null;
+  phase?: "warmup" | "scrolling" | "extracting" | "saving" | "done" | null;
+  progress_pct?: number | null;
+  current_query?: string | null;
+  current_lead?: string | null;
+  default_tags?: string[];
 }
 
 /** Mark a stalled scrape run as dismissed so the banner stops surfacing it.
@@ -617,6 +622,25 @@ export function watchLatestScrapeRun(
   const q = query(ref, orderBy("started_at", "desc"), fbLimit(1));
   return onSnapshot(q, (snap) => {
     callback(snap.empty ? null : (snap.docs[0].data() as ScrapeRunRecord));
+  });
+}
+
+/** Real-time listener for recent scrape runs (manual or scheduled), newest first.
+ *  Falls back to the Firestore doc id when a run was written without an explicit
+ *  id field. */
+export function watchScrapeRuns(
+  callback: (runs: ScrapeRunRecord[]) => void,
+  max = 50
+): () => void {
+  const ref = collection(db, "scrape_runs");
+  const q = query(ref, orderBy("started_at", "desc"), fbLimit(max));
+  return onSnapshot(q, (snap) => {
+    callback(
+      snap.docs.map((d) => {
+        const data = d.data() as ScrapeRunRecord;
+        return { ...data, id: data.id || d.id };
+      })
+    );
   });
 }
 

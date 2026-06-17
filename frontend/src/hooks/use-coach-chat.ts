@@ -4,10 +4,32 @@ import { useState } from "react";
 import { httpsCallable } from "firebase/functions";
 import { functions } from "@/lib/firebase";
 
+export type CoachAction =
+  | "chat_only"
+  | "propose"
+  | "simulate"
+  | "apply"
+  | "save_and_schedule"
+  | "escalate"
+  | "update_lead"
+  | "search_leads"
+  | "snooze_lead"
+  | "bulk_tag";
+
+export interface CoachPlan {
+  summary: string;
+  target_count?: number;
+  target_ids?: string[];
+  fields?: Record<string, unknown>;
+  tag?: string;
+  filter?: Record<string, unknown>;
+  query?: Record<string, unknown>;
+}
+
 export interface CoachEnvelope {
   reply: string;
   proposed_overlay_md: string | null;
-  action: "chat_only" | "propose" | "simulate" | "apply" | "save_and_schedule" | "escalate";
+  action: CoachAction;
   foundational: boolean;
   escalation_payload: {
     request: string;
@@ -15,6 +37,7 @@ export interface CoachEnvelope {
     proposed_edit: string;
     target_layer: "base" | "synthesized_rules";
   } | null;
+  plan?: CoachPlan;
 }
 
 export interface CoachTurn {

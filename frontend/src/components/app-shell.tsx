@@ -1,9 +1,11 @@
 "use client";
 
-import { useRef, useState, useEffect } from "react";
+import { useMemo, useRef, useState, useEffect } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { AppSidebar } from "@/components/app-sidebar";
 import { useTheme } from "@/components/theme-provider";
+import { AutocompleteInput, type Suggestion } from "@/components/autocomplete-input";
+import { useLeads } from "@/hooks/use-leads";
 
 const CRUMB_MAP: Record<string, string> = {
   "/": "Dashboard",
@@ -15,6 +17,7 @@ const CRUMB_MAP: Record<string, string> = {
   "/analytics": "Analytics",
   "/analytics/cost": "AI Cost",
   "/log": "Diagnostics",
+  "/scrapes": "Scrapes",
   "/settings": "Settings",
   "/help": "Help",
 };
@@ -32,6 +35,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
+  const { data: allLeads = [] } = useLeads();
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -44,17 +48,29 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
-  function handleSearchSubmit(e: React.KeyboardEvent<HTMLInputElement>) {
-    if (e.key === "Enter" && query.trim()) {
-      router.push(`/leads?q=${encodeURIComponent(query.trim())}`);
-      setQuery("");
-      inputRef.current?.blur();
+  const globalSuggestions: Suggestion[] = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q || allLeads.length === 0) return [];
+    const matches: { lead: typeof allLeads[number]; weight: number }[] = [];
+    for (const lead of allLeads) {
+      const name = (lead.business_name ?? "").toLowerCase();
+      const email = (lead.email ?? "").toLowerCase();
+      const area = (lead.location_area ?? lead.location_city ?? "").toLowerCase();
+      if (!name && !email) continue;
+      if (name.startsWith(q)) matches.push({ lead, weight: 0 });
+      else if (name.includes(q)) matches.push({ lead, weight: 1 });
+      else if (email.includes(q)) matches.push({ lead, weight: 2 });
+      else if (area.includes(q)) matches.push({ lead, weight: 3 });
+      if (matches.length >= 60) break;
     }
-    if (e.key === "Escape") {
-      setQuery("");
-      inputRef.current?.blur();
-    }
-  }
+    matches.sort((a, b) => a.weight - b.weight);
+    return matches.slice(0, 8).map(({ lead }) => ({
+      id: lead.id,
+      label: lead.business_name || "(unnamed)",
+      sublabel: [lead.email, lead.location_area || lead.location_city].filter(Boolean).join(" · ") || undefined,
+      meta: lead.venue_category?.replace(/_/g, " ") ?? undefined,
+    }));
+  }, [query, allLeads]);
 
   const isEmulator = process.env.NEXT_PUBLIC_USE_EMULATORS === "true";
 
@@ -122,18 +138,24 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               </svg>
             )}
           </button>
-          <div className="sp-topbar-search">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="11" cy="11" r="7" /><path d="M21 21l-4.3-4.3" />
-            </svg>
-            <input
-              ref={inputRef}
-              placeholder="Search leads, emails, venues…"
+          <div className="sp-topbar-search" style={{ position: "relative" }}>
+            <AutocompleteInput
+              inputRef={inputRef}
               value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={handleSearchSubmit}
+              onChange={setQuery}
+              suggestions={globalSuggestions}
+              placeholder="Search leads, emails, venues…"
+              onSelect={(s) => {
+                router.push(`/leads?focus=${encodeURIComponent(s.id)}`);
+                setQuery("");
+                inputRef.current?.blur();
+              }}
+              onSubmit={(v) => {
+                router.push(`/leads?q=${encodeURIComponent(v)}`);
+                setQuery("");
+                inputRef.current?.blur();
+              }}
             />
-            <kbd>⌘K</kbd>
           </div>
         </div>
         <div className="sp-content">

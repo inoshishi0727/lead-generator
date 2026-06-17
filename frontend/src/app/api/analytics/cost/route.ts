@@ -169,7 +169,17 @@ export async function GET(req: NextRequest) {
       daily,
     });
   } catch (err) {
-    console.error("Cost analytics error:", err);
-    return NextResponse.json({ error: "Cost analytics failed" }, { status: 500 });
+    const message = err instanceof Error ? err.message : String(err);
+    const stack = err instanceof Error ? err.stack : undefined;
+    console.error("Cost analytics error:", message, stack);
+    return NextResponse.json(
+      {
+        error: "Cost analytics failed",
+        detail: message,
+        // Surface stack in non-production so the dashboard can show the real cause.
+        ...(process.env.NODE_ENV !== "production" && stack ? { stack } : {}),
+      },
+      { status: 500 },
+    );
   }
 }

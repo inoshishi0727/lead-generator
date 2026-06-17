@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ClipboardList, RefreshCw } from "lucide-react";
+import { ChevronDown, ClipboardList, RefreshCw } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -25,6 +25,7 @@ const SOURCE_COLOR: Record<GenerationLogEntry["generation_source"], string> = {
 
 export default function GenerationLogPage() {
   const [sourceFilter, setSourceFilter] = useState<string>("");
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const { data: entries = [], isLoading, refetch } = useGenerationLog({
     generation_source: sourceFilter || undefined,
@@ -72,37 +73,66 @@ export default function GenerationLogPage() {
             </div>
           ) : (
             <div className="divide-y divide-border">
-              {entries.map((entry) => (
-                <div key={entry.id} className="px-4 py-3 hover:bg-muted/30 transition-colors">
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2 flex-wrap mb-1">
-                        <span className="text-sm font-medium truncate">{entry.business_name}</span>
-                        {entry.venue_category && (
-                          <span className="text-xs text-muted-foreground">
-                            {entry.venue_category.replace(/_/g, " ")}
+              {entries.map((entry) => {
+                const isOpen = expandedId === entry.id;
+                return (
+                  <div key={entry.id}>
+                    <button
+                      type="button"
+                      onClick={() => setExpandedId(isOpen ? null : entry.id)}
+                      className="w-full text-left px-4 py-3 hover:bg-muted/40 transition-colors focus:outline-none focus-visible:bg-muted/40"
+                      aria-expanded={isOpen}
+                    >
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2 flex-wrap mb-1">
+                            <ChevronDown
+                              className={`h-3 w-3 text-muted-foreground transition-transform ${isOpen ? "rotate-0" : "-rotate-90"}`}
+                            />
+                            <span className="text-sm font-medium truncate">{entry.business_name}</span>
+                            {entry.venue_category && (
+                              <span className="text-xs text-muted-foreground">
+                                {entry.venue_category.replace(/_/g, " ")}
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-xs text-muted-foreground truncate pl-5">
+                            {entry.subject || "(no subject)"}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-1.5 flex-shrink-0 flex-wrap justify-end">
+                          <Badge variant="outline" className={`text-[10px] ${SOURCE_COLOR[entry.generation_source] ?? ""}`}>
+                            {SOURCE_LABEL[entry.generation_source] ?? entry.generation_source}
+                          </Badge>
+                          <span className="text-[10px] text-muted-foreground whitespace-nowrap">
+                            {entry.generated_at
+                              ? new Date(entry.generated_at).toLocaleDateString("en-GB", {
+                                  day: "numeric", month: "short", hour: "2-digit", minute: "2-digit",
+                                })
+                              : "—"}
                           </span>
-                        )}
+                        </div>
                       </div>
-                      <p className="text-xs text-muted-foreground truncate">
-                        {entry.subject || "(no subject)"}
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-1.5 flex-shrink-0 flex-wrap justify-end">
-                      <Badge variant="outline" className={`text-[10px] ${SOURCE_COLOR[entry.generation_source] ?? ""}`}>
-                        {SOURCE_LABEL[entry.generation_source] ?? entry.generation_source}
-                      </Badge>
-                      <span className="text-[10px] text-muted-foreground whitespace-nowrap">
-                        {entry.generated_at
-                          ? new Date(entry.generated_at).toLocaleDateString("en-GB", {
-                              day: "numeric", month: "short", hour: "2-digit", minute: "2-digit",
-                            })
-                          : "—"}
-                      </span>
-                    </div>
+                    </button>
+                    {isOpen && (
+                      <div className="px-4 pb-4 pl-9 space-y-2 bg-muted/20">
+                        <div>
+                          <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Subject</p>
+                          <p className="text-sm">{entry.subject || "(no subject)"}</p>
+                        </div>
+                        <div>
+                          <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">
+                            Content · step {entry.step_number}
+                          </p>
+                          <pre className="text-sm font-sans whitespace-pre-wrap break-words text-foreground/90">
+                            {entry.content || "(no content)"}
+                          </pre>
+                        </div>
+                      </div>
+                    )}
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </CardContent>

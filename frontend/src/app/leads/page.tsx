@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useMemo, useEffect, Suspense } from "react";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { LeadsTable } from "@/components/leads-table";
 import { useLeads, useEnrichLeads } from "@/hooks/use-leads";
@@ -18,6 +18,187 @@ import { getTeamMembers } from "@/lib/auth-admin";
 import { Search, Sparkles, Loader2, Plus, Settings2, Link2Off, Mail, X, RefreshCw, MoreHorizontal } from "lucide-react";
 import { Menu, MenuTrigger, MenuContent, MenuItem } from "@/components/ui/menu";
 import { LeadsFilterBanner, type ActiveFilter } from "@/components/leads-filter-banner";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { useViewedLeads } from "@/lib/lead-viewed";
+import { priorityScore } from "@/lib/priority-score";
+import { AutocompleteInput, type Suggestion } from "@/components/autocomplete-input";
+import type { Lead } from "@/lib/types";
+
+type SortOption =
+  | "newest"
+  | "oldest"
+  | "recent_24h"
+  | "last_7d"
+  | "highest_score"
+  | "highest_priority"
+  | "needs_attention";
+
+const SORT_OPTIONS: { value: SortOption; label: string }[] = [
+  { value: "newest", label: "Newest first" },
+  { value: "oldest", label: "Oldest first" },
+  { value: "highest_priority", label: "Highest priority" },
+  { value: "highest_score", label: "Highest score" },
+  { value: "recent_24h", label: "Recently added (24h)" },
+  { value: "last_7d", label: "Last 7 days" },
+  { value: "needs_attention", label: "Needs attention" },
+];
+
+const VALID_SORTS = new Set<SortOption>(SORT_OPTIONS.map((o) => o.value));
+
+function parseSort(value: string | null): SortOption {
+  if (value && VALID_SORTS.has(value as SortOption)) return value as SortOption;
+  return "newest";
+}
+
+type RecencyOption = "all" | "today" | "7d" | "30d";
+
+const RECENCY_OPTIONS: { value: RecencyOption; label: string }[] = [
+  { value: "all", label: "All time" },
+  { value: "today", label: "Today" },
+  { value: "7d", label: "7d" },
+  { value: "30d", label: "30d" },
+];
+
+const VALID_RECENCY = new Set<RecencyOption>(RECENCY_OPTIONS.map((o) => o.value));
+
+function parseRecency(value: string | null): RecencyOption {
+  if (value && VALID_RECENCY.has(value as RecencyOption)) return value as RecencyOption;
+  return "all";
+}
+
+function applyRecencyFilter(leads: Lead[], recency: RecencyOption): Lead[] {
+  if (recency === "all") return leads;
+  const now = Date.now();
+  const window =
+    recency === "today" ? 24 * 60 * 60 * 1000 :
+    recency === "7d" ? 7 * 24 * 60 * 60 * 1000 :
+    30 * 24 * 60 * 60 * 1000;
+  const cutoff = now - window;
+  return leads.filter((l) => {
+    const t = ts(l.created_at);
+    return t !== null && t >= cutoff;
+  });
+}
+
+function ts(s: string | null | undefined): number | null {
+  if (!s) return null;
+  const t = new Date(s).getTime();
+  return Number.isFinite(t) ? t : null;
+}
+
+function compareNullsLast(a: number | null, b: number | null, dir: "asc" | "desc"): number {
+  if (a === null && b === null) return 0;
+  if (a === null) return 1;
+  if (b === null) return -1;
+  return dir === "desc" ? b - a : a - b;
+}
+
+function applySort(input: Lead[], sort: SortOption): Lead[] {
+  const now = Date.now();
+  const arr = [...input];
+  switch (sort) {
+    case "newest":
+      arr.sort((a, b) => compareNullsLast(ts(a.created_at), ts(b.created_at), "desc"));
+      return arr;
+    case "oldest":
+      arr.sort((a, b) => compareNullsLast(ts(a.created_at), ts(b.created_at), "asc"));
+      return arr;
+    case "recent_24h": {
+      const cutoff = now - 24 * 60 * 60 * 1000;
+      return arr
+        .filter((l) => {
+          const t = ts(l.created_at);
+          return t !== null && t >= cutoff;
+        })
+        .sort((a, b) => compareNullsLast(ts(a.created_at), ts(b.created_at), "desc"));
+    }
+    case "last_7d": {
+      const cutoff = now - 7 * 24 * 60 * 60 * 1000;
+      return arr
+        .filter((l) => {
+          const t = ts(l.created_at);
+          return t !== null && t >= cutoff;
+        })
+        .sort((a, b) => compareNullsLast(ts(a.created_at), ts(b.created_at), "desc"));
+    }
+    case "highest_score":
+      arr.sort((a, b) => {
+        const s = compareNullsLast(a.score, b.score, "desc");
+        if (s !== 0) return s;
+        return compareNullsLast(ts(a.created_at), ts(b.created_at), "desc");
+      });
+      return arr;
+    case "highest_priority":
+      arr.sort((a, b) => {
+        const pa = priorityScore(a);
+        const pb = priorityScore(b);
+        if (pb !== pa) return pb - pa;
+        return compareNullsLast(ts(a.created_at), ts(b.created_at), "desc");
+      });
+      return arr;
+    case "needs_attention": {
+      const staleCutoff = now - 14 * 24 * 60 * 60 * 1000;
+      return arr
+        .filter((l) => {
+          if (l.enrichment_status !== "success") return true;
+          const t = ts(l.created_at);
+          if (t !== null && t < staleCutoff && !l.email) return true;
+          return false;
+        })
+        .sort((a, b) => compareNullsLast(ts(a.created_at), ts(b.created_at), "desc"));
+    }
+  }
+}
+
+function computeLatestCohort(leads: Lead[]): Set<string> {
+  if (leads.length === 0) return new Set();
+  const withBatch = leads.filter((l) => l.batch_id);
+  if (withBatch.length > 0) {
+    const counts = new Map<string, { count: number; latest: number }>();
+    for (const l of withBatch) {
+      const t = ts(l.created_at) ?? 0;
+      const prev = counts.get(l.batch_id!);
+      if (prev) {
+        prev.count += 1;
+        if (t > prev.latest) prev.latest = t;
+      } else {
+        counts.set(l.batch_id!, { count: 1, latest: t });
+      }
+    }
+    let topBatch: string | null = null;
+    let topLatest = -Infinity;
+    for (const [batchId, info] of counts) {
+      if (info.latest > topLatest) {
+        topLatest = info.latest;
+        topBatch = batchId;
+      }
+    }
+    if (topBatch) {
+      return new Set(leads.filter((l) => l.batch_id === topBatch).map((l) => l.id));
+    }
+  }
+  let max = -Infinity;
+  for (const l of leads) {
+    const t = ts(l.created_at);
+    if (t !== null && t > max) max = t;
+  }
+  if (max === -Infinity) return new Set();
+  const windowStart = max - 60 * 60 * 1000;
+  return new Set(
+    leads
+      .filter((l) => {
+        const t = ts(l.created_at);
+        return t !== null && t >= windowStart;
+      })
+      .map((l) => l.id)
+  );
+}
 
 const SOURCE_OPTIONS = [
   { value: "", label: "All Sources" },
@@ -60,15 +241,50 @@ const STAGE_GROUPS = [
 function LeadsPageInner() {
   const { isAdmin, isMember, user, workspaceId } = useAuth();
   const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
   const [source, setSource] = useState("");
   const [stage, setStage] = useState("");
   const [search, setSearch] = useState(() => searchParams.get("q") ?? "");
+  const [sort, setSort] = useState<SortOption>(() => parseSort(searchParams.get("sort")));
+  const [recency, setRecency] = useState<RecencyOption>(() => parseRecency(searchParams.get("recency")));
   const debouncedSearch = useDebounce(search, 300);
+  const viewedSet = useViewedLeads();
 
   useEffect(() => {
     const q = searchParams.get("q");
     if (q) setSearch(q);
+    const s = parseSort(searchParams.get("sort"));
+    setSort((curr) => (curr === s ? curr : s));
+    const r = parseRecency(searchParams.get("recency"));
+    setRecency((curr) => (curr === r ? curr : r));
+    const focus = searchParams.get("focus");
+    if (focus) {
+      setOpenLeadId(focus);
+      const params = new URLSearchParams(searchParams.toString());
+      params.delete("focus");
+      const qs = params.toString();
+      router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+    }
   }, [searchParams]);
+
+  const handleSortChange = (value: SortOption) => {
+    setSort(value);
+    const params = new URLSearchParams(searchParams.toString());
+    if (value === "newest") params.delete("sort");
+    else params.set("sort", value);
+    const qs = params.toString();
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+  };
+
+  const handleRecencyChange = (value: RecencyOption) => {
+    setRecency(value);
+    const params = new URLSearchParams(searchParams.toString());
+    if (value === "all") params.delete("recency");
+    else params.set("recency", value);
+    const qs = params.toString();
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+  };
   const [category, setCategory] = useState("");
   const [fit, setFit] = useState("");
   const [postcode, setPostcode] = useState("");
@@ -180,8 +396,36 @@ function LeadsPageInner() {
     if (assignedToFilter === "__unassigned__") filtered = filtered.filter((l) => !l.assigned_to);
     if (noMenuUrl) filtered = filtered.filter((l) => !l.menu_url || l.menu_url === "not_found");
     if (newLeadIds) filtered = filtered.filter((l) => newLeadIds.has(l.id));
-    return filtered;
-  }, [allLeads, source, stage, emailOnly, category, fit, postcode, assignedToFilter, noMenuUrl, newLeadIds]);
+    filtered = applyRecencyFilter(filtered, recency);
+    return applySort(filtered, sort);
+  }, [allLeads, source, stage, emailOnly, category, fit, postcode, assignedToFilter, noMenuUrl, newLeadIds, sort, recency]);
+
+  const latestCohort = useMemo(() => computeLatestCohort(allLeads), [allLeads]);
+
+  const searchSuggestions: Suggestion[] = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q || allLeads.length === 0) return [];
+    const matches: { lead: Lead; weight: number }[] = [];
+    for (const lead of allLeads) {
+      const name = (lead.business_name ?? "").toLowerCase();
+      const email = (lead.email ?? "").toLowerCase();
+      const city = (lead.location_city ?? "").toLowerCase();
+      const area = (lead.location_area ?? "").toLowerCase();
+      if (!name && !email) continue;
+      if (name.startsWith(q)) matches.push({ lead, weight: 0 });
+      else if (name.includes(q)) matches.push({ lead, weight: 1 });
+      else if (email.includes(q)) matches.push({ lead, weight: 2 });
+      else if (city.includes(q) || area.includes(q)) matches.push({ lead, weight: 3 });
+      if (matches.length >= 60) break;
+    }
+    matches.sort((a, b) => a.weight - b.weight);
+    return matches.slice(0, 8).map(({ lead }) => ({
+      id: lead.id,
+      label: lead.business_name || "(unnamed)",
+      sublabel: [lead.email, lead.location_area || lead.location_city].filter(Boolean).join(" · ") || undefined,
+      meta: lead.venue_category?.replace(/_/g, " ") ?? undefined,
+    }));
+  }, [search, allLeads]);
 
   const total = leads.length;
   const totalRaw = allLeads.length;
@@ -484,14 +728,58 @@ function LeadsPageInner() {
 
         {/* Row 2: search + checkboxes — always on its own line, never reflowed */}
         <div className="flex items-center gap-4">
-          <div className="relative w-72">
-            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              placeholder="Search leads..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="pl-9"
-            />
+          <AutocompleteInput
+            className="w-72"
+            placeholder="Search leads..."
+            value={search}
+            onChange={setSearch}
+            suggestions={searchSuggestions}
+            onSelect={(s) => {
+              setOpenLeadId(s.id);
+              setSearch("");
+            }}
+          />
+
+
+          <div className="flex items-center gap-2 text-sm">
+            <span className="text-muted-foreground">Sort:</span>
+            <Select
+              value={sort}
+              onValueChange={(v) => handleSortChange(v as SortOption)}
+            >
+              <SelectTrigger className="w-48" aria-label="Sort leads">
+                <SelectValue placeholder="Newest first" />
+              </SelectTrigger>
+              <SelectContent>
+                {SORT_OPTIONS.map((opt) => (
+                  <SelectItem key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="flex items-center gap-1.5 text-sm" role="group" aria-label="Filter by added date">
+            <span className="text-muted-foreground">Added:</span>
+            {RECENCY_OPTIONS.map((opt) => {
+              const active = recency === opt.value;
+              return (
+                <button
+                  key={opt.value}
+                  type="button"
+                  onClick={() => handleRecencyChange(opt.value)}
+                  className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors border ${
+                    active
+                      ? "bg-primary text-primary-foreground border-primary"
+                      : "bg-transparent text-muted-foreground border-border hover:bg-muted/40 hover:text-foreground"
+                  }`}
+                  aria-pressed={active}
+                >
+                  {opt.label}
+                </button>
+              );
+            })}
           </div>
 
           <label className="flex items-center gap-2 text-sm">
@@ -624,6 +912,8 @@ function LeadsPageInner() {
           onSelectionChange={setSelectedLeadIds}
           openLeadId={openLeadId}
           onLeadOpened={() => setOpenLeadId(null)}
+          latestCohort={latestCohort}
+          viewedSet={viewedSet}
         />
       </div>
 

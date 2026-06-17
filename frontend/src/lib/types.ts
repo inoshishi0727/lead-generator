@@ -109,6 +109,7 @@ export interface Lead {
   outcome: LeadOutcome | null;
   outcome_updated_at: string | null;
   reply_count: number;
+  tags?: string[];
 }
 
 export interface LeadDetail extends Lead {

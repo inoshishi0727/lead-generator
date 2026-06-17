@@ -22,6 +22,10 @@ interface ListRailProps {
   unreadByLead: Map<string, number>;
   /** Optional per-thread outcome so the rail can show a small status dot. */
   outcomeByLead?: Map<string, LeadOutcome | null | undefined>;
+  /** Optional per-thread venue category (Cocktail Bar, Wine Bar, etc.) for
+   *  the small chip rendered under the business name. Caller is responsible
+   *  for snake_case → label formatting; null/undefined hides the chip. */
+  categoryByLead?: Map<string, string | null | undefined>;
   /** Renders the non-thread (drafts/sent/scheduled/etc.) list. The drafts list
    *  is bounded by the daily 20-cap so it does not need virtualizing. */
   children?: ReactNode;
@@ -58,6 +62,7 @@ export function ListRail({
   onSelectThread,
   unreadByLead,
   outcomeByLead,
+  categoryByLead,
   children,
   onLoadMore,
   canLoadMore,
@@ -66,9 +71,13 @@ export function ListRail({
 
   const virtualizer = useVirtualizer({
     count: isThreadView ? conversationThreads.length : 0,
-    estimateSize: () => 64,
+    // Baseline estimate is row-with-chip-tall so cards without one over-allocate
+    // a bit instead of under-allocating and overlapping. measureElement below
+    // corrects to real heights once the row mounts.
+    estimateSize: () => 84,
     overscan: 8,
     getScrollElement: () => scrollRef.current,
+    measureElement: (el) => el.getBoundingClientRect().height,
   });
 
   if (isLoading) {
@@ -110,6 +119,7 @@ export function ListRail({
             return (
               <div
                 key={leadId}
+                ref={virtualizer.measureElement}
                 data-index={virtualItem.index}
                 className={`sp-email-item${isSelected ? " selected" : ""}`}
                 onClick={() => onSelectThread(leadId)}
@@ -165,6 +175,28 @@ export function ListRail({
                     <span className="sp-email-item-time">{msgs.length} msg</span>
                   )}
                 </div>
+                {(() => {
+                  const cat = categoryByLead?.get(leadId);
+                  if (!cat) return null;
+                  return (
+                    <div style={{ marginTop: 2 }}>
+                      <span style={{
+                        fontSize: 10,
+                        padding: "1px 7px",
+                        borderRadius: 999,
+                        background: "var(--sp-bg-sunken)",
+                        border: "1px solid var(--sp-line)",
+                        color: "var(--sp-ink-3)",
+                        whiteSpace: "nowrap",
+                        lineHeight: 1.5,
+                        display: "inline-block",
+                        textTransform: "capitalize",
+                      }}>
+                        {cat.replace(/_/g, " ")}
+                      </span>
+                    </div>
+                  );
+                })()}
                 <div className="sp-email-item-prev">
                   {msgs[0]?.subject || msgs[0]?.content?.split("\n").filter(Boolean)[0]}
                 </div>
