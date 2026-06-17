@@ -1,14 +1,19 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { TagInput } from "@/components/tag-input";
 import { useConfig } from "@/hooks/use-config";
 import { useOutreachPlan } from "@/hooks/use-outreach-plan";
 import { useScrapeHistory } from "@/hooks/use-scrape";
-import { Play, Monitor, MapPin, Search, ChevronDown, ChevronUp, Plus, X, Sparkles, Target, AlertTriangle } from "lucide-react";
+import { useTagIndex } from "@/hooks/use-tag-index";
+import { watchLatestScrapeRun } from "@/lib/firestore-api";
+import { doc, updateDoc } from "firebase/firestore";
+import { db } from "@/lib/firebase";
+import { Play, Monitor, MapPin, ChevronDown, ChevronUp, Plus, X, Sparkles, Target, AlertTriangle } from "lucide-react";
 
 interface Props {
   onStart: (queries: string[], limit: number, headless: boolean) => void;
@@ -53,6 +58,9 @@ export function ScrapeControl({ onStart, isStarting, isRunning }: Props) {
   const [showCategories, setShowCategories] = useState(false);
   const [newCatLabel, setNewCatLabel] = useState("");
   const [newCatQuery, setNewCatQuery] = useState("");
+  const [defaultTags, setDefaultTags] = useState<string[]>([]);
+  const { tags: tagsFromIndex } = useTagIndex();
+  const pendingTagStampRef = useRef<{ tags: string[]; clickedAt: number; runId?: string } | null>(null);
 
   const enabledCategories = categories.filter((c) => c.enabled);
   const totalRatio = enabledCategories.reduce((sum, c) => sum + c.ratio, 0);
@@ -119,7 +127,27 @@ export function ScrapeControl({ onStart, isStarting, isRunning }: Props) {
       )
     : null;
 
+  useEffect(() => {
+    if (defaultTags.length === 0) return;
+    const unsub = watchLatestScrapeRun((run) => {
+      const pending = pendingTagStampRef.current;
+      if (!pending || !run) return;
+      if (pending.runId === run.id) return;
+      const runStartedMs = run.started_at ? new Date(run.started_at).getTime() : 0;
+      if (!runStartedMs || runStartedMs < pending.clickedAt - 5_000) return;
+      if (run.default_tags && run.default_tags.length > 0) return;
+      pending.runId = run.id;
+      void updateDoc(doc(db, "scrape_runs", run.id), { default_tags: pending.tags }).catch(() => {});
+    });
+    return unsub;
+  }, [defaultTags.length]);
+
   function handleStart() {
+    if (defaultTags.length > 0) {
+      pendingTagStampRef.current = { tags: [...defaultTags], clickedAt: Date.now() };
+    } else {
+      pendingTagStampRef.current = null;
+    }
     onStart(currentQueries, Math.min(limit, remaining), headless);
   }
 
@@ -150,6 +178,21 @@ export function ScrapeControl({ onStart, isStarting, isRunning }: Props) {
               className="pl-9"
             />
           </div>
+        </div>
+
+        {/* Default tags */}
+        <div className="space-y-2">
+          <label className="text-sm font-medium">Default tags</label>
+          <TagInput
+            value={defaultTags}
+            onChange={setDefaultTags}
+            knownTags={tagsFromIndex}
+            placeholder="e.g. south-london, xmas-2026"
+            disabled={isRunning}
+          />
+          <p className="text-[11px] text-muted-foreground">
+            Stamped on the scrape run; merged onto every lead found.
+          </p>
         </div>
 
         {/* Category Selection */}

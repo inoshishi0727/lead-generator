@@ -20,6 +20,8 @@ import {
   Users,
   ExternalLink,
   Briefcase,
+  Loader2,
+  Tag,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -30,9 +32,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { TagInput } from "@/components/tag-input";
 import { useEnrichLeads } from "@/hooks/use-leads";
 import { useScrapeLeadNow } from "@/hooks/use-scrape-leads";
 import { useLinkedInEmployees } from "@/hooks/use-linkedin-employees";
+import { useTagIndex } from "@/hooks/use-tag-index";
 import { updateLeadFields } from "@/lib/firestore-api";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -207,6 +211,8 @@ export function LeadDetailDialog({ lead, onClose, onEmail }: Props) {
   const [editingCategory, setEditingCategory] = useState(false);
   const [categoryDraft, setCategoryDraft] = useState("");
   const [savingCategory, setSavingCategory] = useState(false);
+  const [savingTags, setSavingTags] = useState(false);
+  const { tags: knownTags } = useTagIndex();
 
   async function handleSaveMenuUrl() {
     if (!lead) return;
@@ -330,6 +336,21 @@ export function LeadDetailDialog({ lead, onClose, onEmail }: Props) {
       });
     } finally {
       setSavingCategory(false);
+    }
+  }
+
+  async function handleTagsChange(nextTags: string[]) {
+    if (!lead) return;
+    setSavingTags(true);
+    try {
+      await updateLeadFields(lead.id, { tags: nextTags });
+      await queryClient.invalidateQueries({ queryKey: ["leads"] });
+    } catch (err) {
+      toast.error("Couldn't save tags", {
+        description: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setSavingTags(false);
     }
   }
 
@@ -528,6 +549,24 @@ export function LeadDetailDialog({ lead, onClose, onEmail }: Props) {
               )}
             </p>
           </div>
+        </div>
+
+        <div className="border-t" />
+
+        {/* Tags */}
+        <div className="p-5 space-y-2">
+          <h3 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+            <Tag className="h-3 w-3" /> Tags
+            {savingTags && (
+              <Loader2 className="h-3 w-3 animate-spin text-muted-foreground/60" />
+            )}
+          </h3>
+          <TagInput
+            value={lead.tags ?? []}
+            onChange={handleTagsChange}
+            knownTags={knownTags}
+            disabled={savingTags}
+          />
         </div>
 
         <div className="border-t" />
