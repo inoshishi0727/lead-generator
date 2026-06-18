@@ -109,14 +109,26 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true });
     }
 
-    // Find the sent outreach message for this lead
-    const msgSnap = await adminDb
+    // Prefer the most recently sent message; fall back to an approved-but-not-yet-sent
+    // draft so replies still register has_reply if a customer replies to an earlier
+    // thread while the next draft is queued.
+    let msgSnap = await adminDb
       .collection("outreach_messages")
       .where("lead_id", "==", leadId)
       .where("status", "==", "sent")
       .orderBy("sent_at", "desc")
       .limit(1)
       .get();
+
+    if (msgSnap.empty) {
+      msgSnap = await adminDb
+        .collection("outreach_messages")
+        .where("lead_id", "==", leadId)
+        .where("status", "==", "approved")
+        .orderBy("created_at", "desc")
+        .limit(1)
+        .get();
+    }
 
     const now = new Date().toISOString();
 

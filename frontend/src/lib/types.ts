@@ -205,6 +205,10 @@ export interface OutreachMessage {
   broad_segment_key?: string | null;
   subject_features?: SubjectFeatures | null;
   content_features?: ContentFeatures | null;
+  // Audit fields written by Cloud Functions on draft creation
+  generated_by?: string | null;
+  generated_by_name?: string | null;
+  workspace_id?: string | null;
 }
 
 export interface SubjectFeatures {
@@ -315,8 +319,6 @@ export interface InboundReply {
   matched: boolean;
   created_at: string;
   forwarded_by: string | null;
-  sentiment?: "positive" | "negative" | "neutral" | null;
-  sentiment_reason?: string | null;
   assigned_to?: string | null;
 }
 
@@ -420,11 +422,6 @@ export interface StrategyResponse {
     good: number;
     not_interested: number;
     great_subjects: string[];
-  };
-  reply_sentiment?: {
-    positive: number;
-    negative: number;
-    neutral: number;
   };
 }
 

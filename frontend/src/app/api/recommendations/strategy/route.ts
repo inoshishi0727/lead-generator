@@ -53,15 +53,6 @@ export async function GET(): Promise<NextResponse> {
       great_subjects: greatSubjects,
     };
 
-    // --- Reply sentiment ---
-    const inbound = replies.filter((r) => r.direction === "inbound" || !r.direction);
-    const sentimentCount = { positive: 0, negative: 0, neutral: 0 };
-    for (const r of inbound) {
-      if (r.sentiment === "positive") sentimentCount.positive++;
-      else if (r.sentiment === "negative") sentimentCount.negative++;
-      else if (r.sentiment === "neutral") sentimentCount.neutral++;
-    }
-
     // --- Outreach performance aggregates ---
     const byCat: Record<string, { sent: number; replied: number; opened: number }> = {};
     for (const m of sent) {
@@ -129,7 +120,6 @@ export async function GET(): Promise<NextResponse> {
       overall_open_rate: overallOpenRate,
       edit_patterns: editPatterns,
       content_signals: contentSignals,
-      reply_sentiment: sentimentCount,
     };
 
     if (totalSent < 5) {
@@ -163,8 +153,6 @@ export async function GET(): Promise<NextResponse> {
       greatSubjects.length > 0 ? `\n  Top-rated subjects: ${greatSubjects.slice(0, 3).map((s) => `"${s}"`).join(", ")}` : ""
     }`;
 
-    const sentimentSummary = `  Positive: ${sentimentCount.positive}, Negative: ${sentimentCount.negative}, Neutral: ${sentimentCount.neutral}`;
-
     const prompt = `You are the sales strategist for Asterley Bros (English Vermouth, Amaro & Aperitivo, SE London).
 Analyse ALL of these outreach performance signals and return actionable recommendations as JSON.
 
@@ -187,9 +175,6 @@ ${editSummary}
 
 CONTENT QUALITY RATINGS (human-rated messages):
 ${ratingsSummary}
-
-REPLY SENTIMENT:
-${sentimentSummary}
 
 Return ONLY valid JSON matching this exact TypeScript type (no markdown, no explanation):
 {
