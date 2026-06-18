@@ -31,7 +31,6 @@ export function AIRecommendations({ compact = false }: Props) {
   const insights = data?.insights ?? [];
   const editPatterns = data?.edit_patterns ?? [];
   const contentSignals = data?.content_signals;
-  const replySentiment = data?.reply_sentiment;
   const ratioAdjustments = data?.ratio_adjustments ?? [];
   const querySuggestions = data?.query_suggestions ?? [];
 
@@ -39,9 +38,6 @@ export function AIRecommendations({ compact = false }: Props) {
 
   const totalRated = contentSignals
     ? contentSignals.great + contentSignals.good + contentSignals.not_interested
-    : 0;
-  const totalReplies = replySentiment
-    ? replySentiment.positive + replySentiment.negative + replySentiment.neutral
     : 0;
 
   if (compact) {
@@ -204,28 +200,6 @@ export function AIRecommendations({ compact = false }: Props) {
                   ))}
                 </div>
               )}
-            </div>
-          )}
-
-          {/* Reply Sentiment */}
-          {replySentiment && totalReplies > 0 && (
-            <div className="space-y-3">
-              <div className="flex items-center gap-2">
-                <MessageSquare className="h-4 w-4 text-muted-foreground" />
-                <h3 className="text-sm font-semibold">Reply Sentiment</h3>
-              </div>
-              <div className="flex gap-3">
-                {[
-                  { label: "Positive", count: replySentiment.positive, cls: "text-emerald-600" },
-                  { label: "Neutral", count: replySentiment.neutral, cls: "text-amber-600" },
-                  { label: "Negative", count: replySentiment.negative, cls: "text-red-500" },
-                ].map(({ label, count, cls }) => (
-                  <div key={label} className="flex-1 rounded-lg border p-3 text-center">
-                    <div className={`text-lg font-bold ${cls}`}>{count}</div>
-                    <div className="text-xs text-muted-foreground">{label}</div>
-                  </div>
-                ))}
-              </div>
             </div>
           )}
 

@@ -75,15 +75,18 @@ function multiSiteBoost(summary: string | null | undefined): number {
   return 2;
 }
 
-export function volumePotential(lead: Pick<Lead, "venue_category" | "linkedin_company_size" | "business_summary">): number {
-  const cat = lead.venue_category ?? "";
+export function volumePotential(lead: Pick<Lead, "venue_category" | "category" | "linkedin_company_size" | "business_summary">): number {
+  // Fall back to the legacy `category` field so older leads (enriched before
+  // venue_category existed) still get correct category-weighted scoring
+  // instead of dropping to CATEGORY_VOLUME_DEFAULT.
+  const cat = lead.venue_category ?? lead.category ?? "";
   const base = CATEGORY_VOLUME[cat] ?? CATEGORY_VOLUME_DEFAULT;
   const size = linkedinSizeBoost(lead.linkedin_company_size);
   const multi = multiSiteBoost(lead.business_summary);
   return Math.min(10, base + size + multi);
 }
 
-export function priorityScore(lead: Pick<Lead, "score" | "venue_category" | "linkedin_company_size" | "business_summary" | "menu_fit">): number {
+export function priorityScore(lead: Pick<Lead, "score" | "venue_category" | "category" | "linkedin_company_size" | "business_summary" | "menu_fit">): number {
   const rawFit = typeof lead.score === "number" && Number.isFinite(lead.score) ? lead.score : 0;
   const fitTier = lead.menu_fit ?? "unknown";
   const fitMultiplier = fitTier === "strong" ? 1.15 : fitTier === "weak" ? 0.7 : 1;

@@ -141,6 +141,10 @@ export async function GET(req: NextRequest) {
     });
   } catch (err) {
     console.error("Draft cost analytics error:", err);
-    return NextResponse.json({ error: "Draft cost analytics failed" }, { status: 500 });
+    const detail = err instanceof Error ? err.message : String(err);
+    return NextResponse.json(
+      { error: "Draft cost analytics failed", detail },
+      { status: 500 },
+    );
   }
 }
