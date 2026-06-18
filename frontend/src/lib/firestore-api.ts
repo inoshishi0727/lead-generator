@@ -642,6 +642,42 @@ export function watchScrapeRuns(
   });
 }
 
+export interface RecentLeadActivity {
+  id: string;
+  business_name: string;
+  scraped_at: string | null;
+  stage: string | null;
+  enrichment_status: string | null;
+  source: string | null;
+}
+
+/** Real-time listener for the most recently scraped/enriched leads. Captures
+ *  both bulk scrapes AND per-lead Re-enrich / scrape-now operations, since
+ *  both update `scraped_at`. Used by /scrapes to surface per-lead activity
+ *  that the bulk-only `scrape_runs` view misses. */
+export function watchRecentLeadActivity(
+  callback: (leads: RecentLeadActivity[]) => void,
+  max = 20
+): () => void {
+  const ref = collection(db, "leads");
+  const q = query(ref, orderBy("scraped_at", "desc"), fbLimit(max));
+  return onSnapshot(q, (snap) => {
+    callback(
+      snap.docs.map((d) => {
+        const data = d.data() as Record<string, unknown>;
+        return {
+          id: d.id,
+          business_name: (data.business_name as string) || "(unnamed lead)",
+          scraped_at: (data.scraped_at as string) || null,
+          stage: (data.stage as string) || null,
+          enrichment_status: (data.enrichment_status as string) || null,
+          source: (data.source as string) || null,
+        };
+      })
+    );
+  });
+}
+
 // --- Pipeline Jobs ---
 
 export interface PipelineJobRecord {
