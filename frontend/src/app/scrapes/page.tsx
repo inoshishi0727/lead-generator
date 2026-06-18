@@ -1,15 +1,19 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useMutationState } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Radar, Loader2, X, AlertCircle, RotateCcw } from "lucide-react";
+import { Radar, Loader2, X, AlertCircle, RotateCcw, Sparkles } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useScrape } from "@/hooks/use-scrape";
+import { SCRAPE_LEAD_NOW_KEY } from "@/hooks/use-scrape-leads";
 import {
   dismissScrapeRun,
   watchScrapeRuns,
+  watchRecentLeadActivity,
+  type RecentLeadActivity,
   type ScrapeRunRecord,
 } from "@/lib/firestore-api";
 
@@ -144,6 +148,32 @@ function LiveScrapeCard({ run }: { run: ScrapeRunRecord }) {
   );
 }
 
+function LiveEnrichmentCard({ businessName }: { businessName: string }) {
+  return (
+    <Card className="border-amber-500/30 bg-amber-500/5">
+      <CardContent className="space-y-2 pt-6">
+        <div className="flex items-center gap-2">
+          <Sparkles className="h-4 w-4 text-amber-500" />
+          <span className="text-sm font-medium">Re-enriching</span>
+          <Badge
+            variant="outline"
+            className="text-[10px] border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300"
+          >
+            single lead
+          </Badge>
+        </div>
+        <p className="text-sm">
+          <span className="font-medium text-foreground">{businessName}</span>
+        </p>
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <Loader2 className="h-3 w-3 animate-spin" />
+          Fetching website + Gemini grounding (~10–60s)
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 function HistoryRow({
   run,
   onRerun,
@@ -205,12 +235,38 @@ function HistoryRow({
 
 export default function ScrapesPage() {
   const [runs, setRuns] = useState<ScrapeRunRecord[] | null>(null);
+  const [leadActivity, setLeadActivity] = useState<RecentLeadActivity[] | null>(null);
   const { startScrape, isStarting } = useScrape();
+
+  // Lead IDs currently being re-enriched anywhere in the app (lead-detail
+  // dialog, leads-table row action, etc.). Observed via TanStack's mutation
+  // cache so this picks up scrapes triggered on other pages too.
+  const pendingLeadIds = useMutationState({
+    filters: { mutationKey: SCRAPE_LEAD_NOW_KEY, status: "pending" },
+    select: (m) => m.state.variables as string,
+  });
 
   useEffect(() => {
     const unsub = watchScrapeRuns((next) => setRuns(next), 50);
     return unsub;
   }, []);
+
+  useEffect(() => {
+    const unsub = watchRecentLeadActivity((next) => setLeadActivity(next), 20);
+    return unsub;
+  }, []);
+
+  // Resolve each pending leadId to its business_name from the already-loaded
+  // activity list. Falls back to a truncated id if the lead isn't in the
+  // list yet (e.g. brand-new lead being scraped for the first time).
+  const inFlightEnrichments = useMemo(() => {
+    const byId = new Map<string, string>();
+    (leadActivity ?? []).forEach((l) => byId.set(l.id, l.business_name));
+    return pendingLeadIds.map((id) => ({
+      id,
+      business_name: byId.get(id) || `Lead ${id.slice(0, 8)}…`,
+    }));
+  }, [pendingLeadIds, leadActivity]);
 
   function handleRerun(run: ScrapeRunRecord) {
     if (!run.query) {
@@ -253,7 +309,7 @@ export default function ScrapesPage() {
               Loading…
             </CardContent>
           </Card>
-        ) : liveRuns.length === 0 ? (
+        ) : liveRuns.length === 0 && inFlightEnrichments.length === 0 ? (
           <Card>
             <CardContent className="pt-6 text-sm text-muted-foreground">
               No scrapes in progress.
@@ -263,6 +319,9 @@ export default function ScrapesPage() {
           <div className="space-y-3">
             {liveRuns.map((run) => (
               <LiveScrapeCard key={run.id} run={run} />
+            ))}
+            {inFlightEnrichments.map((e) => (
+              <LiveEnrichmentCard key={e.id} businessName={e.business_name} />
             ))}
           </div>
         )}
@@ -300,6 +359,62 @@ export default function ScrapesPage() {
           </CardContent>
         </Card>
       </section>
+
+      <section className="space-y-3">
+        <div>
+          <h2 className="text-sm font-medium text-muted-foreground">
+            Per-lead activity
+          </h2>
+          <p className="text-xs text-muted-foreground/70">
+            Recent Re-enrich / Scrape-now operations. These bypass the bulk runs above.
+          </p>
+        </div>
+        <Card>
+          <CardContent className="pt-6">
+            {leadActivity === null ? (
+              <p className="text-sm text-muted-foreground">Loading…</p>
+            ) : leadActivity.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                No per-lead activity yet.
+              </p>
+            ) : (
+              <div className="divide-y divide-border/30">
+                {leadActivity.map((lead) => (
+                  <LeadActivityRow key={lead.id} lead={lead} />
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </section>
+    </div>
+  );
+}
+
+function LeadActivityRow({ lead }: { lead: RecentLeadActivity }) {
+  return (
+    <div className="flex items-start justify-between gap-3 py-2.5 first:pt-0 last:pb-0">
+      <div className="min-w-0 flex-1 space-y-0.5">
+        <p className="truncate text-sm font-medium">{lead.business_name}</p>
+        <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+          {lead.stage && (
+            <Badge variant="outline" className="text-[10px] capitalize">
+              {lead.stage}
+            </Badge>
+          )}
+          {lead.enrichment_status && lead.enrichment_status !== lead.stage && (
+            <Badge variant="outline" className="text-[10px] capitalize">
+              {lead.enrichment_status.replace(/_/g, " ")}
+            </Badge>
+          )}
+          {lead.source && (
+            <span className="capitalize">{lead.source.replace(/_/g, " ")}</span>
+          )}
+        </div>
+      </div>
+      <p className="shrink-0 text-xs text-muted-foreground">
+        {relativeTime(lead.scraped_at)}
+      </p>
     </div>
   );
 }
