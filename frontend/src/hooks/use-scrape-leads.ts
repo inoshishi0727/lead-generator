@@ -31,6 +31,12 @@ function storeBatchId(id: string | null) {
   }
 }
 
+/** Shared mutation key so /scrapes can observe in-flight per-lead scrapes via
+ *  TanStack Query's mutation cache (useMutationState). Lets the Live section
+ *  show "Re-enriching {venue}…" while a lead-detail or leads-table button is
+ *  doing its synchronous scrape. */
+export const SCRAPE_LEAD_NOW_KEY = ["scrape-lead-now"] as const;
+
 /**
  * Scrape + enrich a single existing lead in place. Synchronous (~45-120s).
  */
@@ -38,6 +44,7 @@ export function useScrapeLeadNow() {
   const queryClient = useQueryClient();
 
   return useMutation({
+    mutationKey: SCRAPE_LEAD_NOW_KEY,
     mutationFn: async (leadId: string) => {
       const res = await fetch(`/api/leads/${leadId}/scrape-now`, { method: "POST" });
       const data = await res.json().catch(() => ({}));
