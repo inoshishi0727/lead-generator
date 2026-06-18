@@ -485,8 +485,6 @@ export async function getInboundReplies(filters?: {
       matched: data.matched || false,
       created_at: data.created_at || "",
       forwarded_by: data.forwarded_by || null,
-      sentiment: data.sentiment || null,
-      sentiment_reason: data.sentiment_reason || null,
       assigned_to: data.assigned_to || null,
     };
   });

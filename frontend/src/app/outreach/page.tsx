@@ -1480,10 +1480,16 @@ export function OutreachView(props: OutreachViewProps = {}) {
                         {(() => {
                           const fit = getFitPill(msg.lead_id);
                           // Hide the venue pill in Focus Mode — it would just
-                          // repeat the cohort label on every row. Fall back to
-                          // the lead's venue_category if the message doc didn't
-                          // carry one denormalized.
-                          const cat = msg.venue_category ?? (msg.lead_id ? leadMap.get(msg.lead_id)?.venue_category ?? null : null);
+                          // repeat the cohort label on every row. Fall back
+                          // through msg.venue_category → lead.venue_category →
+                          // lead.category (legacy) so chips show on every card
+                          // that has any kind of category data, not just leads
+                          // whose denormalized venue_category landed cleanly.
+                          const lead = msg.lead_id ? leadMap.get(msg.lead_id) : null;
+                          const cat = msg.venue_category
+                            ?? lead?.venue_category
+                            ?? lead?.category
+                            ?? null;
                           const showVenue = !categoryFilter && !!cat;
                           const venueLabel = showVenue ? formatVenueLabel(cat) : "";
                           if (!fit && !venueLabel) return null;
