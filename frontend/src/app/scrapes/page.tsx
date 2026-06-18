@@ -6,6 +6,7 @@ import { Radar, Loader2, X, AlertCircle, RotateCcw } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { useScrape } from "@/hooks/use-scrape";
 import {
   dismissScrapeRun,
   watchScrapeRuns,
@@ -143,12 +144,16 @@ function LiveScrapeCard({ run }: { run: ScrapeRunRecord }) {
   );
 }
 
-function HistoryRow({ run }: { run: ScrapeRunRecord }) {
+function HistoryRow({
+  run,
+  onRerun,
+  isRerunning,
+}: {
+  run: ScrapeRunRecord;
+  onRerun: (run: ScrapeRunRecord) => void;
+  isRerunning: boolean;
+}) {
   const isFailed = run.status === "failed";
-
-  function handleRerun() {
-    toast.info(`Re-run not yet wired: query = ${run.query}`);
-  }
 
   return (
     <div className="flex items-start justify-between gap-3 border-b border-border/30 py-3 last:border-0">
@@ -184,8 +189,13 @@ function HistoryRow({ run }: { run: ScrapeRunRecord }) {
         )}
       </div>
       {isFailed && (
-        <Button size="xs" variant="outline" onClick={handleRerun}>
-          <RotateCcw />
+        <Button
+          size="xs"
+          variant="outline"
+          onClick={() => onRerun(run)}
+          disabled={isRerunning || !run.query}
+        >
+          {isRerunning ? <Loader2 className="animate-spin" /> : <RotateCcw />}
           Re-run with same params
         </Button>
       )}
@@ -195,11 +205,24 @@ function HistoryRow({ run }: { run: ScrapeRunRecord }) {
 
 export default function ScrapesPage() {
   const [runs, setRuns] = useState<ScrapeRunRecord[] | null>(null);
+  const { startScrape, isStarting } = useScrape();
 
   useEffect(() => {
     const unsub = watchScrapeRuns((next) => setRuns(next), 50);
     return unsub;
   }, []);
+
+  function handleRerun(run: ScrapeRunRecord) {
+    if (!run.query) {
+      toast.error("This run has no query stored — can't re-run.");
+      return;
+    }
+    startScrape({
+      query: run.query,
+      limit: 60,
+      headless: true,
+    });
+  }
 
   const { liveRuns, historyRuns } = useMemo(() => {
     const all = runs ?? [];
@@ -265,7 +288,12 @@ export default function ScrapesPage() {
             ) : (
               <div className="divide-y divide-border/30">
                 {historyRuns.map((run) => (
-                  <HistoryRow key={run.id} run={run} />
+                  <HistoryRow
+                    key={run.id}
+                    run={run}
+                    onRerun={handleRerun}
+                    isRerunning={isStarting}
+                  />
                 ))}
               </div>
             )}
