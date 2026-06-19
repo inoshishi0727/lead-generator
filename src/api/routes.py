@@ -140,7 +140,7 @@ def _lead_to_response(lead) -> LeadResponse:
     )
 
 
-def _run_gmaps_scrape(run_id: str, queries: list[str], limit: int, headless: bool) -> None:
+def _run_gmaps_scrape(run_id: str, queries: list[str], limit: int, headless: bool, default_tags: list[str] | None = None) -> None:
     """Execute scrape → enrich → score pipeline in a background thread.
 
     Runs multiple queries in parallel via ParallelScrapeOrchestrator.
@@ -179,7 +179,8 @@ def _run_gmaps_scrape(run_id: str, queries: list[str], limit: int, headless: boo
                 run.update({k: v for k, v in kwargs.items() if v is not None})
 
         orchestrator = ParallelScrapeOrchestrator(
-            config=config, on_progress=on_progress, telemetry=reporter
+            config=config, on_progress=on_progress, telemetry=reporter,
+            default_tags=default_tags, scrape_run_id=run_id,
         )
 
         async def _full_pipeline():
@@ -432,7 +433,7 @@ async def start_scrape(req: ScrapeRequest) -> ScrapeStatusResponse:
 
     thread = threading.Thread(
         target=_run_gmaps_scrape,
-        args=(run_id, queries, req.limit, req.headless),
+        args=(run_id, queries, req.limit, req.headless, req.tags),
         daemon=True,
     )
     thread.start()

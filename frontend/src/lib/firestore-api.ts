@@ -11,10 +11,15 @@ import {
   getDoc,
   orderBy,
   limit as fbLimit,
+  startAfter,
+  documentId,
+  getCountFromServer,
   updateDoc,
   addDoc,
   deleteDoc,
   onSnapshot,
+  type QueryDocumentSnapshot,
+  type DocumentData,
 } from "firebase/firestore";
 import { db, auth } from "./firebase";
 import type { Lead, LeadDetail, LinkedInEmployee, OutreachMessage, InboundReply, EditFeedback, ReflectionCategory, Campaign, GenerationLogEntry } from "./types";
@@ -116,6 +121,14 @@ export async function getLeads(filters?: {
       reply_count: data.reply_count || 0,
       last_opened_at: data.last_opened_at || null,
       open_count: data.open_count || 0,
+      tags: Array.isArray(data.tags) ? data.tags : [],
+      auto_tags: Array.isArray(data.auto_tags) ? data.auto_tags : [],
+      auto_tags_updated_at: data.auto_tags_updated_at || null,
+      scrape_run_id: data.scrape_run_id || null,
+      thread_rating: data.thread_rating || null,
+      thread_rating_reason: data.thread_rating_reason || null,
+      thread_revisit_month: data.thread_revisit_month || null,
+      thread_rated_at: data.thread_rated_at || null,
     };
   });
 
@@ -201,6 +214,319 @@ export async function getLeadById(id: string): Promise<Lead | null> {
     reply_count: data.reply_count || 0,
     last_opened_at: data.last_opened_at || null,
     open_count: data.open_count || 0,
+    tags: Array.isArray(data.tags) ? data.tags : [],
+    auto_tags: Array.isArray(data.auto_tags) ? data.auto_tags : [],
+    auto_tags_updated_at: data.auto_tags_updated_at || null,
+    scrape_run_id: data.scrape_run_id || null,
+    thread_rating: data.thread_rating || null,
+    thread_rating_reason: data.thread_rating_reason || null,
+    thread_revisit_month: data.thread_revisit_month || null,
+    thread_rated_at: data.thread_rated_at || null,
+  };
+}
+
+// --- Lead pagination + aggregation helpers (used by dashboard + paginated /leads) ---
+
+function mapLeadDoc(snap: QueryDocumentSnapshot<DocumentData>): Lead {
+  const data = snap.data();
+  const enrichment = data.enrichment || {};
+  const contact = enrichment.contact || {};
+  return {
+    id: data.id || snap.id,
+    business_name: data.business_name || "",
+    address: data.address || null,
+    phone: data.phone || null,
+    website: data.website || null,
+    email: data.email || null,
+    email_found: data.email_found || false,
+    source: data.source || null,
+    stage: data.stage || null,
+    rating: data.rating || null,
+    review_count: data.review_count || null,
+    category: data.category || null,
+    scraped_at: data.scraped_at || null,
+    score: data.score || null,
+    venue_category: enrichment.venue_category || null,
+    menu_fit: enrichment.menu_fit || null,
+    tone_tier: enrichment.tone_tier || null,
+    lead_products: enrichment.lead_products || [],
+    enrichment_status: enrichment.enrichment_status || null,
+    context_notes: enrichment.context_notes || null,
+    business_summary: enrichment.business_summary || null,
+    drinks_programme: enrichment.drinks_programme || null,
+    why_asterley_fits: enrichment.why_asterley_fits || null,
+    opening_hours_summary: enrichment.opening_hours_summary || null,
+    price_tier: enrichment.price_tier || null,
+    menu_fit_signals: enrichment.menu_fit_signals || [],
+    menu_url: enrichment.menu_url || null,
+    ai_approval: enrichment.ai_approval || null,
+    ai_approval_reason: enrichment.ai_approval_reason || null,
+    instagram_handle: data.instagram_handle || null,
+    instagram_followers: data.instagram_followers || null,
+    instagram_bio: data.instagram_bio || null,
+    twitter_handle: data.twitter_handle || null,
+    facebook_url: data.facebook_url || null,
+    tiktok_handle: data.tiktok_handle || null,
+    youtube_url: data.youtube_url || null,
+    social_media_scraped_at: data.social_media_scraped_at || null,
+    linkedin_company_size: data.linkedin_company_size || null,
+    linkedin_industry: data.linkedin_industry || null,
+    google_maps_place_id: data.google_maps_place_id || null,
+    location_postcode: data.location_postcode || null,
+    location_city: data.location_city || null,
+    location_area: data.location_area || enrichment.location_area || null,
+    contact_name: data.contact_name || contact.name || null,
+    contact_email: data.contact_email || null,
+    contact_role: data.contact_role || contact.role || null,
+    contact_confidence: data.contact_confidence || contact.confidence || null,
+    email_domain: data.email_domain || null,
+    client_status: data.client_status || null,
+    rejection_reason: data.rejection_reason || null,
+    rejection_notes: data.rejection_notes || null,
+    batch_id: data.batch_id || null,
+    added_by_name: data.added_by_name || null,
+    added_by_email: data.added_by_email || null,
+    created_at: data.created_at || data.scraped_at || null,
+    assigned_to: data.assigned_to || null,
+    assigned_to_name: data.assigned_to_name || null,
+    assigned_at: data.assigned_at || null,
+    assigned_by: data.assigned_by || null,
+    human_takeover: data.human_takeover || false,
+    human_takeover_at: data.human_takeover_at || null,
+    outcome: data.outcome || null,
+    outcome_updated_at: data.outcome_updated_at || null,
+    reply_count: data.reply_count || 0,
+    last_opened_at: data.last_opened_at || null,
+    open_count: data.open_count || 0,
+    tags: Array.isArray(data.tags) ? data.tags : [],
+    auto_tags: Array.isArray(data.auto_tags) ? data.auto_tags : [],
+    auto_tags_updated_at: data.auto_tags_updated_at || null,
+    scrape_run_id: data.scrape_run_id || null,
+    thread_rating: data.thread_rating || null,
+    thread_rating_reason: data.thread_rating_reason || null,
+    thread_revisit_month: data.thread_revisit_month || null,
+    thread_rated_at: data.thread_rated_at || null,
+  };
+}
+
+export interface LeadsPageFilters {
+  source?: string;
+  stage?: string;
+  assignedTo?: string;
+}
+
+export interface LeadsPage {
+  leads: Lead[];
+  nextCursor: QueryDocumentSnapshot<DocumentData> | null;
+}
+
+/**
+ * Cursor-paginated leads query.
+ *
+ * Ordered by `created_at` descending. Server-side filters (source / stage /
+ * assignedTo) map straight to Firestore `where()` clauses; everything else in
+ * the /leads UI (search, fit, category, postcode, tag, recency, sort) stays
+ * client-side and runs against the pages already loaded.
+ */
+export async function getLeadsPage(opts: {
+  filters?: LeadsPageFilters;
+  pageSize?: number;
+  cursor?: QueryDocumentSnapshot<DocumentData> | null;
+}): Promise<LeadsPage> {
+  const { filters = {}, pageSize = 50, cursor } = opts;
+  const ref = collection(db, "leads");
+  const constraints: Parameters<typeof query>[1][] = [];
+
+  if (filters.source && filters.source !== "All") {
+    const sourceVal = filters.source === "Google Maps" ? "google_maps" : filters.source.toLowerCase();
+    constraints.push(where("source", "==", sourceVal));
+  }
+  if (filters.stage && filters.stage !== "All") {
+    constraints.push(where("stage", "==", filters.stage));
+  }
+  if (filters.assignedTo) {
+    constraints.push(where("assigned_to", "==", filters.assignedTo));
+  }
+
+  // Order by `scraped_at` rather than `created_at`: Python scrapers only set
+  // scraped_at, and Firestore's `orderBy` silently excludes docs missing the
+  // field — so ordering by created_at hides every scraper-written lead.
+  constraints.push(orderBy("scraped_at", "desc"));
+  if (cursor) constraints.push(startAfter(cursor));
+  constraints.push(fbLimit(pageSize));
+
+  const snap = await getDocs(query(ref, ...constraints));
+  const leads = snap.docs.map(mapLeadDoc);
+  const nextCursor = snap.docs.length === pageSize ? snap.docs[snap.docs.length - 1] : null;
+  return { leads, nextCursor };
+}
+
+/**
+ * Batch-load leads by id (max 30 per call). Used by the dashboard actionable
+ * list to resolve outreachPlan ids into full Lead docs without pulling every lead.
+ */
+export async function getLeadsByIds(ids: string[]): Promise<Lead[]> {
+  if (ids.length === 0) return [];
+  const chunks: string[][] = [];
+  for (let i = 0; i < ids.length; i += 30) chunks.push(ids.slice(i, i + 30));
+  const ref = collection(db, "leads");
+  const results = await Promise.all(
+    chunks.map(async (chunk) => {
+      const snap = await getDocs(query(ref, where(documentId(), "in", chunk)));
+      return snap.docs.map(mapLeadDoc);
+    }),
+  );
+  return results.flat();
+}
+
+/**
+ * Top-N "hot new" leads: stage="scraped", score >= minScore, ordered by score.
+ * Caller filters via stageFor() to ensure outcome-overrides line up.
+ */
+export async function getHotLeads(opts: {
+  assignedTo?: string;
+  minScore?: number;
+  limit?: number;
+}): Promise<Lead[]> {
+  const { assignedTo, minScore = 7, limit = 20 } = opts;
+  const ref = collection(db, "leads");
+  const constraints: Parameters<typeof query>[1][] = [];
+  if (assignedTo) constraints.push(where("assigned_to", "==", assignedTo));
+  constraints.push(where("stage", "==", "scraped"));
+  constraints.push(where("score", ">=", minScore));
+  constraints.push(orderBy("score", "desc"));
+  constraints.push(fbLimit(limit));
+  const snap = await getDocs(query(ref, ...constraints));
+  return snap.docs.map(mapLeadDoc);
+}
+
+/**
+ * Latest outreach_message per lead for a small set of lead ids. Used by the
+ * dashboard to decide generate/send/contacted actions without loading the
+ * entire outreach_messages collection.
+ */
+export async function getMessagesByLeadIds(ids: string[]): Promise<OutreachMessage[]> {
+  if (ids.length === 0) return [];
+  const ref = collection(db, "outreach_messages");
+  const chunks: string[][] = [];
+  for (let i = 0; i < ids.length; i += 30) chunks.push(ids.slice(i, i + 30));
+  const results = await Promise.all(
+    chunks.map(async (chunk) => {
+      const snap = await getDocs(query(ref, where("lead_id", "in", chunk)));
+      return snap.docs.map((d) => d.data() as OutreachMessage);
+    }),
+  );
+  return results.flat();
+}
+
+export interface DashboardCounts {
+  totalLeads: number;
+  emailsFound: number;
+  drafts: number;
+  approved: number;
+  sent: number;
+  replies: number;
+  /** Approximation of `computeLeadReplyRate` denominator — leads currently in a sent-or-later stage. */
+  contacted: number;
+  /** ISO timestamp of the earliest sent outreach message, used for the dashboard "week N" header. */
+  firstSentAt: string | null;
+  pipeline: {
+    new: number;
+    contacted: number;
+    replied: number;
+    converted: number;
+    rejected: number;
+  };
+}
+
+/**
+ * Fire all dashboard counts in parallel via Firestore aggregation queries.
+ * Each call costs ~1 read regardless of collection size, so the dashboard goes
+ * from "pull every lead doc" to ~10 reads.
+ */
+export async function getDashboardCounts(assignedTo?: string): Promise<DashboardCounts> {
+  const leads = collection(db, "leads");
+  const messages = collection(db, "outreach_messages");
+
+  // Tiny helper — assemble a Firestore `query` with assigned filter applied first.
+  const leadsQ = (...extra: Parameters<typeof query>[1][]) =>
+    assignedTo
+      ? query(leads, where("assigned_to", "==", assignedTo), ...extra)
+      : query(leads, ...extra);
+  const messagesQ = (...extra: Parameters<typeof query>[1][]) =>
+    assignedTo
+      ? query(messages, where("assigned_to", "==", assignedTo), ...extra)
+      : query(messages, ...extra);
+
+  const countFor = async (q: Parameters<typeof getCountFromServer>[0]): Promise<number> => {
+    const snap = await getCountFromServer(q);
+    return snap.data().count;
+  };
+
+  const REJECTED_OUTCOMES = ["lost", "not_interested"];
+  const CONTACTED_STAGES = ["sent", "follow_up_1", "follow_up_2", "responded"];
+
+  const firstSentSnap = getDocs(
+    messagesQ(where("status", "==", "sent"), orderBy("sent_at", "asc"), fbLimit(1)),
+  );
+
+  const [
+    totalLeads,
+    emailsFound,
+    drafts,
+    approved,
+    sent,
+    replies,
+    contacted,
+    converted,
+    rejected,
+    contactedStageCount,
+    contactedOpensCount,
+    firstSentDocs,
+  ] = await Promise.all([
+    countFor(leadsQ()),
+    countFor(leadsQ(where("email_found", "==", true))),
+    countFor(messagesQ(where("status", "==", "draft"))),
+    countFor(messagesQ(where("status", "==", "approved"))),
+    countFor(messagesQ(where("status", "==", "sent"))),
+    countFor(leadsQ(where("reply_count", ">", 0))),
+    countFor(leadsQ(where("stage", "in", CONTACTED_STAGES))),
+    countFor(leadsQ(where("outcome", "==", "converted"))),
+    countFor(leadsQ(where("outcome", "in", REJECTED_OUTCOMES))),
+    countFor(leadsQ(where("stage", "==", "contacted"))),
+    countFor(leadsQ(where("open_count", ">", 0))),
+    firstSentSnap,
+  ]);
+
+  const firstSentAt = firstSentDocs.empty
+    ? null
+    : (firstSentDocs.docs[0].data().sent_at as string | null) ?? null;
+
+  // Pipeline mirrors the precedence in `stageFor()` on the dashboard:
+  // converted > rejected > replied (reply_count>0) > contacted (stage or opens) > new.
+  // These counts are stage-based approximations and may double-count edge cases
+  // where, say, a lead is both converted and has reply_count>0. Tie-breakers
+  // favour the more terminal status (converted/rejected).
+  const replied = Math.max(0, replies - converted - rejected);
+  const contactedAlone = Math.max(0, contactedStageCount + contactedOpensCount - replied - converted - rejected);
+  const newCount = Math.max(0, totalLeads - converted - rejected - replied - contactedAlone);
+
+  return {
+    totalLeads,
+    emailsFound,
+    drafts,
+    approved,
+    sent,
+    replies,
+    contacted,
+    firstSentAt,
+    pipeline: {
+      new: newCount,
+      contacted: contactedAlone,
+      replied,
+      converted,
+      rejected,
+    },
   };
 }
 
@@ -545,6 +871,7 @@ export async function createLead(data: {
   business_name: string;
   website?: string | null;
   instagram_handle?: string | null;
+  tags?: string[];
 }): Promise<string> {
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
@@ -554,6 +881,7 @@ export async function createLead(data: {
     business_name: data.business_name.trim(),
     website: data.website || null,
     instagram_handle: data.instagram_handle || null,
+    tags: Array.isArray(data.tags) ? data.tags : [],
     source: "manual",
     stage: "scraped",
     scraped_at: now,

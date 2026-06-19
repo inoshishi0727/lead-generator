@@ -63,3 +63,5 @@ src/static/
 credentials/
 *.json.key
 *-sa.json
+
+.claude/

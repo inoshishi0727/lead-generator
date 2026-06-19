@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebase-admin";
 import { FieldValue } from "firebase-admin/firestore";
+import { cleanEmailBody } from "@/lib/clean-email-body";
+import { convert } from "html-to-text";
 
 // Resend inbound webhook — fired when a lead replies to an outreach email.
 // The reply-to address is encoded as: reply+{lead_id}@reply.asterleybros.com
@@ -145,6 +147,12 @@ export async function POST(req: NextRequest) {
       stage: "responded",
     });
 
+    // Prefer plain text; fall back to converting HTML so marketing-template
+    // replies don't store raw <style>/<table> blocks. Drop quoted history.
+    const textSource =
+      textBody || (htmlBody ? convert(htmlBody, { wordwrap: false }) : "");
+    const cleanedBody = cleanEmailBody(textSource);
+
     // Write inbound reply record
     await adminDb.collection("inbound_replies").add({
       lead_id: leadId,
@@ -152,7 +160,8 @@ export async function POST(req: NextRequest) {
       from_email: fromAddress,
       from_name: fromName,
       subject,
-      body: textBody || htmlBody || "",
+      body: cleanedBody,
+      body_raw: textBody || htmlBody || "",
       body_html: htmlBody || "",
       source: "email",
       matched: true,
