@@ -33,6 +33,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { TagInput } from "@/components/tag-input";
+import { AutoTagChips } from "@/components/auto-tag-chips";
+import { LeadConversation, LeadConversationHeader } from "@/components/lead-conversation";
 import { useEnrichLeads } from "@/hooks/use-leads";
 import { useScrapeLeadNow } from "@/hooks/use-scrape-leads";
 import { useLinkedInEmployees } from "@/hooks/use-linkedin-employees";
@@ -514,6 +516,27 @@ export function LeadDetailDialog({ lead, onClose, onEmail }: Props) {
             knownTags={knownTags}
             disabled={savingTags}
           />
+          {(lead.auto_tags?.length ?? 0) > 0 && (
+            <div className="space-y-1 pt-1">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+                Auto
+              </p>
+              <AutoTagChips tags={lead.auto_tags ?? []} />
+              {lead.thread_rating_reason && (
+                <p className="pt-0.5 text-[11px] italic text-muted-foreground">
+                  “{lead.thread_rating_reason}”
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div className="border-t" />
+
+        {/* Conversation thread */}
+        <div className="p-5 space-y-2">
+          <LeadConversationHeader />
+          <LeadConversation leadId={lead.id} />
         </div>
 
         <div className="border-t" />

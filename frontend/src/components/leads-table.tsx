@@ -35,6 +35,7 @@ import {
   priorityTier,
 } from "@/lib/priority-score";
 import { LeadDetailDialog } from "@/components/lead-detail-dialog";
+import { AutoTagChips } from "@/components/auto-tag-chips";
 import { updateLeadFields } from "@/lib/firestore-api";
 import { useQueryClient } from "@tanstack/react-query";
 import { useGenerateDrafts } from "@/hooks/use-outreach";
@@ -68,6 +69,7 @@ interface Props {
   onLeadOpened?: () => void;
   latestCohort?: Set<string>;
   viewedSet?: Set<string>;
+  onTagClick?: (tag: string) => void;
 }
 
 const REJECTION_LABELS: Record<string, string> = {
@@ -93,7 +95,7 @@ const rejectionColors: Record<string, string> = {
   in_discussion: "border-sky-500/30 text-sky-400 bg-sky-500/10",
 };
 
-export function LeadsTable({ leads, isLoading, selectable, selectedIds = [], onSelectionChange, openLeadId, onLeadOpened, latestCohort, viewedSet }: Props) {
+export function LeadsTable({ leads, isLoading, selectable, selectedIds = [], onSelectionChange, openLeadId, onLeadOpened, latestCohort, viewedSet, onTagClick }: Props) {
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
   const scrapeLeadNow = useScrapeLeadNow();
   const [scrapingLeadId, setScrapingLeadId] = useState<string | null>(null);
@@ -430,6 +432,20 @@ export function LeadsTable({ leads, isLoading, selectable, selectedIds = [], onS
                       <span className="ml-1 text-[10px] text-muted-foreground" title={lead.rejection_notes}>
                         — {lead.rejection_notes.length > 30 ? lead.rejection_notes.slice(0, 30) + "…" : lead.rejection_notes}
                       </span>
+                    )}
+                    {((lead.tags?.length ?? 0) > 0 || (lead.auto_tags?.length ?? 0) > 0) && (
+                      <div className="mt-1 flex flex-wrap items-center gap-1">
+                        {(lead.tags ?? []).map((tag) => (
+                          <Badge
+                            key={tag}
+                            onClick={onTagClick ? (e) => { e.stopPropagation(); onTagClick(tag); } : undefined}
+                            className={`text-[9px] border-amber-400/40 bg-amber-400/10 text-amber-300 font-normal${onTagClick ? " cursor-pointer hover:bg-amber-400/20" : ""}`}
+                          >
+                            {tag}
+                          </Badge>
+                        ))}
+                        <AutoTagChips tags={lead.auto_tags ?? []} className="gap-1 [&_*]:text-[9px]" onTagClick={onTagClick} />
+                      </div>
                     )}
                   </TableCell>
                   {/* Category */}

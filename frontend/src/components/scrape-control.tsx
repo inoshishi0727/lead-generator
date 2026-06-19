@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useEffect, useRef } from "react";
+import { useState, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -10,13 +10,10 @@ import { useConfig } from "@/hooks/use-config";
 import { useOutreachPlan } from "@/hooks/use-outreach-plan";
 import { useScrapeHistory } from "@/hooks/use-scrape";
 import { useTagIndex } from "@/hooks/use-tag-index";
-import { watchLatestScrapeRun } from "@/lib/firestore-api";
-import { doc, updateDoc } from "firebase/firestore";
-import { db } from "@/lib/firebase";
 import { Play, Monitor, MapPin, ChevronDown, ChevronUp, Plus, X, Sparkles, Target, AlertTriangle } from "lucide-react";
 
 interface Props {
-  onStart: (queries: string[], limit: number, headless: boolean) => void;
+  onStart: (queries: string[], limit: number, headless: boolean, tags: string[]) => void;
   isStarting: boolean;
   isRunning: boolean;
 }
@@ -60,7 +57,6 @@ export function ScrapeControl({ onStart, isStarting, isRunning }: Props) {
   const [newCatQuery, setNewCatQuery] = useState("");
   const [defaultTags, setDefaultTags] = useState<string[]>([]);
   const { tags: tagsFromIndex } = useTagIndex();
-  const pendingTagStampRef = useRef<{ tags: string[]; clickedAt: number; runId?: string } | null>(null);
 
   const enabledCategories = categories.filter((c) => c.enabled);
   const totalRatio = enabledCategories.reduce((sum, c) => sum + c.ratio, 0);
@@ -127,28 +123,8 @@ export function ScrapeControl({ onStart, isStarting, isRunning }: Props) {
       )
     : null;
 
-  useEffect(() => {
-    if (defaultTags.length === 0) return;
-    const unsub = watchLatestScrapeRun((run) => {
-      const pending = pendingTagStampRef.current;
-      if (!pending || !run) return;
-      if (pending.runId === run.id) return;
-      const runStartedMs = run.started_at ? new Date(run.started_at).getTime() : 0;
-      if (!runStartedMs || runStartedMs < pending.clickedAt - 5_000) return;
-      if (run.default_tags && run.default_tags.length > 0) return;
-      pending.runId = run.id;
-      void updateDoc(doc(db, "scrape_runs", run.id), { default_tags: pending.tags }).catch(() => {});
-    });
-    return unsub;
-  }, [defaultTags.length]);
-
   function handleStart() {
-    if (defaultTags.length > 0) {
-      pendingTagStampRef.current = { tags: [...defaultTags], clickedAt: Date.now() };
-    } else {
-      pendingTagStampRef.current = null;
-    }
-    onStart(currentQueries, Math.min(limit, remaining), headless);
+    onStart(currentQueries, Math.min(limit, remaining), headless, defaultTags);
   }
 
   // Summary of what will be scraped
@@ -191,7 +167,7 @@ export function ScrapeControl({ onStart, isStarting, isRunning }: Props) {
             disabled={isRunning}
           />
           <p className="text-[11px] text-muted-foreground">
-            Stamped on the scrape run; merged onto every lead found.
+            Applied to every lead found in this scrape.
           </p>
         </div>
 
@@ -397,7 +373,7 @@ export function ScrapeControl({ onStart, isStarting, isRunning }: Props) {
                   // Pre-fill: enable this category, set limit to suggested, apply location
                   const query = rec.queries[0] ? `${rec.queries[0]} ${location}`.trim() : "";
                   if (query) {
-                    onStart([query], rec.suggested_leads, headless);
+                    onStart([query], rec.suggested_leads, headless, defaultTags);
                   }
                 }}
               >

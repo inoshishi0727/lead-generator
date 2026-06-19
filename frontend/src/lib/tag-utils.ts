@@ -49,8 +49,9 @@ export function levenshtein(a: string, b: string): number {
 /**
  * Given a raw input and a set of known canonical tags, return suggestions:
  *   - exact normalized match → returned alone
- *   - otherwise: known tags within Levenshtein distance ≤ maxDistance,
- *     sorted by distance ascending
+ *   - otherwise, ranked: prefix matches first (so "asterley-b" surfaces
+ *     "asterley-bros"), then Levenshtein near-matches (≤ maxDistance) to catch
+ *     typos. Prefix matches sorted shortest-first; near-matches by distance.
  */
 export function suggestTags(
   input: string,
@@ -61,9 +62,17 @@ export function suggestTags(
   if (!norm) return [];
   const knownArr = Array.from(known);
   if (knownArr.includes(norm)) return [norm];
-  return knownArr
+
+  const prefix = knownArr
+    .filter((tag) => tag !== norm && tag.startsWith(norm))
+    .sort((a, b) => a.length - b.length || a.localeCompare(b));
+
+  const prefixSet = new Set(prefix);
+  const near = knownArr
     .map((tag) => ({ tag, d: levenshtein(norm, tag) }))
-    .filter((x) => x.d > 0 && x.d <= maxDistance)
+    .filter((x) => x.d > 0 && x.d <= maxDistance && !prefixSet.has(x.tag))
     .sort((a, b) => a.d - b.d)
     .map((x) => x.tag);
+
+  return [...prefix, ...near];
 }

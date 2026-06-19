@@ -645,8 +645,8 @@ export default function DashboardPage() {
             <UpcomingScrapeReview />
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24, marginTop: 16 }}>
               <ScrapeControl
-                onStart={(queries, limit, headless) =>
-                  startScrape({ queries, limit, headless })
+                onStart={(queries, limit, headless, tags) =>
+                  startScrape({ queries, limit, headless, tags })
                 }
                 isStarting={isStarting}
                 isRunning={isRunning}

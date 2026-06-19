@@ -182,6 +182,8 @@ class Lead(BaseModel):
     # Pipeline & workflow
     stage: PipelineStage = PipelineStage.SCRAPED
     batch_id: Optional[str] = None
+    tags: list[str] = []  # manual tags applied at scrape time (e.g. "south_london")
+    scrape_run_id: Optional[str] = None  # links lead to its originating scrape_runs doc
     client_status: Optional[str] = None  # pending_review/approved/rejected
     rejection_reason: Optional[str] = None
     provider_qa_status: Optional[str] = None  # qa_passed/qa_flagged/qa_rejected
