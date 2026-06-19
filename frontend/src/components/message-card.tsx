@@ -30,6 +30,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Menu, MenuTrigger, MenuContent, MenuItem } from "@/components/ui/menu";
 import type { OutreachMessage } from "@/lib/types";
+import { cleanEmailBody } from "@/lib/clean-email-body";
 import {
   useUpdateMessage,
   useRegenerateMessage,
@@ -833,7 +834,7 @@ export function MessageCard({ message, inConversation, emailCapReached, isDuplic
                           ? "bg-blue-50/50 dark:bg-blue-950/20 border-blue-200/30 dark:border-blue-800/30"
                           : "bg-green-50/50 dark:bg-green-950/20 border-green-200/30 dark:border-green-800/30"
                       }`}>
-                        {reply.body || "(no content)"}
+                        {cleanEmailBody(reply.body) || "(no content)"}
                       </div>
                     </div>
                   </div>

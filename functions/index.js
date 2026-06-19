@@ -7,6 +7,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { Resend } from "resend";
 import { FOLLOW_UP_LABELS, FOLLOW_UP_GAP_DAYS, shouldSkipLead, determineFollowUpAction, shouldGenerateEscalationDm } from "./followup-logic.js";
 import { extractSubjectFeatures, extractContentFeatures, buildSegmentKey, buildBroadSegmentKey } from "./feature-extractor.js";
+import { htmlBodyToText } from "./clean-email-body.mjs";
 
 const HttpsError = functions.https.HttpsError;
 
@@ -3519,7 +3520,8 @@ export const processInboundEmail = functions
       // Create inbound_replies doc
       const replyId = crypto.randomUUID();
       const rawBody = textBody || htmlBody;
-      const parsedBody = stripQuotedReply(textBody) || rawBody;
+      const textSource = textBody || htmlBodyToText(htmlBody);
+      const parsedBody = stripQuotedReply(textSource) || textSource || rawBody;
       await db.collection("inbound_replies").doc(replyId).set({
         id: replyId,
         lead_id: matchedLead?.id || null,

@@ -14,6 +14,7 @@ import { Loader2, MessageSquare } from "lucide-react";
 
 import { useMessages, useInboundReplies } from "@/hooks/use-outreach";
 import { cn } from "@/lib/utils";
+import { cleanEmailBody } from "@/lib/clean-email-body";
 
 interface Turn {
   key: string;
@@ -45,7 +46,7 @@ export function LeadConversation({ leadId }: { leadId: string }) {
         who: r.direction === "outbound" ? "US" : "THEM",
         t: r.created_at || "",
         subject: r.subject,
-        text: r.body || "",
+        text: cleanEmailBody(r.body),
       });
     }
     return out.sort((a, b) => String(a.t).localeCompare(String(b.t)));
