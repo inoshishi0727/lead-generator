@@ -324,7 +324,9 @@ export interface InboundReply {
   from_name: string | null;
   subject: string | null;
   body: string;
-  source: "email_forward" | "manual" | "resend" | "outbound_reply";
+  body_html?: string;
+  body_raw?: string;
+  source: "email_forward" | "manual" | "resend" | "outbound_reply" | "email";
   direction: "inbound" | "outbound";
   matched: boolean;
   created_at: string;

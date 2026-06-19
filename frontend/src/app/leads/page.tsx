@@ -4,7 +4,8 @@ import { useState, useMemo, useEffect, Suspense } from "react";
 import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { LeadsTable } from "@/components/leads-table";
-import { useLeads, useEnrichLeads } from "@/hooks/use-leads";
+import { useEnrichLeads } from "@/hooks/use-leads";
+import { useInfiniteLeads } from "@/hooks/use-infinite-leads";
 import { useDebounce } from "@/hooks/use-debounce";
 import { QuickAddLeadDialog } from "@/components/quick-add-lead-dialog";
 import { SearchQueryManager } from "@/components/search-query-manager";
@@ -301,7 +302,7 @@ function LeadsPageInner() {
   const [fit, setFit] = useState("");
   const [postcode, setPostcode] = useState("");
   const [assignedToFilter, setAssignedToFilter] = useState("");
-  const [emailOnly, setEmailOnly] = useState(true);
+  const [emailOnly, setEmailOnly] = useState(false);
   const [noMenuUrl, setNoMenuUrl] = useState(false);
   const [menuUrlLoading, setMenuUrlLoading] = useState(false);
   const [showQuickAdd, setShowQuickAdd] = useState(false);
@@ -334,16 +335,35 @@ function LeadsPageInner() {
       ? undefined  // fetch all, filter client-side
       : assignedToFilter || undefined;
 
-  const { data: rawLeads, isLoading } = useLeads({
-    source: firestoreSource || undefined,
-    stage: firestoreStage || undefined,
-    search: debouncedSearch || undefined,
-    assignedTo: effectiveAssignedTo,
+  const {
+    data: pagedData,
+    isLoading,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useInfiniteLeads({
+    filters: {
+      source: firestoreSource || undefined,
+      stage: firestoreStage || undefined,
+      assignedTo: effectiveAssignedTo,
+    },
   });
 
-  const allLeads = (rawLeads ?? []).filter(
-    (l) => l.stage !== "client" && l.stage !== "converted"
+  const rawLeads = useMemo(
+    () => (pagedData?.pages ?? []).flatMap((p) => p.leads),
+    [pagedData],
   );
+
+  const allLeads = useMemo(
+    () => rawLeads.filter((l) => l.stage !== "client" && l.stage !== "converted"),
+    [rawLeads],
+  );
+
+  // Classic page-by-page navigation over the filtered result. Server-side we
+  // fetch in cursor batches (LEADS_PAGE_SIZE) so big datasets stay fast; the UI
+  // surfaces 10 visible rows per page regardless.
+  const DISPLAY_PAGE_SIZE = 10;
+  const [pageIndex, setPageIndex] = useState(0);
 
   const enrichmentQueueCount = useMemo(
     () => allLeads.filter((l) => l.enrichment_status !== "success" && l.website).length,
@@ -420,9 +440,13 @@ function LeadsPageInner() {
     if (noMenuUrl) filtered = filtered.filter((l) => !l.menu_url || l.menu_url === "not_found");
     if (tag) filtered = filtered.filter((l) => (l.tags ?? []).includes(tag) || (l.auto_tags ?? []).includes(tag));
     if (newLeadIds) filtered = filtered.filter((l) => newLeadIds.has(l.id));
+    if (debouncedSearch) {
+      const s = debouncedSearch.toLowerCase();
+      filtered = filtered.filter((l) => (l.business_name ?? "").toLowerCase().includes(s));
+    }
     filtered = applyRecencyFilter(filtered, recency);
     return applySort(filtered, sort);
-  }, [allLeads, source, stage, emailOnly, category, fit, postcode, assignedToFilter, noMenuUrl, tag, newLeadIds, sort, recency]);
+  }, [allLeads, source, stage, emailOnly, category, fit, postcode, assignedToFilter, noMenuUrl, tag, newLeadIds, debouncedSearch, sort, recency]);
 
   const latestCohort = useMemo(() => computeLatestCohort(allLeads), [allLeads]);
 
@@ -453,6 +477,31 @@ function LeadsPageInner() {
 
   const total = leads.length;
   const totalRaw = allLeads.length;
+
+  // Reset to page 1 whenever the filter shape changes — without this, a user
+  // applying a tag filter while on page 6 would land on an empty page.
+  useEffect(() => {
+    setPageIndex(0);
+  }, [source, stage, emailOnly, category, fit, postcode, assignedToFilter, noMenuUrl, tag, debouncedSearch, recency, sort]);
+
+  // Display-page math. `pageCount` is the page count over leads loaded so far;
+  // when the server has more pages available we add "+" semantics to the UI so
+  // the operator knows the count can grow.
+  const pageCount = Math.max(1, Math.ceil(total / DISPLAY_PAGE_SIZE));
+  const currentPage = Math.min(pageIndex, pageCount - 1);
+  const visibleLeads = leads.slice(
+    currentPage * DISPLAY_PAGE_SIZE,
+    (currentPage + 1) * DISPLAY_PAGE_SIZE,
+  );
+
+  // Pull more server-side rows whenever the current display page is at or past
+  // the loaded-set edge — keeps "Next" responsive even with active client filters.
+  useEffect(() => {
+    const needsMore = (currentPage + 1) * DISPLAY_PAGE_SIZE >= total;
+    if (needsMore && hasNextPage && !isFetchingNextPage) {
+      void fetchNextPage();
+    }
+  }, [currentPage, total, hasNextPage, isFetchingNextPage, fetchNextPage]);
 
   // Build the visible chip list shown by the LeadsFilterBanner so any narrowed
   // pool surfaces a clearable indicator (the prior layout silently hid leads
@@ -509,10 +558,11 @@ function LeadsPageInner() {
     }
   }, [emailBannerDismissed]);
 
-  // Auto-toggle emailOnly: email ingestion leads don't have venue emails yet,
-  // so uncheck when viewing them; restore when switching to any other source.
+  // Email-ingestion leads don't have venue emails yet — force the "email only"
+  // filter off when viewing them so the table isn't accidentally empty. Other
+  // sources keep whatever the operator chose.
   useEffect(() => {
-    setEmailOnly(source !== "email_ingestion");
+    if (source === "email_ingestion") setEmailOnly(false);
   }, [source]);
 
   const allNewLeads = [...newEmailLeads, ...newScrapedLeads];
@@ -944,8 +994,8 @@ function LeadsPageInner() {
 
       <div data-tour="leads-table">
         <LeadsTable
-          leads={leads}
-          isLoading={isLoading}
+          leads={visibleLeads}
+          isLoading={isLoading || (isFetchingNextPage && visibleLeads.length === 0)}
           selectable={isAdmin}
           selectedIds={selectedLeadIds}
           onSelectionChange={setSelectedLeadIds}
@@ -955,6 +1005,53 @@ function LeadsPageInner() {
           viewedSet={viewedSet}
           onTagClick={setTagFilter}
         />
+
+        {/* Classic pagination. The page count may grow as more server pages
+            stream in for very large datasets — that's why the indicator shows
+            "+ more" when the server still has rows the client hasn't fetched. */}
+        <div className="flex items-center justify-between gap-2 py-4 text-xs text-muted-foreground">
+          <div>
+            {total === 0 ? (
+              "No leads"
+            ) : (
+              <>
+                Showing {currentPage * DISPLAY_PAGE_SIZE + 1}–{currentPage * DISPLAY_PAGE_SIZE + visibleLeads.length} of {total}
+                {hasNextPage ? "+ more" : ""}
+              </>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={currentPage === 0}
+              onClick={() => setPageIndex(Math.max(0, currentPage - 1))}
+            >
+              Prev
+            </Button>
+            <span className="px-1 tabular-nums">
+              Page {currentPage + 1} of {pageCount}
+              {hasNextPage ? "+" : ""}
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={
+                (currentPage >= pageCount - 1 && !hasNextPage) || isFetchingNextPage
+              }
+              onClick={() => setPageIndex(currentPage + 1)}
+            >
+              {isFetchingNextPage ? (
+                <>
+                  <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+                  Loading…
+                </>
+              ) : (
+                "Next"
+              )}
+            </Button>
+          </div>
+        </div>
       </div>
 
       <QuickAddLeadDialog
