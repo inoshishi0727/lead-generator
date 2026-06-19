@@ -49,9 +49,13 @@ class GoogleMapsScraper(BaseScraper):
         shared_dedup: SharedDedupSet | None = None,
         skip_gmaps_types: set[str] | None = None,
         telemetry: ProgressReporter | None = None,
+        default_tags: list[str] | None = None,
+        scrape_run_id: str | None = None,
     ) -> None:
         super().__init__(config)
         self.gmaps_config = self.config.scraping.google_maps
+        self._default_tags = list(default_tags or [])
+        self._scrape_run_id = scrape_run_id
         self.collected_leads: list[Lead] = []
         self._telemetry = telemetry
         raw_on_progress = on_progress or (lambda **kw: None)
@@ -393,6 +397,8 @@ class GoogleMapsScraper(BaseScraper):
                     location_area=area,
                     email_domain=email_domain,
                     stage=PipelineStage.SCRAPED if email else PipelineStage.NEEDS_EMAIL,
+                    tags=list(self._default_tags),
+                    scrape_run_id=self._scrape_run_id,
                 )
                 consecutive_failures = 0
 

@@ -13,6 +13,7 @@ class ScrapeRequest(BaseModel):
     queries: list[str] = Field(default=[], description="Multiple queries to run in parallel")
     limit: int = Field(default=10, ge=1, le=200, description="Max leads to collect")
     headless: bool = Field(default=False, description="Run browser in visible mode")
+    tags: list[str] = Field(default=[], description="Manual tags applied to every lead from this scrape")
 
 
 class ScrapeStatusResponse(BaseModel):

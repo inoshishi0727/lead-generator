@@ -86,9 +86,10 @@ async function scoreConversation(emailContent, replyBody) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey || !replyBody || replyBody.trim().length < 5) return null;
 
+  const today = new Date().toISOString().slice(0, 10);
   const ai = new GoogleGenAI({ apiKey });
   const prompt = `You are evaluating a B2B spirits/drinks sales email and the reply it received.
-Rate the quality of the reply as a sales signal.
+Rate the quality of the reply as a sales signal. Today's date is ${today}.
 
 OUTREACH EMAIL:
 """
@@ -104,19 +105,26 @@ Return ONLY valid JSON with these exact fields:
 {
   "content_rating": "great" | "good" | "not_interested",
   "score": <integer 1-10>,
-  "reason": "<15-20 word summary explaining the rating>"
+  "reason": "<15-20 word summary explaining the rating>",
+  "revisit_month": "<YYYY-MM or null>",
+  "revisit_reason": "<12 words or fewer, or null>"
 }
 
 Rating rules:
 - "great" (score 8-10): Strong buy signal — wants a meeting/tasting, asks for pricing/availability, expresses clear enthusiasm, forwards to buyer
 - "good" (score 5-7): Mild positive — curious, open to learning more, asks a relevant product question, no clear objection
-- "not_interested" (score 1-4): Rejection — declines, already has supplier, asks to unsubscribe, out of budget, generic brush-off, out of office with no interest`;
+- "not_interested" (score 1-4): Rejection — declines, already has supplier, asks to unsubscribe, out of budget, generic brush-off, out of office with no interest
+
+Revisit rules:
+- If the reply asks to be contacted again at a future time (e.g. "try us in the new year", "circle back in spring", "after summer", "next quarter", "in December"), resolve it to a concrete target month in YYYY-MM format relative to today (${today}).
+- Map UK seasons to months: spring→03, summer→06, autumn→09, winter→12. "new year"→next January. "next quarter"→first month of the next calendar quarter.
+- If there is no future-contact request, set "revisit_month" to null and "revisit_reason" to null.`;
 
   try {
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash",
       contents: prompt,
-      config: { maxOutputTokens: 200, temperature: 0.1 },
+      config: { maxOutputTokens: 600, temperature: 0.1 },
     });
     let text = (response.text || "").replace(/```json\s*/g, "").replace(/```/g, "").trim();
     const start = text.indexOf("{");
@@ -124,10 +132,16 @@ Rating rules:
     if (start >= 0 && end > start) {
       const parsed = JSON.parse(text.slice(start, end + 1));
       if (["great", "good", "not_interested"].includes(parsed.content_rating)) {
+        const revisitMonth =
+          typeof parsed.revisit_month === "string" && /^\d{4}-(0[1-9]|1[0-2])$/.test(parsed.revisit_month)
+            ? parsed.revisit_month
+            : null;
         return {
           content_rating: parsed.content_rating,
           score: typeof parsed.score === "number" ? parsed.score : null,
           reason: parsed.reason || null,
+          revisit_month: revisitMonth,
+          revisit_reason: revisitMonth ? (parsed.revisit_reason || null) : null,
         };
       }
     }
@@ -135,6 +149,211 @@ Rating rules:
     console.warn("scoreConversation failed:", err.message);
   }
   return null;
+}
+
+// ---- Auto-tag computation (funnel-stage tags derived from engagement) ----
+// System-managed tags written to lead.auto_tags. Pure + deterministic so the
+// same logic runs in event handlers and the nightly sweep. NEVER writes lead.tags.
+
+const ENGAGED_OPEN_THRESHOLD = 3; // opens with no reply => "engaged_no_reply"
+const GHOSTED_WINDOW_DAYS = 7;    // days since last send with zero engagement => "ghosted"
+const GHOSTED_STAGES = new Set(["sent", "follow_up_1", "follow_up_2"]);
+
+/**
+ * Compute the system-managed auto_tags for a lead from its engagement signals.
+ * @param {object} lead Lead doc data (stage, outcome, open_count, reply_count, scraped_at).
+ * @param {Array<object>} messages That lead's outreach_messages docs (content_rating, content_rated_at, sent_at, revisit_month).
+ * @returns {string[]} sorted, de-duplicated auto-tags.
+ */
+function computeAutoTags(lead, messages) {
+  const tags = new Set();
+  const msgs = Array.isArray(messages) ? messages : [];
+  const openCount = Number(lead?.open_count) || 0;
+  const replyCount = Number(lead?.reply_count) || 0;
+
+  // Engagement quality. Prefer the whole-thread classification (lead.thread_rating,
+  // set by classifyLeadThread reading the full conversation); fall back to the
+  // latest single-message content_rating for leads not yet thread-classified.
+  const rated = msgs
+    .filter((m) => m && m.content_rating && m.content_rated_at)
+    .sort((a, b) => String(b.content_rated_at).localeCompare(String(a.content_rated_at)));
+  const latestRating = rated.length ? rated[0].content_rating : null;
+  const quality = lead?.thread_rating || latestRating; // "great" | "good" | "not_interested" | null
+  const anyNotInterested = msgs.some((m) => m && m.content_rating === "not_interested");
+  const outcomeNotInterested = lead?.outcome === "lost" || lead?.outcome === "not_interested";
+
+  // Engagement-quality tag (mutually exclusive, precedence not_interested > hot > warm).
+  if (outcomeNotInterested || quality === "not_interested" || anyNotInterested) {
+    tags.add("not_interested");
+  } else if (quality === "great") {
+    tags.add("hot");
+  } else if (quality === "good") {
+    tags.add("warm");
+  }
+
+  // Engaged but silent: opened a lot, never replied.
+  if (openCount >= ENGAGED_OPEN_THRESHOLD && replyCount === 0) {
+    tags.add("engaged_no_reply");
+  }
+
+  // Ghosted: outreach sent, zero opens, zero replies, last send older than window.
+  if (GHOSTED_STAGES.has(lead?.stage) && openCount === 0 && replyCount === 0) {
+    const sentTimes = msgs
+      .map((m) => m && m.sent_at)
+      .filter(Boolean)
+      .map((t) => new Date(t).getTime())
+      .filter((n) => !Number.isNaN(n));
+    const lastSendMs = sentTimes.length
+      ? Math.max(...sentTimes)
+      : (lead?.scraped_at ? new Date(lead.scraped_at).getTime() : NaN);
+    if (!Number.isNaN(lastSendMs)) {
+      const ageDays = (Date.now() - lastSendMs) / (1000 * 60 * 60 * 24);
+      if (ageDays > GHOSTED_WINDOW_DAYS) tags.add("ghosted");
+    }
+  }
+
+  // Revisit months: only emit for months >= the current month (retire elapsed).
+  // Source = thread-level revisit (lead.thread_revisit_month) plus any per-message
+  // revisit_month, so both the new thread classifier and legacy scoring feed it.
+  const currentMonth = new Date().toISOString().slice(0, 7); // YYYY-MM
+  const revisitMonths = [lead?.thread_revisit_month, ...msgs.map((m) => m && m.revisit_month)];
+  for (const rm of revisitMonths) {
+    if (typeof rm === "string" && /^\d{4}-(0[1-9]|1[0-2])$/.test(rm) && rm >= currentMonth) {
+      tags.add(`revisit:${rm}`);
+    }
+  }
+
+  return [...tags].sort();
+}
+
+// ---- Whole-thread conversation classification ----
+// Reads the entire back-and-forth (our sends + their replies) and classifies the
+// lead's funnel state into the auto-tag categories. This is richer than rating a
+// single reply: it accounts for multi-turn context (e.g. "interested" then "actually no").
+
+async function classifyLeadThread(leadId) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) return null;
+
+  // Assemble a chronological transcript from outbound messages + inbound replies.
+  const [msgSnap, replySnap] = await Promise.all([
+    db.collection("outreach_messages").where("lead_id", "==", leadId).get(),
+    db.collection("inbound_replies").where("lead_id", "==", leadId).get(),
+  ]);
+
+  const turns = [];
+  msgSnap.docs.forEach((d) => {
+    const m = d.data();
+    if (m.status === "sent" || m.sent_at) {
+      turns.push({ t: m.sent_at || m.created_at || "", who: "US", text: `${m.subject ? m.subject + " — " : ""}${m.content || ""}` });
+    }
+  });
+  replySnap.docs.forEach((d) => {
+    const r = d.data();
+    if (r.direction === "outbound") {
+      turns.push({ t: r.created_at || "", who: "US", text: r.body || "" });
+    } else if (!r.is_auto_reply && r.body) {
+      turns.push({ t: r.created_at || "", who: "THEM", text: r.body || "" });
+    }
+  });
+
+  const hasReply = turns.some((x) => x.who === "THEM");
+  if (!hasReply) return null; // nothing to classify without a prospect reply
+
+  turns.sort((a, b) => String(a.t).localeCompare(String(b.t)));
+  const transcript = turns
+    .map((x) => `${x.who}: ${String(x.text).replace(/\s+/g, " ").trim().slice(0, 800)}`)
+    .join("\n")
+    .slice(0, 8000);
+
+  const today = new Date().toISOString().slice(0, 10);
+  const ai = new GoogleGenAI({ apiKey });
+  const prompt = `You are classifying a B2B spirits/drinks sales conversation to route the lead. Today is ${today}.
+Read the WHOLE thread below (US = our sales team, THEM = the prospect) and judge the prospect's CURRENT stance from the entire exchange, not just one message.
+
+THREAD:
+"""
+${transcript}
+"""
+
+Return ONLY valid JSON:
+{
+  "rating": "great" | "good" | "not_interested",
+  "reason": "<15-20 word summary of the prospect's current stance>",
+  "revisit_month": "<YYYY-MM or null>",
+  "revisit_reason": "<12 words or fewer, or null>"
+}
+
+Rating rules (based on the latest stance in the thread):
+- "great": Strong buy signal now — wants a meeting/tasting/samples, asks pricing/availability, clear enthusiasm, introduces a buyer.
+- "good": Mild positive — curious, open, asks a relevant question, no firm objection yet.
+- "not_interested": Declines, already supplied, unsubscribe, out of budget, or went cold after a brush-off.
+Revisit: if they ask to be contacted at a future time ("new year", "spring", "after summer", "next quarter", "in December"), resolve to a concrete YYYY-MM relative to today (UK seasons spring→03, summer→06, autumn→09, winter→12; "new year"→next January; "next quarter"→first month of next calendar quarter). Else null.`;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: prompt,
+      config: { maxOutputTokens: 600, temperature: 0.1 },
+    });
+    let text = (response.text || "").replace(/```json\s*/g, "").replace(/```/g, "").trim();
+    const start = text.indexOf("{");
+    const end = text.lastIndexOf("}");
+    if (start >= 0 && end > start) {
+      const parsed = JSON.parse(text.slice(start, end + 1));
+      if (!["great", "good", "not_interested"].includes(parsed.rating)) return null;
+      const rm = typeof parsed.revisit_month === "string" && /^\d{4}-(0[1-9]|1[0-2])$/.test(parsed.revisit_month)
+        ? parsed.revisit_month : null;
+      return {
+        thread_rating: parsed.rating,
+        thread_rating_reason: parsed.reason || null,
+        thread_revisit_month: rm,
+        thread_revisit_reason: rm ? (parsed.revisit_reason || null) : null,
+      };
+    }
+  } catch (err) {
+    console.warn("classifyLeadThread failed:", err.message);
+  }
+  return null;
+}
+
+/**
+ * Recompute and persist auto_tags for one lead. Reads the lead's messages,
+ * writes ONLY auto_tags + auto_tags_updated_at. Skips the write when unchanged.
+ * @returns {Promise<boolean>} true if a write occurred.
+ */
+async function recomputeAutoTagsForLead(leadId, leadData = null) {
+  const leadRef = db.collection("leads").doc(leadId);
+  let lead = leadData;
+  if (!lead) {
+    const snap = await leadRef.get();
+    if (!snap.exists) return false;
+    lead = snap.data();
+  }
+  const msgSnap = await db.collection("outreach_messages").where("lead_id", "==", leadId).get();
+  const messages = msgSnap.docs.map((d) => d.data());
+  const next = computeAutoTags(lead, messages);
+  const current = Array.isArray(lead.auto_tags) ? lead.auto_tags : [];
+  const same = current.length === next.length && current.every((t, i) => t === next[i]);
+  if (same) return false;
+  await leadRef.update({ auto_tags: next, auto_tags_updated_at: new Date().toISOString() });
+  return true;
+}
+
+/**
+ * Classify the lead's full conversation thread, persist the thread_* fields, then
+ * recompute auto_tags. Use this on new replies (worth the Gemini call); use the
+ * cheaper recomputeAutoTagsForLead for open/outcome events that don't change the thread.
+ */
+async function recomputeLeadThreadTag(leadId) {
+  const classification = await classifyLeadThread(leadId);
+  if (classification) {
+    await db.collection("leads").doc(leadId).update({
+      ...classification,
+      thread_rated_at: new Date().toISOString(),
+    });
+  }
+  return recomputeAutoTagsForLead(leadId);
 }
 
 // ---- Venue category to lead products + tone mapping ----
@@ -3362,6 +3581,8 @@ export const processInboundEmail = functions
               msgUpdate.content_score = scoreResult.score;
               msgUpdate.content_rating_reason = scoreResult.reason;
               msgUpdate.content_rated_at = new Date().toISOString();
+              msgUpdate.revisit_month = scoreResult.revisit_month;
+              msgUpdate.revisit_reason = scoreResult.revisit_reason;
             }
           } catch (err) {
             console.warn("scoreConversation failed (non-blocking):", err.message);
@@ -3369,6 +3590,15 @@ export const processInboundEmail = functions
         }
 
         await db.collection("outreach_messages").doc(matchedMessage.id).update(msgUpdate);
+      }
+
+      // Reclassify the whole thread now that a new reply landed, then re-tag.
+      if (matchedLead && !isAutoReply) {
+        try {
+          await recomputeLeadThreadTag(matchedLead.id);
+        } catch (err) {
+          console.warn("recomputeLeadThreadTag failed (non-blocking):", err.message);
+        }
       }
 
       // Log idempotency record
@@ -3534,6 +3764,12 @@ export const logReply = functions
       }
     }
 
+    try {
+      await recomputeLeadThreadTag(lead_id);
+    } catch (err) {
+      console.warn("recomputeLeadThreadTag failed (non-blocking):", err.message);
+    }
+
     await db.collection("activity_log").add({
       type: "manual_reply_logged",
       actor: "user",
@@ -3573,6 +3809,12 @@ export const updateLeadOutcome = functions
     else if (outcome === "lost" || outcome === "not_interested") updates.stage = "declined";
 
     await db.collection("leads").doc(lead_id).update(updates);
+
+    try {
+      await recomputeAutoTagsForLead(lead_id);
+    } catch (err) {
+      console.warn("recomputeAutoTags failed (non-blocking):", err.message);
+    }
 
     await db.collection("activity_log").add({
       type: "outcome_updated",
@@ -3641,6 +3883,12 @@ export const assignReplyToLead = functions
         has_reply: true,
         reply_count: FieldValue.increment(1),
       });
+    }
+
+    try {
+      await recomputeLeadThreadTag(lead_id);
+    } catch (err) {
+      console.warn("recomputeLeadThreadTag failed (non-blocking):", err.message);
     }
 
     return { status: "ok" };
@@ -4845,6 +5093,8 @@ export const processEmailEvents = functions
               last_opened_at: now,
               open_count: FieldValue.increment(1),
             }).catch(() => {}); // non-fatal if lead doc missing
+            // Refresh auto_tags (open count may now cross engaged_no_reply / clear ghosted)
+            await recomputeAutoTagsForLead(msgData.lead_id).catch(() => {});
           }
           console.log("Email opened:", emailId);
           break;
@@ -7891,7 +8141,10 @@ export const backfillContentRatings = functions
             content_score: result.score,
             content_rating_reason: result.reason,
             content_rated_at: new Date().toISOString(),
+            revisit_month: result.revisit_month,
+            revisit_reason: result.revisit_reason,
           });
+          if (msg.lead_id) await recomputeAutoTagsForLead(msg.lead_id).catch(() => {});
           scored++;
         } else {
           skipped++;
@@ -8065,6 +8318,66 @@ export const aggregateOutreachStats = functions
       throw new HttpsError("unauthenticated", "Must be signed in.");
     }
     return runOutreachAggregation();
+  });
+
+// ---- Auto-tag nightly sweep ----
+// Recompute time-based auto_tags (ghosted, engaged_no_reply, revisit:*) across
+// active leads. Diff-before-write keeps writes proportional to actual changes.
+async function runAutoTagsSweep() {
+  const ACTIVE_STAGES = ["sent", "follow_up_1", "follow_up_2", "responded"];
+  const leadsSnap = await db.collection("leads").where("stage", "in", ACTIVE_STAGES).get();
+
+  let batch = db.batch();
+  let batchCount = 0;
+  let updated = 0;
+  const now = new Date().toISOString();
+
+  for (const leadDoc of leadsSnap.docs) {
+    const lead = leadDoc.data();
+    const msgSnap = await db.collection("outreach_messages").where("lead_id", "==", leadDoc.id).get();
+    const messages = msgSnap.docs.map((d) => d.data());
+    const next = computeAutoTags(lead, messages);
+    const current = Array.isArray(lead.auto_tags) ? lead.auto_tags : [];
+    const same = current.length === next.length && current.every((t, i) => t === next[i]);
+    if (same) continue;
+
+    batch.update(leadDoc.ref, { auto_tags: next, auto_tags_updated_at: now });
+    updated += 1;
+    batchCount += 1;
+    if (batchCount >= 450) {
+      await batch.commit();
+      batch = db.batch();
+      batchCount = 0;
+    }
+  }
+
+  if (batchCount > 0) await batch.commit();
+  return { leads_scanned: leadsSnap.size, leads_updated: updated };
+}
+
+// Scheduled daily — 06:30 London, before the 07:00 stats aggregation
+export const scheduledRecomputeAutoTags = functions
+  .runWith({ timeoutSeconds: 540, memory: "512MB" })
+  .pubsub.schedule("30 6 * * *")
+  .timeZone("Europe/London")
+  .onRun(async () => {
+    try {
+      const result = await runAutoTagsSweep();
+      console.log("Auto-tags recomputed:", JSON.stringify(result));
+    } catch (err) {
+      console.error("Auto-tags sweep failed:", err.message);
+    }
+    return null;
+  });
+
+// Manual trigger for backfill / on-demand recompute
+export const recomputeAutoTags = functions
+  .runWith({ timeoutSeconds: 540, memory: "512MB" })
+  .https.onCall(async (_data, context) => {
+    if (!context.auth) {
+      throw new HttpsError("unauthenticated", "Must be signed in.");
+    }
+    return runAutoTagsSweep();
   });
 
 // suggestDraftImprovements — pull the matching segment's stats, hand them to
@@ -8386,4 +8699,5 @@ export const onLeadWrite_updateTagIndex = functions.firestore
     await db.collection("tag_index").doc("counts").set(updates, { merge: true });
     return null;
   });
+
 

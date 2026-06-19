@@ -96,12 +96,16 @@ class ParallelScrapeOrchestrator:
         on_progress: callable | None = None,
         skip_gmaps_types: set[str] | None = None,
         telemetry: ProgressReporter | None = None,
+        default_tags: list[str] | None = None,
+        scrape_run_id: str | None = None,
     ) -> None:
         self.config = config or load_config()
         self._on_progress = on_progress or (lambda **kw: None)
         self._telemetry = telemetry
         self._exclusion_set = self._load_exclusions()
         self._skip_gmaps_types = skip_gmaps_types or set()
+        self._default_tags = list(default_tags or [])
+        self._scrape_run_id = scrape_run_id
 
     def _load_exclusions(self) -> ExclusionSet:
         """Load the stockist exclusion set from config."""
@@ -155,6 +159,8 @@ class ParallelScrapeOrchestrator:
                         shared_dedup=shared_dedup,
                         skip_gmaps_types=self._skip_gmaps_types,
                         telemetry=self._telemetry,
+                        default_tags=self._default_tags,
+                        scrape_run_id=self._scrape_run_id,
                     )
                     return await scraper.run()
 

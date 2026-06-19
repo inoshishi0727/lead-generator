@@ -246,6 +246,7 @@ function LeadsPageInner() {
   const [source, setSource] = useState("");
   const [stage, setStage] = useState("");
   const [search, setSearch] = useState(() => searchParams.get("q") ?? "");
+  const [tag, setTag] = useState(() => searchParams.get("tag") ?? "");
   const [sort, setSort] = useState<SortOption>(() => parseSort(searchParams.get("sort")));
   const [recency, setRecency] = useState<RecencyOption>(() => parseRecency(searchParams.get("recency")));
   const debouncedSearch = useDebounce(search, 300);
@@ -254,6 +255,8 @@ function LeadsPageInner() {
   useEffect(() => {
     const q = searchParams.get("q");
     if (q) setSearch(q);
+    const tagParam = searchParams.get("tag") ?? "";
+    setTag((curr) => (curr === tagParam ? curr : tagParam));
     const s = parseSort(searchParams.get("sort"));
     setSort((curr) => (curr === s ? curr : s));
     const r = parseRecency(searchParams.get("recency"));
@@ -267,6 +270,15 @@ function LeadsPageInner() {
       router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
     }
   }, [searchParams]);
+
+  const setTagFilter = (value: string) => {
+    setTag(value);
+    const params = new URLSearchParams(searchParams.toString());
+    if (value) params.set("tag", value);
+    else params.delete("tag");
+    const qs = params.toString();
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+  };
 
   const handleSortChange = (value: SortOption) => {
     setSort(value);
@@ -383,6 +395,17 @@ function LeadsPageInner() {
     return Array.from(counts.entries()).sort(([a], [b]) => a.localeCompare(b));
   }, [allLeads, emailOnly, category, fit]);
 
+  const tagOptions = useMemo(() => {
+    const pool = emailOnly ? allLeads.filter((l) => l.email) : allLeads;
+    const counts = new Map<string, number>();
+    pool.forEach((l) => {
+      for (const t of [...(l.tags ?? []), ...(l.auto_tags ?? [])]) {
+        if (t) counts.set(t, (counts.get(t) ?? 0) + 1);
+      }
+    });
+    return Array.from(counts.entries()).sort(([a], [b]) => a.localeCompare(b));
+  }, [allLeads, emailOnly]);
+
   const leads = useMemo(() => {
     let filtered = allLeads;
     if (source === "manual") filtered = filtered.filter((l) => l.source === "manual");
@@ -395,10 +418,11 @@ function LeadsPageInner() {
     if (postcode) filtered = filtered.filter((l) => getDistrict(l.location_postcode) === postcode);
     if (assignedToFilter === "__unassigned__") filtered = filtered.filter((l) => !l.assigned_to);
     if (noMenuUrl) filtered = filtered.filter((l) => !l.menu_url || l.menu_url === "not_found");
+    if (tag) filtered = filtered.filter((l) => (l.tags ?? []).includes(tag) || (l.auto_tags ?? []).includes(tag));
     if (newLeadIds) filtered = filtered.filter((l) => newLeadIds.has(l.id));
     filtered = applyRecencyFilter(filtered, recency);
     return applySort(filtered, sort);
-  }, [allLeads, source, stage, emailOnly, category, fit, postcode, assignedToFilter, noMenuUrl, newLeadIds, sort, recency]);
+  }, [allLeads, source, stage, emailOnly, category, fit, postcode, assignedToFilter, noMenuUrl, tag, newLeadIds, sort, recency]);
 
   const latestCohort = useMemo(() => computeLatestCohort(allLeads), [allLeads]);
 
@@ -444,9 +468,10 @@ function LeadsPageInner() {
     if (assignedToFilter) out.push({ key: "assignedTo", label: assignedToFilter === "__unassigned__" ? "Unassigned" : `Assigned: ${assignedToFilter}`, onClear: () => setAssignedToFilter("") });
     if (emailOnly) out.push({ key: "emailOnly", label: "Email only", onClear: () => setEmailOnly(false) });
     if (noMenuUrl) out.push({ key: "noMenuUrl", label: "No menu URL", onClear: () => setNoMenuUrl(false) });
+    if (tag) out.push({ key: "tag", label: `Tag: ${tag.replace("revisit:", "revisit ")}`, onClear: () => setTagFilter("") });
     if (search) out.push({ key: "search", label: `Search: ${search}`, onClear: () => setSearch("") });
     return out;
-  }, [source, stage, category, fit, postcode, assignedToFilter, emailOnly, noMenuUrl, search]);
+  }, [source, stage, category, fit, postcode, assignedToFilter, emailOnly, noMenuUrl, tag, search]);
 
   const clearAllFilters = () => {
     setSource("");
@@ -458,6 +483,7 @@ function LeadsPageInner() {
     setEmailOnly(false);
     setNoMenuUrl(false);
     setSearch("");
+    setTagFilter("");
   };
 
   const DISMISS_KEY = "new_leads_banner_dismissed_at";
@@ -709,6 +735,19 @@ function LeadsPageInner() {
             ))}
           </select>
 
+          <select
+            value={tag}
+            onChange={(e) => setTagFilter(e.target.value)}
+            className="w-44 rounded-md border border-input bg-background px-3 py-2 text-sm"
+          >
+            <option value="">All Tags</option>
+            {tagOptions.map(([t, count]) => (
+              <option key={t} value={t}>
+                {t.replace("revisit:", "revisit ").replace(/_/g, " ")} ({count})
+              </option>
+            ))}
+          </select>
+
           {isAdmin && teamMembers.length > 1 && (
             <select
               value={assignedToFilter}
@@ -914,6 +953,7 @@ function LeadsPageInner() {
           onLeadOpened={() => setOpenLeadId(null)}
           latestCohort={latestCohort}
           viewedSet={viewedSet}
+          onTagClick={setTagFilter}
         />
       </div>
 

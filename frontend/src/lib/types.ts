@@ -16,6 +16,7 @@ export interface ScrapeRequest {
   queries?: string[];
   limit: number;
   headless: boolean;
+  tags?: string[];
 }
 
 export interface ScrapeStatus {
@@ -110,6 +111,15 @@ export interface Lead {
   outcome_updated_at: string | null;
   reply_count: number;
   tags?: string[];
+  // System-managed funnel-stage tags (hot, ghosted, revisit:YYYY-MM, ...)
+  auto_tags?: string[];
+  auto_tags_updated_at?: string | null;
+  scrape_run_id?: string | null;
+  // Whole-thread AI classification (drives hot/warm/not_interested + revisit)
+  thread_rating?: "great" | "good" | "not_interested" | null;
+  thread_rating_reason?: string | null;
+  thread_revisit_month?: string | null;
+  thread_rated_at?: string | null;
 }
 
 export interface LeadDetail extends Lead {

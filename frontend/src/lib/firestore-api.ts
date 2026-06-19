@@ -116,6 +116,14 @@ export async function getLeads(filters?: {
       reply_count: data.reply_count || 0,
       last_opened_at: data.last_opened_at || null,
       open_count: data.open_count || 0,
+      tags: Array.isArray(data.tags) ? data.tags : [],
+      auto_tags: Array.isArray(data.auto_tags) ? data.auto_tags : [],
+      auto_tags_updated_at: data.auto_tags_updated_at || null,
+      scrape_run_id: data.scrape_run_id || null,
+      thread_rating: data.thread_rating || null,
+      thread_rating_reason: data.thread_rating_reason || null,
+      thread_revisit_month: data.thread_revisit_month || null,
+      thread_rated_at: data.thread_rated_at || null,
     };
   });
 
@@ -201,6 +209,14 @@ export async function getLeadById(id: string): Promise<Lead | null> {
     reply_count: data.reply_count || 0,
     last_opened_at: data.last_opened_at || null,
     open_count: data.open_count || 0,
+    tags: Array.isArray(data.tags) ? data.tags : [],
+    auto_tags: Array.isArray(data.auto_tags) ? data.auto_tags : [],
+    auto_tags_updated_at: data.auto_tags_updated_at || null,
+    scrape_run_id: data.scrape_run_id || null,
+    thread_rating: data.thread_rating || null,
+    thread_rating_reason: data.thread_rating_reason || null,
+    thread_revisit_month: data.thread_revisit_month || null,
+    thread_rated_at: data.thread_rated_at || null,
   };
 }
 
@@ -545,6 +561,7 @@ export async function createLead(data: {
   business_name: string;
   website?: string | null;
   instagram_handle?: string | null;
+  tags?: string[];
 }): Promise<string> {
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
@@ -554,6 +571,7 @@ export async function createLead(data: {
     business_name: data.business_name.trim(),
     website: data.website || null,
     instagram_handle: data.instagram_handle || null,
+    tags: Array.isArray(data.tags) ? data.tags : [],
     source: "manual",
     stage: "scraped",
     scraped_at: now,
