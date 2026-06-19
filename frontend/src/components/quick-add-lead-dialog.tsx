@@ -1,10 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { X, Loader2 } from "lucide-react";
+import { X, Loader2, Tag } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { TagInput } from "@/components/tag-input";
 import { useCreateLead } from "@/hooks/use-leads";
+import { useTagIndex } from "@/hooks/use-tag-index";
 
 interface Props {
   open: boolean;
@@ -40,7 +42,9 @@ function extractDomain(url: string): string | null {
 
 export function QuickAddLeadDialog({ open, onClose }: Props) {
   const [url, setUrl] = useState("");
+  const [tags, setTags] = useState<string[]>([]);
   const createMutation = useCreateLead();
+  const { tags: knownTags } = useTagIndex();
 
   useEffect(() => {
     function handleKey(e: KeyboardEvent) {
@@ -53,6 +57,7 @@ export function QuickAddLeadDialog({ open, onClose }: Props) {
   useEffect(() => {
     if (!open) {
       setUrl("");
+      setTags([]);
       createMutation.reset();
     }
   }, [open]);
@@ -72,7 +77,7 @@ export function QuickAddLeadDialog({ open, onClose }: Props) {
       trimmed.slice(0, 60);
 
     createMutation.mutate(
-      { business_name: placeholder, ...parsed },
+      { business_name: placeholder, ...parsed, tags },
       { onSuccess: () => onClose() }
     );
   }
@@ -107,6 +112,19 @@ export function QuickAddLeadDialog({ open, onClose }: Props) {
                 if (e.key === "Enter") handleSubmit();
               }}
               autoFocus
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+              <Tag className="h-3 w-3" /> Tags
+            </label>
+            <TagInput
+              value={tags}
+              onChange={setTags}
+              knownTags={knownTags}
+              placeholder="Add tags…"
+              disabled={createMutation.isPending}
             />
           </div>
 

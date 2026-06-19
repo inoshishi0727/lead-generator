@@ -16,9 +16,12 @@ import { ActionableLeadCard } from "@/components/actionable-lead-card";
 import { AddSpecificVenue } from "@/components/add-specific-venue";
 import { BulkAddVenues } from "@/components/bulk-add-venues";
 import { useScrape } from "@/hooks/use-scrape";
-import { useLeads } from "@/hooks/use-leads";
-import { useMessages, useGenerateDrafts } from "@/hooks/use-outreach";
+import { useGenerateDrafts } from "@/hooks/use-outreach";
 import { useOutreachPlan, type OutreachLead } from "@/hooks/use-outreach-plan";
+import { useDashboardStats } from "@/hooks/use-dashboard-stats";
+import { useTopHotLeads } from "@/hooks/use-infinite-leads";
+import { useLatestMessagesForLeads } from "@/hooks/use-latest-messages";
+import { getLeadById } from "@/lib/firestore-api";
 import { Upload, Download, RefreshCw, Sparkles, Target, FileText, Send, Loader2 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { EditReflectionBanner } from "@/components/edit-reflection-banner";
@@ -29,7 +32,6 @@ import { toast } from "sonner";
 import { Sparkline } from "@/components/ui/sparkline";
 import { StageChip } from "@/components/ui/stage-chip";
 import type { Lead, OutreachMessage } from "@/lib/types";
-import { computeLeadReplyRate, formatRate } from "@/lib/metrics";
 
 const SOURCE_KEYS: (keyof SearchQueries)[] = [
   "google_maps", "google_search", "bing_search", "directory",
@@ -72,8 +74,8 @@ export default function DashboardPage() {
   const router = useRouter();
   const { startScrape, isStarting, status } = useScrape();
   const assignedTo = isMember ? user?.uid : undefined;
-  const { data: leads, isLoading: leadsLoading } = useLeads({ assignedTo });
-  const { data: messages } = useMessages({ assignedTo } as any);
+  const { data: stats, isLoading: statsLoading } = useDashboardStats(assignedTo);
+  const { data: topHot } = useTopHotLeads({ assignedTo });
   const { data: outreachPlan } = useOutreachPlan(10);
   const generateMutation = useGenerateDrafts();
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
@@ -86,43 +88,50 @@ export default function DashboardPage() {
   const [bulkAddOpen, setBulkAddOpen] = useState(false);
 
   const isRunning = status?.status === "pending" || status?.status === "running";
+  const leadsLoading = statsLoading;
 
-  const allLeads = leads ?? [];
-  const allMessages = messages ?? [];
+  const totalLeads = stats?.totalLeads ?? 0;
+  const emailsFound = stats?.emailsFound ?? 0;
+  const drafts = stats?.drafts ?? 0;
+  const approved = stats?.approved ?? 0;
+  const sent = stats?.sent ?? 0;
+  const replies = stats?.replies ?? 0;
+  // Lead-level reply rate over leads we've actually contacted. The Analytics
+  // page reports the precise per-message version; this approximation uses
+  // current stage as the denominator so the dashboard avoids pulling every doc.
+  const replyRateDenom = stats?.contacted ?? 0;
+  const replyRatePct = replyRateDenom > 0 ? (replies / replyRateDenom) * 100 : 0;
+  const replyRate = replyRatePct.toFixed(1);
 
-  const totalLeads = allLeads.length;
-  const emailsFound = allLeads.filter((l) => l.email).length;
-  const drafts = allMessages.filter((m) => m.status === "draft").length;
-  const approved = allMessages.filter((m) => m.status === "approved").length;
-  const sent = allMessages.filter((m) => m.status === "sent").length;
-  // Use the single metrics module so this rate agrees with Analytics + Outreach.
-  // Lead-level: leads who replied / leads we sent at least one email to.
-  const replyRateMetric = computeLeadReplyRate(allLeads, allMessages);
-  const replies = replyRateMetric.numerator;
-  const replyRate = formatRate(replyRateMetric).replace("%", "");
-
-  const pipeline = useMemo(() => {
-    const counts = { new: 0, contacted: 0, replied: 0, converted: 0, rejected: 0 };
-    allLeads.forEach((l) => { counts[stageFor(l)]++; });
-    return counts;
-  }, [allLeads]);
+  const pipeline = stats?.pipeline ?? {
+    new: 0,
+    contacted: 0,
+    replied: 0,
+    converted: 0,
+    rejected: 0,
+  };
 
   const hotLeads = useMemo(() =>
-    [...allLeads]
+    (topHot ?? [])
       .filter((l) => stageFor(l) === "new" && (l.score ?? 0) >= 7)
-      .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
       .slice(0, 10),
-    [allLeads]
+    [topHot]
   );
+
+  // Resolve plan + hot-list lead IDs into a single batch fetch for the join.
+  const joinLeadIds = useMemo(() => {
+    const ids = new Set<string>();
+    outreachPlan?.recommended.forEach((l) => ids.add(l.lead_id));
+    hotLeads.forEach((l) => ids.add(l.id));
+    return [...ids];
+  }, [outreachPlan, hotLeads]);
+  const { data: latestMsgMap } = useLatestMessagesForLeads(joinLeadIds);
 
   // Join the eligible plan against the latest message per lead to decide whether
   // each row needs "generate" / "send" / "contacted" — same logic as Outreach overview.
   const actionableLeads = useMemo(() => {
     if (!outreachPlan) return [];
-    const msgMap = new Map<string, OutreachMessage>();
-    for (const m of allMessages) {
-      if (!msgMap.has(m.lead_id)) msgMap.set(m.lead_id, m);
-    }
+    const msgMap = latestMsgMap ?? new Map<string, OutreachMessage>();
     const results: { lead: OutreachLead; action: "generate" | "send" | "contacted"; messageId?: string }[] = [];
     for (const lead of outreachPlan.recommended) {
       const msg = msgMap.get(lead.lead_id);
@@ -135,13 +144,10 @@ export default function DashboardPage() {
       }
     }
     return results.slice(0, 10);
-  }, [outreachPlan, allMessages]);
+  }, [outreachPlan, latestMsgMap]);
 
   const actionableHotLeads = useMemo(() => {
-    const msgMap = new Map<string, OutreachMessage>();
-    for (const m of allMessages) {
-      if (!msgMap.has(m.lead_id)) msgMap.set(m.lead_id, m);
-    }
+    const msgMap = latestMsgMap ?? new Map<string, OutreachMessage>();
     const results: { lead: Lead; action: "generate" | "send" | "contacted"; messageId?: string }[] = [];
     for (const lead of hotLeads) {
       const msg = msgMap.get(lead.id);
@@ -154,13 +160,20 @@ export default function DashboardPage() {
       }
     }
     return results.slice(0, 10);
-  }, [hotLeads, allMessages]);
+  }, [hotLeads, latestMsgMap]);
+
+  // Resolve a plan/hot lead id into a full Lead doc on-demand for the detail dialog.
+  // The dashboard no longer holds every lead in memory.
+  async function openLeadById(id: string) {
+    const full = await getLeadById(id);
+    if (full) setSelectedLead(full);
+  }
 
   function gotoOutreach(leadId: string, status: "draft" | "approved") {
     router.push(`/outreach?tab=${status}&lead=${leadId}`);
   }
 
-  function handleEligibleAction(lead: OutreachLead, action: "generate" | "send", messageId?: string) {
+  function handleEligibleAction(lead: OutreachLead, action: "generate" | "send") {
     if (action === "generate") {
       setActionPendingLead(lead.lead_id);
       generateMutation.mutate([lead.lead_id], {
@@ -168,12 +181,12 @@ export default function DashboardPage() {
         onSuccess: () => gotoOutreach(lead.lead_id, "draft"),
       });
     } else {
-      const msg = allMessages.find((m) => m.id === messageId);
+      const msg = latestMsgMap?.get(lead.lead_id);
       gotoOutreach(lead.lead_id, msg?.status === "approved" ? "approved" : "draft");
     }
   }
 
-  function handleHotAction(lead: Lead, action: "generate" | "send", messageId?: string) {
+  function handleHotAction(lead: Lead, action: "generate" | "send") {
     if (action === "generate") {
       setActionPendingLead(lead.id);
       generateMutation.mutate([lead.id], {
@@ -181,7 +194,7 @@ export default function DashboardPage() {
         onSuccess: () => gotoOutreach(lead.id, "draft"),
       });
     } else {
-      const msg = allMessages.find((m) => m.id === messageId);
+      const msg = latestMsgMap?.get(lead.id);
       gotoOutreach(lead.id, msg?.status === "approved" ? "approved" : "draft");
     }
   }
@@ -270,12 +283,8 @@ export default function DashboardPage() {
 
   const today = new Date();
   const dayName = today.toLocaleDateString("en-GB", { weekday: "long" });
-  const firstSentAt = allMessages
-    .filter((m) => m.sent_at)
-    .map((m) => new Date(m.sent_at as string).getTime())
-    .reduce((min, t) => (t < min ? t : min), Infinity);
-  const opsStart = isFinite(firstSentAt) ? new Date(firstSentAt) : null;
-  const weekNum = opsStart
+  const opsStart = stats?.firstSentAt ? new Date(stats.firstSentAt) : null;
+  const weekNum = opsStart && !Number.isNaN(opsStart.getTime())
     ? Math.max(1, Math.ceil((today.getTime() - opsStart.getTime()) / (7 * 24 * 60 * 60 * 1000)))
     : 1;
 
@@ -370,8 +379,8 @@ export default function DashboardPage() {
           label="Reply rate"
           value={replyRate}
           unit="%"
-          delta={`${replies} of ${replyRateMetric.denominator} contacted`}
-          info={`Lead-level reply rate: ${replies} leads who replied ÷ ${replyRateMetric.denominator} leads we sent at least one email to. The Analytics page shows a different number because it aggregates message-level sends + replies across a 12-week window — that denominator includes every follow-up and grows over time.`}
+          delta={`${replies} of ${replyRateDenom} contacted`}
+          info={`Lead-level reply rate: ${replies} leads who replied ÷ ${replyRateDenom} leads currently in a sent-or-later stage. The Analytics page shows a different number because it aggregates message-level sends + replies across a 12-week window — that denominator includes every follow-up and grows over time.`}
         />
         <StatCard
           label="Pending approval"
@@ -385,8 +394,7 @@ export default function DashboardPage() {
       <div style={{ marginBottom: 16 }}>
         <OutreachPlan
           onLeadClick={(leadId) => {
-            const lead = allLeads.find((l) => l.id === leadId) ?? null;
-            if (lead) setSelectedLead(lead);
+            void openLeadById(leadId);
           }}
         />
       </div>
@@ -489,8 +497,7 @@ export default function DashboardPage() {
                   messageId={messageId}
                   onAction={handleEligibleAction}
                   onLeadClick={(l) => {
-                    const fullLead = allLeads.find((x) => x.id === l.lead_id);
-                    if (fullLead) setSelectedLead(fullLead);
+                    void openLeadById(l.lead_id);
                   }}
                   isPending={actionPendingLead === lead.lead_id}
                 />
@@ -526,7 +533,7 @@ export default function DashboardPage() {
             </p>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {actionableHotLeads.map(({ lead, action, messageId }, i) => (
+              {actionableHotLeads.map(({ lead, action }, i) => (
                 <div
                   key={lead.id}
                   className="flex items-start gap-3 rounded-lg border border-border/40 bg-muted/10 p-3 transition-colors hover:bg-muted/20"
@@ -590,7 +597,7 @@ export default function DashboardPage() {
                         disabled={actionPendingLead === lead.id}
                         onClick={(e) => {
                           e.stopPropagation();
-                          handleHotAction(lead, action as "generate" | "send", messageId);
+                          handleHotAction(lead, action as "generate" | "send");
                         }}
                       >
                         {actionPendingLead === lead.id ? (
@@ -645,8 +652,8 @@ export default function DashboardPage() {
             <UpcomingScrapeReview />
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24, marginTop: 16 }}>
               <ScrapeControl
-                onStart={(queries, limit, headless) =>
-                  startScrape({ queries, limit, headless })
+                onStart={(queries, limit, headless, tags) =>
+                  startScrape({ queries, limit, headless, tags })
                 }
                 isStarting={isStarting}
                 isRunning={isRunning}

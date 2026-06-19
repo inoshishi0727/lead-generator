@@ -4,7 +4,8 @@ import { useState, useMemo, useEffect, Suspense } from "react";
 import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { LeadsTable } from "@/components/leads-table";
-import { useLeads, useEnrichLeads } from "@/hooks/use-leads";
+import { useEnrichLeads } from "@/hooks/use-leads";
+import { useInfiniteLeads } from "@/hooks/use-infinite-leads";
 import { useDebounce } from "@/hooks/use-debounce";
 import { QuickAddLeadDialog } from "@/components/quick-add-lead-dialog";
 import { SearchQueryManager } from "@/components/search-query-manager";
@@ -246,6 +247,7 @@ function LeadsPageInner() {
   const [source, setSource] = useState("");
   const [stage, setStage] = useState("");
   const [search, setSearch] = useState(() => searchParams.get("q") ?? "");
+  const [tag, setTag] = useState(() => searchParams.get("tag") ?? "");
   const [sort, setSort] = useState<SortOption>(() => parseSort(searchParams.get("sort")));
   const [recency, setRecency] = useState<RecencyOption>(() => parseRecency(searchParams.get("recency")));
   const debouncedSearch = useDebounce(search, 300);
@@ -254,6 +256,8 @@ function LeadsPageInner() {
   useEffect(() => {
     const q = searchParams.get("q");
     if (q) setSearch(q);
+    const tagParam = searchParams.get("tag") ?? "";
+    setTag((curr) => (curr === tagParam ? curr : tagParam));
     const s = parseSort(searchParams.get("sort"));
     setSort((curr) => (curr === s ? curr : s));
     const r = parseRecency(searchParams.get("recency"));
@@ -267,6 +271,15 @@ function LeadsPageInner() {
       router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
     }
   }, [searchParams]);
+
+  const setTagFilter = (value: string) => {
+    setTag(value);
+    const params = new URLSearchParams(searchParams.toString());
+    if (value) params.set("tag", value);
+    else params.delete("tag");
+    const qs = params.toString();
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+  };
 
   const handleSortChange = (value: SortOption) => {
     setSort(value);
@@ -289,7 +302,7 @@ function LeadsPageInner() {
   const [fit, setFit] = useState("");
   const [postcode, setPostcode] = useState("");
   const [assignedToFilter, setAssignedToFilter] = useState("");
-  const [emailOnly, setEmailOnly] = useState(true);
+  const [emailOnly, setEmailOnly] = useState(false);
   const [noMenuUrl, setNoMenuUrl] = useState(false);
   const [menuUrlLoading, setMenuUrlLoading] = useState(false);
   const [showQuickAdd, setShowQuickAdd] = useState(false);
@@ -322,16 +335,35 @@ function LeadsPageInner() {
       ? undefined  // fetch all, filter client-side
       : assignedToFilter || undefined;
 
-  const { data: rawLeads, isLoading } = useLeads({
-    source: firestoreSource || undefined,
-    stage: firestoreStage || undefined,
-    search: debouncedSearch || undefined,
-    assignedTo: effectiveAssignedTo,
+  const {
+    data: pagedData,
+    isLoading,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useInfiniteLeads({
+    filters: {
+      source: firestoreSource || undefined,
+      stage: firestoreStage || undefined,
+      assignedTo: effectiveAssignedTo,
+    },
   });
 
-  const allLeads = (rawLeads ?? []).filter(
-    (l) => l.stage !== "client" && l.stage !== "converted"
+  const rawLeads = useMemo(
+    () => (pagedData?.pages ?? []).flatMap((p) => p.leads),
+    [pagedData],
   );
+
+  const allLeads = useMemo(
+    () => rawLeads.filter((l) => l.stage !== "client" && l.stage !== "converted"),
+    [rawLeads],
+  );
+
+  // Classic page-by-page navigation over the filtered result. Server-side we
+  // fetch in cursor batches (LEADS_PAGE_SIZE) so big datasets stay fast; the UI
+  // surfaces 10 visible rows per page regardless.
+  const DISPLAY_PAGE_SIZE = 10;
+  const [pageIndex, setPageIndex] = useState(0);
 
   const enrichmentQueueCount = useMemo(
     () => allLeads.filter((l) => l.enrichment_status !== "success" && l.website).length,
@@ -383,6 +415,17 @@ function LeadsPageInner() {
     return Array.from(counts.entries()).sort(([a], [b]) => a.localeCompare(b));
   }, [allLeads, emailOnly, category, fit]);
 
+  const tagOptions = useMemo(() => {
+    const pool = emailOnly ? allLeads.filter((l) => l.email) : allLeads;
+    const counts = new Map<string, number>();
+    pool.forEach((l) => {
+      for (const t of [...(l.tags ?? []), ...(l.auto_tags ?? [])]) {
+        if (t) counts.set(t, (counts.get(t) ?? 0) + 1);
+      }
+    });
+    return Array.from(counts.entries()).sort(([a], [b]) => a.localeCompare(b));
+  }, [allLeads, emailOnly]);
+
   const leads = useMemo(() => {
     let filtered = allLeads;
     if (source === "manual") filtered = filtered.filter((l) => l.source === "manual");
@@ -395,10 +438,15 @@ function LeadsPageInner() {
     if (postcode) filtered = filtered.filter((l) => getDistrict(l.location_postcode) === postcode);
     if (assignedToFilter === "__unassigned__") filtered = filtered.filter((l) => !l.assigned_to);
     if (noMenuUrl) filtered = filtered.filter((l) => !l.menu_url || l.menu_url === "not_found");
+    if (tag) filtered = filtered.filter((l) => (l.tags ?? []).includes(tag) || (l.auto_tags ?? []).includes(tag));
     if (newLeadIds) filtered = filtered.filter((l) => newLeadIds.has(l.id));
+    if (debouncedSearch) {
+      const s = debouncedSearch.toLowerCase();
+      filtered = filtered.filter((l) => (l.business_name ?? "").toLowerCase().includes(s));
+    }
     filtered = applyRecencyFilter(filtered, recency);
     return applySort(filtered, sort);
-  }, [allLeads, source, stage, emailOnly, category, fit, postcode, assignedToFilter, noMenuUrl, newLeadIds, sort, recency]);
+  }, [allLeads, source, stage, emailOnly, category, fit, postcode, assignedToFilter, noMenuUrl, tag, newLeadIds, debouncedSearch, sort, recency]);
 
   const latestCohort = useMemo(() => computeLatestCohort(allLeads), [allLeads]);
 
@@ -430,6 +478,31 @@ function LeadsPageInner() {
   const total = leads.length;
   const totalRaw = allLeads.length;
 
+  // Reset to page 1 whenever the filter shape changes — without this, a user
+  // applying a tag filter while on page 6 would land on an empty page.
+  useEffect(() => {
+    setPageIndex(0);
+  }, [source, stage, emailOnly, category, fit, postcode, assignedToFilter, noMenuUrl, tag, debouncedSearch, recency, sort]);
+
+  // Display-page math. `pageCount` is the page count over leads loaded so far;
+  // when the server has more pages available we add "+" semantics to the UI so
+  // the operator knows the count can grow.
+  const pageCount = Math.max(1, Math.ceil(total / DISPLAY_PAGE_SIZE));
+  const currentPage = Math.min(pageIndex, pageCount - 1);
+  const visibleLeads = leads.slice(
+    currentPage * DISPLAY_PAGE_SIZE,
+    (currentPage + 1) * DISPLAY_PAGE_SIZE,
+  );
+
+  // Pull more server-side rows whenever the current display page is at or past
+  // the loaded-set edge — keeps "Next" responsive even with active client filters.
+  useEffect(() => {
+    const needsMore = (currentPage + 1) * DISPLAY_PAGE_SIZE >= total;
+    if (needsMore && hasNextPage && !isFetchingNextPage) {
+      void fetchNextPage();
+    }
+  }, [currentPage, total, hasNextPage, isFetchingNextPage, fetchNextPage]);
+
   // Build the visible chip list shown by the LeadsFilterBanner so any narrowed
   // pool surfaces a clearable indicator (the prior layout silently hid leads
   // behind the default-on "Email only" filter — Fable flagged this as a "602
@@ -444,9 +517,10 @@ function LeadsPageInner() {
     if (assignedToFilter) out.push({ key: "assignedTo", label: assignedToFilter === "__unassigned__" ? "Unassigned" : `Assigned: ${assignedToFilter}`, onClear: () => setAssignedToFilter("") });
     if (emailOnly) out.push({ key: "emailOnly", label: "Email only", onClear: () => setEmailOnly(false) });
     if (noMenuUrl) out.push({ key: "noMenuUrl", label: "No menu URL", onClear: () => setNoMenuUrl(false) });
+    if (tag) out.push({ key: "tag", label: `Tag: ${tag.replace("revisit:", "revisit ")}`, onClear: () => setTagFilter("") });
     if (search) out.push({ key: "search", label: `Search: ${search}`, onClear: () => setSearch("") });
     return out;
-  }, [source, stage, category, fit, postcode, assignedToFilter, emailOnly, noMenuUrl, search]);
+  }, [source, stage, category, fit, postcode, assignedToFilter, emailOnly, noMenuUrl, tag, search]);
 
   const clearAllFilters = () => {
     setSource("");
@@ -458,6 +532,7 @@ function LeadsPageInner() {
     setEmailOnly(false);
     setNoMenuUrl(false);
     setSearch("");
+    setTagFilter("");
   };
 
   const DISMISS_KEY = "new_leads_banner_dismissed_at";
@@ -483,10 +558,11 @@ function LeadsPageInner() {
     }
   }, [emailBannerDismissed]);
 
-  // Auto-toggle emailOnly: email ingestion leads don't have venue emails yet,
-  // so uncheck when viewing them; restore when switching to any other source.
+  // Email-ingestion leads don't have venue emails yet — force the "email only"
+  // filter off when viewing them so the table isn't accidentally empty. Other
+  // sources keep whatever the operator chose.
   useEffect(() => {
-    setEmailOnly(source !== "email_ingestion");
+    if (source === "email_ingestion") setEmailOnly(false);
   }, [source]);
 
   const allNewLeads = [...newEmailLeads, ...newScrapedLeads];
@@ -709,6 +785,19 @@ function LeadsPageInner() {
             ))}
           </select>
 
+          <select
+            value={tag}
+            onChange={(e) => setTagFilter(e.target.value)}
+            className="w-44 rounded-md border border-input bg-background px-3 py-2 text-sm"
+          >
+            <option value="">All Tags</option>
+            {tagOptions.map(([t, count]) => (
+              <option key={t} value={t}>
+                {t.replace("revisit:", "revisit ").replace(/_/g, " ")} ({count})
+              </option>
+            ))}
+          </select>
+
           {isAdmin && teamMembers.length > 1 && (
             <select
               value={assignedToFilter}
@@ -905,8 +994,8 @@ function LeadsPageInner() {
 
       <div data-tour="leads-table">
         <LeadsTable
-          leads={leads}
-          isLoading={isLoading}
+          leads={visibleLeads}
+          isLoading={isLoading || (isFetchingNextPage && visibleLeads.length === 0)}
           selectable={isAdmin}
           selectedIds={selectedLeadIds}
           onSelectionChange={setSelectedLeadIds}
@@ -914,7 +1003,55 @@ function LeadsPageInner() {
           onLeadOpened={() => setOpenLeadId(null)}
           latestCohort={latestCohort}
           viewedSet={viewedSet}
+          onTagClick={setTagFilter}
         />
+
+        {/* Classic pagination. The page count may grow as more server pages
+            stream in for very large datasets — that's why the indicator shows
+            "+ more" when the server still has rows the client hasn't fetched. */}
+        <div className="flex items-center justify-between gap-2 py-4 text-xs text-muted-foreground">
+          <div>
+            {total === 0 ? (
+              "No leads"
+            ) : (
+              <>
+                Showing {currentPage * DISPLAY_PAGE_SIZE + 1}–{currentPage * DISPLAY_PAGE_SIZE + visibleLeads.length} of {total}
+                {hasNextPage ? "+ more" : ""}
+              </>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={currentPage === 0}
+              onClick={() => setPageIndex(Math.max(0, currentPage - 1))}
+            >
+              Prev
+            </Button>
+            <span className="px-1 tabular-nums">
+              Page {currentPage + 1} of {pageCount}
+              {hasNextPage ? "+" : ""}
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={
+                (currentPage >= pageCount - 1 && !hasNextPage) || isFetchingNextPage
+              }
+              onClick={() => setPageIndex(currentPage + 1)}
+            >
+              {isFetchingNextPage ? (
+                <>
+                  <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+                  Loading…
+                </>
+              ) : (
+                "Next"
+              )}
+            </Button>
+          </div>
+        </div>
       </div>
 
       <QuickAddLeadDialog

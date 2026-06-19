@@ -37,6 +37,7 @@ export function useCreateLead() {
       business_name: string;
       website?: string | null;
       instagram_handle?: string | null;
+      tags?: string[];
     }) => createLead(data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["leads"] });
