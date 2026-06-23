@@ -365,6 +365,25 @@ function LeadsPageInner() {
   const DISPLAY_PAGE_SIZE = 10;
   const [pageIndex, setPageIndex] = useState(0);
 
+  // Background-prefetch the rest of the dataset once the first page lands.
+  // The filter dropdowns (category / fit / postcode / tag) compute their counts
+  // from `allLeads`; without prefetch they'd reflect "only what's loaded so far"
+  // which reads as data loss. Capped to PREFETCH_PAGE_CAP server pages
+  // (PREFETCH_PAGE_CAP × LEADS_PAGE_SIZE rows) so a runaway dataset can't lock
+  // the tab; pagination still works past that cap via the Next button.
+  const PREFETCH_PAGE_CAP = 100;
+  const loadedServerPages = pagedData?.pages.length ?? 0;
+  useEffect(() => {
+    if (
+      hasNextPage &&
+      !isFetchingNextPage &&
+      loadedServerPages > 0 &&
+      loadedServerPages < PREFETCH_PAGE_CAP
+    ) {
+      void fetchNextPage();
+    }
+  }, [hasNextPage, isFetchingNextPage, fetchNextPage, loadedServerPages]);
+
   const enrichmentQueueCount = useMemo(
     () => allLeads.filter((l) => l.enrichment_status !== "success" && l.website).length,
     [allLeads]
@@ -575,6 +594,11 @@ function LeadsPageInner() {
           <h1 className="sp-page-title">Leads</h1>
           <div className="sp-page-subtitle">
             {total} lead{total !== 1 ? "s" : ""}
+            {hasNextPage && (
+              <span className="ml-2 text-xs text-muted-foreground">
+                · loading more for accurate filter counts…
+              </span>
+            )}
           </div>
         </div>
         {isAdmin && (

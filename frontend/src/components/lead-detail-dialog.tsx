@@ -39,10 +39,36 @@ import { useEnrichLeads } from "@/hooks/use-leads";
 import { useScrapeLeadNow } from "@/hooks/use-scrape-leads";
 import { useLinkedInEmployees } from "@/hooks/use-linkedin-employees";
 import { useTagIndex } from "@/hooks/use-tag-index";
-import { updateLeadFields } from "@/lib/firestore-api";
-import { useQueryClient } from "@tanstack/react-query";
+import { updateLeadFields, type LeadsPage } from "@/lib/firestore-api";
+import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import type { Lead } from "@/lib/types";
+
+// Optimistically patch a lead's fields across every cached query that holds it
+// (`["lead", id]` for the detail dialog, every `["leads", "infinite", ...]`
+// page for the leads table). Avoids a full network re-fetch on every inline
+// edit — the previous `invalidateQueries({ queryKey: ["leads"] })` matched the
+// infinite list, the top-hot list, and any cached single-page useLeads, which
+// is what was making each save feel slow once the background prefetch had
+// pulled in the rest of the dataset.
+function applyLeadPatchToCache(qc: QueryClient, leadId: string, patch: Partial<Lead>) {
+  qc.setQueryData<Lead | undefined>(["lead", leadId], (old) =>
+    old ? { ...old, ...patch } : old,
+  );
+  qc.setQueriesData<{ pages: LeadsPage[]; pageParams: unknown[] } | undefined>(
+    { queryKey: ["leads", "infinite"] },
+    (old) => {
+      if (!old) return old;
+      return {
+        ...old,
+        pages: old.pages.map((page) => ({
+          ...page,
+          leads: page.leads.map((l) => (l.id === leadId ? { ...l, ...patch } : l)),
+        })),
+      };
+    },
+  );
+}
 
 interface Props {
   lead: Lead | null;
@@ -190,11 +216,22 @@ function EmployeeRow({ emp }: { emp: import("@/lib/types").LinkedInEmployee }) {
   );
 }
 
-export function LeadDetailDialog({ lead, onClose, onEmail }: Props) {
+export function LeadDetailDialog({ lead: leadProp, onClose, onEmail }: Props) {
   const enrichMutation = useEnrichLeads();
   const scrapeLead = useScrapeLeadNow();
   const [enrichDone, setEnrichDone] = useState(false);
   const queryClient = useQueryClient();
+
+  // The parent passes a snapshot of the lead via props; its own state isn't
+  // updated when we patch the query cache, so the dialog would otherwise keep
+  // showing the pre-save value until the user closed and reopened. Layering
+  // local overrides on top of the prop gives the dialog a live view without
+  // forcing the parent to thread a setter through every render.
+  const [overrides, setOverrides] = useState<Partial<Lead>>({});
+  useEffect(() => {
+    setOverrides({});
+  }, [leadProp?.id]);
+  const lead = leadProp ? ({ ...leadProp, ...overrides } as Lead) : null;
   const [editingMenuUrl, setEditingMenuUrl] = useState(false);
   const [menuUrlDraft, setMenuUrlDraft] = useState("");
   const [savingMenuUrl, setSavingMenuUrl] = useState(false);
@@ -220,9 +257,11 @@ export function LeadDetailDialog({ lead, onClose, onEmail }: Props) {
     if (!lead) return;
     setSavingMenuUrl(true);
     try {
-      await updateLeadFields(lead.id, { menu_url: menuUrlDraft.trim() || null });
+      const patch = { menu_url: menuUrlDraft.trim() || null };
+      await updateLeadFields(lead.id, patch);
+      applyLeadPatchToCache(queryClient, lead.id, patch);
+      setOverrides((prev) => ({ ...prev, ...patch }));
       setEditingMenuUrl(false);
-      await queryClient.invalidateQueries({ queryKey: ["leads"] });
       toast.success("Menu URL saved");
     } catch (err) {
       toast.error("Couldn't save menu URL", {
@@ -239,9 +278,11 @@ export function LeadDetailDialog({ lead, onClose, onEmail }: Props) {
     try {
       let url = websiteDraft.trim();
       if (url && !/^https?:\/\//i.test(url)) url = "https://" + url;
-      await updateLeadFields(lead.id, { website: url || null });
+      const patch = { website: url || null };
+      await updateLeadFields(lead.id, patch);
+      applyLeadPatchToCache(queryClient, lead.id, patch);
+      setOverrides((prev) => ({ ...prev, ...patch }));
       setEditingWebsite(false);
-      await queryClient.invalidateQueries({ queryKey: ["leads"] });
       toast.success(url ? "Website saved" : "Website cleared");
     } catch (err) {
       toast.error("Couldn't save website", {
@@ -261,12 +302,14 @@ export function LeadDetailDialog({ lead, onClose, onEmail }: Props) {
     }
     setSavingName(true);
     try {
-      await updateLeadFields(lead.id, {
+      const patch = {
         business_name: trimmed,
         business_name_lower: trimmed.toLowerCase(),
-      });
+      };
+      await updateLeadFields(lead.id, patch);
+      applyLeadPatchToCache(queryClient, lead.id, patch);
+      setOverrides((prev) => ({ ...prev, ...patch }));
       setEditingName(false);
-      await queryClient.invalidateQueries({ queryKey: ["leads"] });
       toast.success("Business name saved");
     } catch (err) {
       toast.error("Couldn't save name", {
@@ -286,9 +329,11 @@ export function LeadDetailDialog({ lead, onClose, onEmail }: Props) {
     }
     setSavingEmail(true);
     try {
-      await updateLeadFields(lead.id, { email: trimmed || null });
+      const patch = { email: trimmed || null };
+      await updateLeadFields(lead.id, patch);
+      applyLeadPatchToCache(queryClient, lead.id, patch);
+      setOverrides((prev) => ({ ...prev, ...patch }));
       setEditingEmail(false);
-      await queryClient.invalidateQueries({ queryKey: ["leads"] });
       toast.success(trimmed ? "Email saved" : "Email cleared");
     } catch (err) {
       toast.error("Couldn't save email", {
@@ -308,9 +353,11 @@ export function LeadDetailDialog({ lead, onClose, onEmail }: Props) {
     }
     setSavingContactEmail(true);
     try {
-      await updateLeadFields(lead.id, { contact_email: trimmed || null });
+      const patch = { contact_email: trimmed || null };
+      await updateLeadFields(lead.id, patch);
+      applyLeadPatchToCache(queryClient, lead.id, patch);
+      setOverrides((prev) => ({ ...prev, ...patch }));
       setEditingContactEmail(false);
-      await queryClient.invalidateQueries({ queryKey: ["leads"] });
       toast.success(trimmed ? "Contact email saved" : "Contact email cleared");
     } catch (err) {
       toast.error("Couldn't save contact email", {
@@ -325,12 +372,17 @@ export function LeadDetailDialog({ lead, onClose, onEmail }: Props) {
     if (!lead) return;
     setSavingCategory(true);
     try {
+      // `enrichment.venue_category` lives nested in the doc, so it can't go in
+      // the patch we hand the cache helper (which spreads top-level fields).
+      // The Firestore write does need it cleared, but the cached view just
+      // needs the top-level field updated.
       await updateLeadFields(lead.id, {
         venue_category: next,
         "enrichment.venue_category": null,
       });
+      applyLeadPatchToCache(queryClient, lead.id, { venue_category: next });
+      setOverrides((prev) => ({ ...prev, venue_category: next }));
       setEditingCategory(false);
-      await queryClient.invalidateQueries({ queryKey: ["leads"] });
       toast.success("Category saved");
     } catch (err) {
       toast.error("Couldn't save category", {
@@ -345,8 +397,10 @@ export function LeadDetailDialog({ lead, onClose, onEmail }: Props) {
     if (!lead) return;
     setSavingTags(true);
     try {
-      await updateLeadFields(lead.id, { tags: nextTags });
-      await queryClient.invalidateQueries({ queryKey: ["leads"] });
+      const patch = { tags: nextTags };
+      await updateLeadFields(lead.id, patch);
+      applyLeadPatchToCache(queryClient, lead.id, patch);
+      setOverrides((prev) => ({ ...prev, ...patch }));
     } catch (err) {
       toast.error("Couldn't save tags", {
         description: err instanceof Error ? err.message : String(err),
@@ -423,10 +477,10 @@ export function LeadDetailDialog({ lead, onClose, onEmail }: Props) {
               <button
                 onClick={handleSaveName}
                 disabled={savingName}
-                className="text-emerald-400 hover:text-emerald-300 transition-colors"
+                className="text-emerald-400 hover:text-emerald-300 transition-colors disabled:opacity-60"
                 title="Save"
               >
-                <Check className="h-4 w-4" />
+                {savingName ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
               </button>
               <button
                 onClick={() => setEditingName(false)}
@@ -652,9 +706,9 @@ export function LeadDetailDialog({ lead, onClose, onEmail }: Props) {
                 <button
                   onClick={handleSaveEmail}
                   disabled={savingEmail}
-                  className="text-emerald-400 hover:text-emerald-300 transition-colors"
+                  className="text-emerald-400 hover:text-emerald-300 transition-colors disabled:opacity-60"
                 >
-                  <Check className="h-3.5 w-3.5" />
+                  {savingEmail ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
                 </button>
                 <button onClick={() => setEditingEmail(false)} className="text-muted-foreground hover:text-foreground transition-colors">
                   <X className="h-3.5 w-3.5" />
@@ -701,9 +755,9 @@ export function LeadDetailDialog({ lead, onClose, onEmail }: Props) {
                 <button
                   onClick={handleSaveContactEmail}
                   disabled={savingContactEmail}
-                  className="text-emerald-400 hover:text-emerald-300 transition-colors"
+                  className="text-emerald-400 hover:text-emerald-300 transition-colors disabled:opacity-60"
                 >
-                  <Check className="h-3.5 w-3.5" />
+                  {savingContactEmail ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
                 </button>
                 <button onClick={() => setEditingContactEmail(false)} className="text-muted-foreground hover:text-foreground transition-colors">
                   <X className="h-3.5 w-3.5" />
@@ -758,9 +812,9 @@ export function LeadDetailDialog({ lead, onClose, onEmail }: Props) {
                 <button
                   onClick={handleSaveWebsite}
                   disabled={savingWebsite}
-                  className="text-emerald-400 hover:text-emerald-300 transition-colors"
+                  className="text-emerald-400 hover:text-emerald-300 transition-colors disabled:opacity-60"
                 >
-                  <Check className="h-3.5 w-3.5" />
+                  {savingWebsite ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
                 </button>
                 <button onClick={() => setEditingWebsite(false)} className="text-muted-foreground hover:text-foreground transition-colors">
                   <X className="h-3.5 w-3.5" />
@@ -822,9 +876,9 @@ export function LeadDetailDialog({ lead, onClose, onEmail }: Props) {
                   <button
                     onClick={handleSaveMenuUrl}
                     disabled={savingMenuUrl}
-                    className="text-emerald-400 hover:text-emerald-300 transition-colors"
+                    className="text-emerald-400 hover:text-emerald-300 transition-colors disabled:opacity-60"
                   >
-                    <Check className="h-3.5 w-3.5" />
+                    {savingMenuUrl ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
                   </button>
                   <button onClick={() => setEditingMenuUrl(false)} className="text-muted-foreground hover:text-foreground transition-colors">
                     <X className="h-3.5 w-3.5" />
