@@ -15,6 +15,7 @@ import {
   documentId,
   getCountFromServer,
   updateDoc,
+  setDoc,
   addDoc,
   deleteDoc,
   onSnapshot,
@@ -875,8 +876,12 @@ export async function createLead(data: {
 }): Promise<string> {
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
-  const ref = collection(db, "leads");
-  const docRef = await addDoc(ref, {
+  // setDoc with our own id keeps the Firestore document path and the `id`
+  // field in sync. The old `addDoc` flow generated a different auto-id for
+  // the path, so every subsequent updateLeadFields(lead.id, ...) hit
+  // "No document to update" and the VPS scrape endpoint returned HTTP 404.
+  const ref = doc(db, "leads", id);
+  await setDoc(ref, {
     id,
     business_name: data.business_name.trim(),
     website: data.website || null,
@@ -898,7 +903,7 @@ export async function createLead(data: {
     enrichment: {},
     dedup_key: `manual|${data.business_name.trim().toLowerCase()}|`,
   });
-  return docRef.id;
+  return id;
 }
 
 // --- Scrape Runs ---
