@@ -402,7 +402,9 @@ async def fetch_website_text(
 
         proxy = get_proxy_config()
         context_kwargs = {
-            "viewport": {"width": 1280, "height": 720},
+            # Camoufox controls the viewport at the window level; passing an explicit
+            # viewport makes it call Browser.setDefaultViewport, which it rejects.
+            "no_viewport": True,
             "locale": "en-GB",
             "timezone_id": "Europe/London",
             "geolocation": {"latitude": 51.5074, "longitude": -0.1278},
