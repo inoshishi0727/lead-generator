@@ -426,7 +426,7 @@ async def fetch_website_text(
                 log.warning("homepage_fetch_failed", url=url, error=str(e))
                 await context.close()
                 await close_browser(browser, engine)
-                return ""
+                return "", None
 
         # Dismiss cookie/location popups
         await _dismiss_popups(page)

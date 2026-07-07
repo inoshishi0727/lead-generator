@@ -354,7 +354,7 @@ async def analyze_website(
         business_summary=parsed.get("business_summary"),
         location_area=parsed.get("location_area"),
         menu_fit=menu_fit,
-        menu_fit_signals=parsed.get("menu_fit_signals", []),
+        menu_fit_signals=parsed.get("menu_fit_signals") or [],
         drinks_programme=parsed.get("drinks_programme"),
         why_asterley_fits=parsed.get("why_asterley_fits"),
         context_notes=parsed.get("context_notes"),
