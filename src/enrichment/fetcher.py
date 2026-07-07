@@ -402,7 +402,9 @@ async def fetch_website_text(
 
         proxy = get_proxy_config()
         context_kwargs = {
-            "viewport": {"width": 1280, "height": 720},
+            # Camoufox controls the viewport at the window level; passing an explicit
+            # viewport makes it call Browser.setDefaultViewport, which it rejects.
+            "no_viewport": True,
             "locale": "en-GB",
             "timezone_id": "Europe/London",
             "geolocation": {"latitude": 51.5074, "longitude": -0.1278},
@@ -424,7 +426,7 @@ async def fetch_website_text(
                 log.warning("homepage_fetch_failed", url=url, error=str(e))
                 await context.close()
                 await close_browser(browser, engine)
-                return ""
+                return "", None
 
         # Dismiss cookie/location popups
         await _dismiss_popups(page)
