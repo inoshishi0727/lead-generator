@@ -50,10 +50,12 @@ class EnrichmentEngine:
             return lead
 
         async with self._semaphore:
-            # Fetch website text + best menu URL
-            text, menu_url = await fetch_website_text(
+            # Fetch website text + menu (text, best URL, and mirrorable asset bytes)
+            result = await fetch_website_text(
                 lead.website, self.enrichment_config
             )
+            text = result.text
+            menu_url = result.menu_url
 
             if not text:
                 lead.enrichment = EnrichmentData(
@@ -75,6 +77,18 @@ class EnrichmentEngine:
             enrichment = await analyze_website(
                 text, lead, self.enrichment_config, menu_url=menu_url
             )
+
+            # Persist the raw menu items + mirror the menu PDF/image to storage for on-site display.
+            enrichment.menu_text = result.menu_text
+            if result.asset_bytes and result.asset_mime:
+                from src.db.storage import upload_menu_asset
+
+                enrichment.menu_asset_url = (
+                    upload_menu_asset(str(lead.id), result.asset_bytes, result.asset_mime)
+                    or menu_url
+                )
+            elif menu_url:
+                enrichment.menu_asset_url = menu_url
 
             lead.enrichment = enrichment
             lead.enriched_at = datetime.now()

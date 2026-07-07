@@ -9,9 +9,21 @@ from urllib.parse import urljoin, urlparse
 
 import structlog
 
+from dataclasses import dataclass
+
 from src.config.loader import EnrichmentConfig
 
 log = structlog.get_logger()
+
+
+@dataclass
+class FetchResult:
+    """Result of fetching a venue website for enrichment."""
+    text: str
+    menu_url: str | None = None
+    menu_text: str | None = None
+    asset_bytes: bytes | None = None
+    asset_mime: str | None = None
 
 # Common paths for hospitality venues — tried in order after homepage
 STATIC_PATHS = ["/menu", "/menus", "/drinks", "/drinks-menu", "/cocktails",
@@ -30,6 +42,21 @@ LINK_PATTERNS = re.compile(
 # Image link patterns — only collect images that look like menus
 IMAGE_MENU_PATTERNS = re.compile(
     r"menu|drink|cocktail|wine|bar|food|eat|spirit|beverage",
+    re.IGNORECASE,
+)
+
+# Tighter than LINK_PATTERNS: the visible text of buttons/links we're willing to CLICK
+# to reach a menu on JS/SPA sites. Kept narrow so we don't click "Book Now" / "Gift Card".
+MENU_TRIGGER_PATTERN = re.compile(
+    r"discover\s+menu|see\s+(the\s+)?menu|view\s+(the\s+)?menu|our\s+menu|"
+    r"\b(menus?|drinks?|cocktails?|wine\s*list|food\s*menu|carte|dining)\b",
+    re.IGNORECASE,
+)
+
+# Client-side (SPA) 404 / not-found bodies — routers return HTTP 200 with these,
+# so we must not collect them as content.
+NOT_FOUND_PATTERN = re.compile(
+    r"page not found|forgot to add the page to the router|404\b|no such page|couldn'?t find",
     re.IGNORECASE,
 )
 
@@ -272,6 +299,36 @@ async def _fetch_image_text(url: str, config: EnrichmentConfig) -> str:
         return ""
 
 
+async def _download_asset(url: str) -> tuple[bytes | None, str | None]:
+    """Download a menu PDF/image so it can be mirrored to storage.
+
+    Returns (bytes, mime) for supported types under 10 MB, else (None, None).
+    """
+    import httpx
+
+    low = url.lower().split("?")[0]
+    if low.endswith(".pdf"):
+        mime = "application/pdf"
+    elif low.endswith((".jpg", ".jpeg")):
+        mime = "image/jpeg"
+    elif low.endswith(".png"):
+        mime = "image/png"
+    elif low.endswith(".webp"):
+        mime = "image/webp"
+    else:
+        return None, None
+
+    try:
+        async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
+            resp = await client.get(url)
+        if resp.status_code != 200 or len(resp.content) > 10_000_000:
+            return None, None
+        return resp.content, mime
+    except Exception as exc:
+        log.debug("asset_download_failed", url=url, error=str(exc))
+        return None, None
+
+
 async def _extract_text_via_vision(
     image_bytes: bytes,
     mime_type: str,
@@ -361,6 +418,46 @@ MENU_PATH_PATTERN = re.compile(
 )
 
 
+def _looks_like_404(text: str) -> bool:
+    """True if a page body looks like a client-side 404 / empty route. SPA routers
+    return HTTP 200 with a 'Page Not Found' body, which we must not treat as content."""
+    if not text:
+        return True
+    t = text.strip()
+    if len(t) < 60:
+        return True
+    return bool(NOT_FOUND_PATTERN.search(t)) and len(t) < 400
+
+
+async def _menu_trigger_texts(page, limit: int = 4) -> list[str]:
+    """Visible text of clickable elements (button / link / role) that look like menu
+    triggers — used to CLICK through JS/SPA sites where the menu isn't a plain <a href>."""
+    texts: list[str] = []
+    seen: set[str] = set()
+    try:
+        els = await page.query_selector_all(
+            "a, button, [role='button'], [role='link'], [onclick]"
+        )
+        for el in els:
+            try:
+                if not await el.is_visible():
+                    continue
+                t = (await el.inner_text()).strip()
+            except Exception:
+                continue
+            key = t.lower()
+            if not t or len(t) > 40 or key in seen:
+                continue
+            if MENU_TRIGGER_PATTERN.search(t):
+                seen.add(key)
+                texts.append(t)
+                if len(texts) >= limit:
+                    break
+    except Exception:
+        pass
+    return texts
+
+
 async def fetch_website_text(
     url: str,
     config: EnrichmentConfig,
@@ -386,7 +483,7 @@ async def fetch_website_text(
     from src.scrapers.browser import close_browser, get_proxy_config, launch_browser
 
     if not url:
-        return "", None
+        return FetchResult(text="")
 
     if not url.startswith(("http://", "https://")):
         url = f"https://{url}"
@@ -426,7 +523,7 @@ async def fetch_website_text(
                 log.warning("homepage_fetch_failed", url=url, error=str(e))
                 await context.close()
                 await close_browser(browser, engine)
-                return "", None
+                return FetchResult(text="")
 
         # Dismiss cookie/location popups
         await _dismiss_popups(page)
@@ -449,18 +546,20 @@ async def fetch_website_text(
             links=[urlparse(u).path for u in discovered],
         )
 
-        # Step 3: Build visit list — discovered links first, then static fallbacks
+        # Menu trigger texts (buttons / JS links) — captured on the homepage before we
+        # navigate away, so we can click through SPA sites where the menu is not an <a href>.
+        menu_triggers = await _menu_trigger_texts(page)
+        if menu_triggers:
+            log.debug("menu_triggers_found", url=url, triggers=menu_triggers)
+
+        # Step 3: Visit list = the real discovered links only. Guessed STATIC_PATHS are a
+        # gated last resort (Step 4a) so we don't hop through /menu, /drinks-menu, ... on SPAs.
         to_visit: list[str] = []
         for link_url in discovered:
             path = urlparse(link_url).path
             if path not in visited:
                 to_visit.append(link_url)
                 visited.add(path)
-
-        for static_path in STATIC_PATHS:
-            if static_path not in visited:
-                to_visit.append(urljoin(url, static_path))
-                visited.add(static_path)
 
         max_subpages = 6
         to_visit = to_visit[:max_subpages]
@@ -475,7 +574,7 @@ async def fetch_website_text(
                 await page.goto(target_url, wait_until="networkidle", timeout=timeout_ms)
                 await _dismiss_popups(page, timeout=1000)
                 text = (await page.inner_text("body")).strip()
-                if text and len(text) > 50:
+                if text and len(text) > 50 and not _looks_like_404(text):
                     path = urlparse(target_url).path
                     collected_parts.append(f"--- PAGE: {path} ---\n{text}")
                     log.debug("page_fetched", url=target_url, chars=len(text))
@@ -495,11 +594,71 @@ async def fetch_website_text(
                 log.debug("page_fetch_failed", url=target_url, error=str(e))
                 continue
 
+        # Step 4b: Click menu triggers that aren't plain <a href> links (JS / SPA navigation).
+        # Real navigation — done BEFORE any path guessing. Re-anchor to the homepage per click.
+        got_click_content = False
+        for trig in menu_triggers[:3]:
+            label = f"click:{trig.lower()}"
+            if label in visited:
+                continue
+            visited.add(label)
+            try:
+                await page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+                await _dismiss_popups(page, timeout=1000)
+                await page.get_by_text(trig, exact=True).first.click(timeout=8000)
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=timeout_ms)
+                except Exception:
+                    await page.wait_for_timeout(2500)
+                text = (await page.inner_text("body")).strip()
+                if text and len(text) > 50 and not _looks_like_404(text):
+                    got_click_content = True
+                    collected_parts.append(f"--- PAGE (clicked '{trig}') ---\n{text}")
+                    log.debug("menu_click_fetched", trigger=trig, chars=len(text))
+                    cur = page.url
+                    if MENU_PATH_PATTERN.search(urlparse(cur).path):
+                        discovered_html_links.append(cur)
+            except Exception as e:
+                log.debug("menu_click_failed", trigger=trig, error=str(e))
+                continue
+
+        # Step 4a: Guessed common paths — LAST resort, only if real navigation (discovered links
+        # + clicks) found nothing. Abort the instant a guess returns a client-side 404 body, so we
+        # never keep hopping /menu, /drinks-menu, ... on JS/SPA sites.
+        if not got_click_content:
+            for static_path in STATIC_PATHS[:8]:
+                if static_path in visited:
+                    continue
+                visited.add(static_path)
+                target_url = urljoin(url, static_path)
+                try:
+                    await page.goto(target_url, wait_until="domcontentloaded", timeout=timeout_ms)
+                    await _dismiss_popups(page, timeout=1000)
+                    text = (await page.inner_text("body")).strip()
+                    if _looks_like_404(text):
+                        log.debug("spa_404_stop_guessing", url=target_url)
+                        break
+                    if text and len(text) > 50:
+                        collected_parts.append(f"--- PAGE: {static_path} ---\n{text}")
+                        log.debug("page_fetched", url=target_url, chars=len(text))
+                        _, sub_pdfs, sub_images = await _discover_links(page, target_url)
+                        for pdf_url in sub_pdfs:
+                            if pdf_url not in seen_pdf_urls:
+                                seen_pdf_urls.add(pdf_url)
+                                pdf_links.append(pdf_url)
+                        for img_url in sub_images:
+                            if img_url not in seen_image_urls:
+                                seen_image_urls.add(img_url)
+                                image_links.append(img_url)
+                except Exception as e:
+                    log.debug("page_fetch_failed", url=target_url, error=str(e))
+                    continue
+
         await context.close()
 
     except Exception as e:
         log.warning("browser_fetch_failed", url=url, engine=engine, error=str(e))
-        return "", None
+        return FetchResult(text="")
     finally:
         if browser:
             await close_browser(browser, engine)
@@ -525,6 +684,18 @@ async def fetch_website_text(
     # This ensures truncation cuts generic prose, not the drinks/food menu
     collected_parts = _sort_parts_by_relevance(collected_parts)
 
+    # Menu text = the menu-relevant parts (PDF/image OCR + menu/clicked pages), kept whole and
+    # BEFORE whole-site truncation, so we can show the actual items on our site.
+    menu_markers = ("--- PDF:", "--- IMAGE MENU:", "--- PAGE (clicked")
+    menu_parts = [
+        p for p in collected_parts
+        if p.startswith(menu_markers)
+        or (p.startswith("--- PAGE:") and MENU_PATH_PATTERN.search(p.split("\n", 1)[0]))
+    ]
+    menu_text: str | None = "\n\n".join(menu_parts).strip() or None
+    if menu_text and len(menu_text) > config.gemini_max_input_chars:
+        menu_text = menu_text[: config.gemini_max_input_chars]
+
     full_text = "\n\n".join(collected_parts)
 
     if len(full_text) > config.gemini_max_input_chars:
@@ -542,11 +713,25 @@ async def fetch_website_text(
                 menu_url = link
                 break
 
+    # Download the chosen menu asset's bytes (PDF/image) so it can be mirrored to storage.
+    asset_bytes: bytes | None = None
+    asset_mime: str | None = None
+    if menu_url:
+        asset_bytes, asset_mime = await _download_asset(menu_url)
+
     log.info(
         "website_text_fetched",
         url=url,
         pages=len(collected_parts),
         total_chars=len(full_text),
         menu_url=menu_url,
+        menu_text_chars=len(menu_text or ""),
+        asset=bool(asset_bytes),
     )
-    return full_text, menu_url
+    return FetchResult(
+        text=full_text,
+        menu_url=menu_url,
+        menu_text=menu_text,
+        asset_bytes=asset_bytes,
+        asset_mime=asset_mime,
+    )

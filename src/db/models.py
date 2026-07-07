@@ -129,6 +129,8 @@ class EnrichmentData(BaseModel):
     opening_hours_summary: Optional[str] = None
     price_tier: Optional[str] = None
     menu_url: Optional[str] = None
+    menu_text: Optional[str] = None  # extracted menu items (incl. OCR of image/PDF menus)
+    menu_asset_url: Optional[str] = None  # storage-mirrored menu PDF/image for on-site embedding
     ai_approval: Optional[str] = None  # approve / maybe / reject
     ai_approval_reason: Optional[str] = None
     enrichment_source: Optional[str] = None

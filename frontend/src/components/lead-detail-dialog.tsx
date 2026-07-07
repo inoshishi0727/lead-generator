@@ -184,6 +184,53 @@ function LinkedInEmployeesSection({ leadId }: { leadId: string }) {
   );
 }
 
+function MenuSection({
+  menuText,
+  assetUrl,
+  menuUrl,
+}: {
+  menuText: string | null;
+  assetUrl: string | null;
+  menuUrl: string | null;
+}) {
+  const asset = assetUrl;
+  const isPdf = !!asset && /\.pdf(\?|$)/i.test(asset);
+  const isImage = !!asset && /\.(png|jpe?g|webp)(\?|$)/i.test(asset);
+  const sourceLink = menuUrl || asset;
+  return (
+    <div className="space-y-2">
+      {isPdf && (
+        <object data={asset!} type="application/pdf" className="w-full h-96 rounded border">
+          <a href={asset!} target="_blank" rel="noreferrer" className="text-primary underline text-sm">
+            Open menu PDF
+          </a>
+        </object>
+      )}
+      {isImage && (
+        <a href={asset!} target="_blank" rel="noreferrer">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={asset!} alt="Menu" className="max-w-full rounded border" />
+        </a>
+      )}
+      {menuText && (
+        <details className="text-sm">
+          <summary className="cursor-pointer text-muted-foreground hover:text-foreground transition-colors">
+            Menu text
+          </summary>
+          <pre className="mt-2 whitespace-pre-wrap break-words text-xs text-foreground max-h-96 overflow-auto">
+            {menuText}
+          </pre>
+        </details>
+      )}
+      {!menuText && !asset && sourceLink && (
+        <a href={sourceLink} target="_blank" rel="noreferrer" className="text-primary underline text-sm">
+          Open menu
+        </a>
+      )}
+    </div>
+  );
+}
+
 function EmployeeRow({ emp }: { emp: import("@/lib/types").LinkedInEmployee }) {
   return (
     <div className="flex items-center gap-2.5 rounded-md border border-border/30 px-3 py-2">
@@ -637,6 +684,23 @@ export function LeadDetailDialog({ lead: leadProp, onClose, onEmail }: Props) {
         </div>
 
         <div className="border-t" />
+
+        {/* Menu */}
+        {(lead.menu_text || lead.menu_asset_url || lead.menu_url) && (
+          <>
+            <div className="p-5 space-y-2">
+              <h3 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                <Sparkles className="h-3 w-3" /> Menu
+              </h3>
+              <MenuSection
+                menuText={lead.menu_text}
+                assetUrl={lead.menu_asset_url}
+                menuUrl={lead.menu_url}
+              />
+            </div>
+            <div className="border-t" />
+          </>
+        )}
 
         {/* Contact + Location */}
         <div className="p-5 space-y-2">

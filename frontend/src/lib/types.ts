@@ -65,6 +65,8 @@ export interface Lead {
   price_tier: string | null;
   menu_fit_signals: string[];
   menu_url: string | null;
+  menu_text: string | null;
+  menu_asset_url: string | null;
   ai_approval: string | null;
   ai_approval_reason: string | null;
   google_maps_place_id: string | null;
