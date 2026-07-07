@@ -30,7 +30,4 @@ jobs:
         env:
           GOOGLE_APPLICATION_CREDENTIALS: /tmp/firebase-sa.json
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        run: uv run python -c "
-          from src.pipeline.followup import FollowUpManager;
-          print('Follow-up check complete')
-          "
+        run: uv run python -c "from src.pipeline.followup import FollowUpManager; print('Follow-up check complete')"
