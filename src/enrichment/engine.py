@@ -78,8 +78,8 @@ class EnrichmentEngine:
                 text, lead, self.enrichment_config, menu_url=menu_url
             )
 
-            # Persist the raw menu items + mirror the menu PDF/image to storage for on-site display.
-            enrichment.menu_text = result.menu_text
+            # Clean menu_text is set by the analyzer (Gemini extraction). Here we just mirror
+            # the menu PDF/image to storage for on-site display.
             if result.asset_bytes and result.asset_mime:
                 from src.db.storage import upload_menu_asset
 

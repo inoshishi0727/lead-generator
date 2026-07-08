@@ -419,14 +419,19 @@ MENU_PATH_PATTERN = re.compile(
 
 
 def _looks_like_404(text: str) -> bool:
-    """True if a page body looks like a client-side 404 / empty route. SPA routers
-    return HTTP 200 with a 'Page Not Found' body, which we must not treat as content."""
+    """True if a page body looks like a not-found / empty route. SPA & CMS sites return
+    HTTP 200 with a 'Page Not Found' body — sometimes verbose (buried under nav/footer) —
+    which must not be treated as content."""
     if not text:
         return True
     t = text.strip()
     if len(t) < 60:
         return True
-    return bool(NOT_FOUND_PATTERN.search(t)) and len(t) < 400
+    m = NOT_FOUND_PATTERN.search(t)
+    if not m:
+        return False
+    # A real 404: the not-found message sits early in the page (nav aside), or the page is short.
+    return m.start() < 400 or len(t) < 800
 
 
 async def _menu_trigger_texts(page, limit: int = 4) -> list[str]:
@@ -567,6 +572,7 @@ async def fetch_website_text(
         # Track seen PDFs/images to avoid duplicates across homepage + sub-pages
         seen_pdf_urls: set[str] = set(pdf_links)
         seen_image_urls: set[str] = set(image_links)
+        deep_menu_links: list[str] = []  # menu sub-category links found ON menu pages
 
         # Step 4: Visit each HTML page; also collect any additional PDF/image links found
         for target_url in to_visit:
@@ -580,7 +586,7 @@ async def fetch_website_text(
                     log.debug("page_fetched", url=target_url, chars=len(text))
 
                 # Re-run link discovery on sub-pages to find deeper PDF/image links
-                _, sub_pdfs, sub_images = await _discover_links(page, target_url)
+                sub_html, sub_pdfs, sub_images = await _discover_links(page, target_url)
                 for pdf_url in sub_pdfs:
                     if pdf_url not in seen_pdf_urls:
                         seen_pdf_urls.add(pdf_url)
@@ -590,6 +596,27 @@ async def fetch_website_text(
                         seen_image_urls.add(img_url)
                         image_links.append(img_url)
 
+                # If THIS is a menu page, queue its menu-matching sub-links to go one level deeper.
+                if MENU_PATH_PATTERN.search(urlparse(target_url).path):
+                    for sub in sub_html:
+                        sp = urlparse(sub).path
+                        if sp not in visited and MENU_PATH_PATTERN.search(sp):
+                            visited.add(sp)
+                            deep_menu_links.append(sub)
+
+            except Exception as e:
+                log.debug("page_fetch_failed", url=target_url, error=str(e))
+                continue
+
+        # Step 4-deep: follow menu sub-category links one extra level (cap 4).
+        for target_url in deep_menu_links[:4]:
+            try:
+                await page.goto(target_url, wait_until="networkidle", timeout=timeout_ms)
+                await _dismiss_popups(page, timeout=1000)
+                text = (await page.inner_text("body")).strip()
+                if text and len(text) > 50 and not _looks_like_404(text):
+                    collected_parts.append(f"--- PAGE: {urlparse(target_url).path} ---\n{text}")
+                    log.debug("page_fetched_deep", url=target_url, chars=len(text))
             except Exception as e:
                 log.debug("page_fetch_failed", url=target_url, error=str(e))
                 continue
