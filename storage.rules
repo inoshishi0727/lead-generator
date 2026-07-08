@@ -1,0 +1,18 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Mirrored menu assets (PDF/image) so the dashboard can embed them.
+    // Public read (also served via Firebase download token); writes are Admin-SDK only,
+    // which bypasses these rules.
+    match /menus/{file} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // Everything else is locked down.
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}
