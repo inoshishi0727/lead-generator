@@ -7,6 +7,7 @@ empty results / 0 and log a warning instead of raising.
 from __future__ import annotations
 
 from typing import Optional
+from uuid import UUID
 
 import structlog
 
@@ -94,6 +95,11 @@ def save_lead_immediate(lead: Lead) -> bool:
         filter=FieldFilter("dedup_key", "==", key)
     ).limit(1).get()
     if existing_legacy:
+        # Point the lead at the EXISTING doc so callers update it, not a throwaway uuid.
+        try:
+            lead.id = UUID(existing_legacy[0].id)
+        except Exception:
+            pass
         log.debug("lead_already_exists_legacy", business_name=lead.business_name, key=key)
         return False
 
@@ -114,6 +120,15 @@ def save_lead_immediate(lead: Lead) -> bool:
         except Exception as claim_exc:
             # AlreadyExists from Firestore — duplicate; don't write the lead.
             if "AlreadyExists" in type(claim_exc).__name__ or "already exists" in str(claim_exc).lower():
+                # Resolve the existing lead doc so callers update it, not a throwaway uuid.
+                try:
+                    dup = collection.where(
+                        filter=FieldFilter("universal_dedup_key", "==", universal)
+                    ).limit(1).get()
+                    if dup:
+                        lead.id = UUID(dup[0].id)
+                except Exception:
+                    pass
                 log.debug("lead_already_claimed", business_name=lead.business_name, key=key)
                 return False
             raise
