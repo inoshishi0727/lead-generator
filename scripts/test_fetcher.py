@@ -49,7 +49,8 @@ async def test_one(url: str, config: EnrichmentConfig) -> None:
     print(f"FETCHING: {url}")
     print(f"{'='*60}")
 
-    text, menu_url = await fetch_website_text(url, config)
+    result = await fetch_website_text(url, config)
+    text, menu_url = result.text, result.menu_url
 
     if not text:
         print(f"  ERROR: No text returned for {url}")
