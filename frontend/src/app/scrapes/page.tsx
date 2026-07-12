@@ -129,7 +129,7 @@ function LiveScrapeCard({ run }: { run: ScrapeRunRecord }) {
         <ProgressBar pct={run.progress_pct ?? null} />
 
         <div className="space-y-1 text-xs text-muted-foreground">
-          {run.phase === "extracting" && run.current_lead && (
+          {run.current_lead && (
             <p>
               Currently scraping:{" "}
               <span className="font-medium text-foreground">

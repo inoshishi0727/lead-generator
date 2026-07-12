@@ -74,6 +74,7 @@ class ScrapeBatchItem(BaseModel):
     detected_kind: Optional[str] = None
     lead_id: Optional[str] = None
     error: Optional[str] = None
+    step: Optional[str] = None  # live progress label, e.g. "fetching page", "enriching X"
 
 
 class ScrapeBatchStatusResponse(BaseModel):
