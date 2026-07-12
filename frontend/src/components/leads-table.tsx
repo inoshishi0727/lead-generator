@@ -25,7 +25,7 @@ import {
   Eye,
   Zap,
 } from "lucide-react";
-import { useScrapeLeadNow } from "@/hooks/use-scrape-leads";
+import { useScrapeNowAsync } from "@/hooks/use-scrape-leads";
 import { Badge } from "@/components/ui/badge";
 import { isStaleEnrichment, daysSince } from "@/lib/stale-thresholds";
 import {
@@ -97,8 +97,7 @@ const rejectionColors: Record<string, string> = {
 
 export function LeadsTable({ leads, isLoading, selectable, selectedIds = [], onSelectionChange, openLeadId, onLeadOpened, latestCohort, viewedSet, onTagClick }: Props) {
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
-  const scrapeLeadNow = useScrapeLeadNow();
-  const [scrapingLeadId, setScrapingLeadId] = useState<string | null>(null);
+  const scrapeLeadNow = useScrapeNowAsync();
 
   React.useEffect(() => {
     if (openLeadId && leads.length > 0) {
@@ -535,8 +534,8 @@ export function LeadsTable({ leads, isLoading, selectable, selectedIds = [], onS
                             const needsScrape =
                               lead.source === "manual" &&
                               lead.enrichment_status !== "success";
-                            const isThisScraping = scrapingLeadId === lead.id;
-                            const otherScraping = !!scrapingLeadId && scrapingLeadId !== lead.id;
+                            const isThisScraping = scrapeLeadNow.isRunning(lead.id);
+                            const otherScraping = scrapeLeadNow.isStarting;
                             return (
                               <button
                                 disabled={isThisScraping || otherScraping}
@@ -548,10 +547,7 @@ export function LeadsTable({ leads, isLoading, selectable, selectedIds = [], onS
                                 title={needsScrape ? "Scrape this lead" : "Re-scrape this lead"}
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  setScrapingLeadId(lead.id);
-                                  scrapeLeadNow.mutate(lead.id, {
-                                    onSettled: () => setScrapingLeadId(null),
-                                  });
+                                  scrapeLeadNow.start(lead.id);
                                 }}
                               >
                                 {isThisScraping ? (

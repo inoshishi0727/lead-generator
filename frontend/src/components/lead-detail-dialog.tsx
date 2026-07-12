@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   X,
   MapPin,
@@ -36,7 +36,7 @@ import { TagInput } from "@/components/tag-input";
 import { AutoTagChips } from "@/components/auto-tag-chips";
 import { LeadConversation, LeadConversationHeader } from "@/components/lead-conversation";
 import { useEnrichLeads } from "@/hooks/use-leads";
-import { useScrapeLeadNow } from "@/hooks/use-scrape-leads";
+import { useScrapeNowAsync } from "@/hooks/use-scrape-leads";
 import { useLinkedInEmployees } from "@/hooks/use-linkedin-employees";
 import { useTagIndex } from "@/hooks/use-tag-index";
 import { updateLeadFields, type LeadsPage } from "@/lib/firestore-api";
@@ -265,7 +265,7 @@ function EmployeeRow({ emp }: { emp: import("@/lib/types").LinkedInEmployee }) {
 
 export function LeadDetailDialog({ lead: leadProp, onClose, onEmail }: Props) {
   const enrichMutation = useEnrichLeads();
-  const scrapeLead = useScrapeLeadNow();
+  const scrapeLead = useScrapeNowAsync();
   const [enrichDone, setEnrichDone] = useState(false);
   const queryClient = useQueryClient();
 
@@ -468,17 +468,23 @@ export function LeadDetailDialog({ lead: leadProp, onClose, onEmail }: Props) {
   function handleReEnrich() {
     if (!lead) return;
     setEnrichDone(false);
-    // Route through scrape-now so we get the full Gemini+grounding pipeline
-    // synchronously (45-120s) and the dialog refreshes when it returns.
-    scrapeLead.mutate(lead.id, {
-      onSuccess: () => {
-        setEnrichDone(true);
-        // Auto-revert the "Done!" label after a short delay so the button
-        // is reusable for another retry.
-        window.setTimeout(() => setEnrichDone(false), 2500);
-      },
-    });
+    // Full Gemini+grounding pipeline as a background job (dodges the Netlify
+    // ~26s gateway); the dialog refreshes when the job completes.
+    scrapeLead.start(lead.id);
   }
+
+  // Flip to "Done!" on the falling edge of the running state, then auto-revert.
+  const reEnrichRunning = scrapeLead.isRunning(lead?.id ?? "");
+  const reEnrichBusy = reEnrichRunning || scrapeLead.isStarting;
+  const wasReEnrichRunning = useRef(false);
+  useEffect(() => {
+    if (wasReEnrichRunning.current && !reEnrichRunning) {
+      setEnrichDone(true);
+      const t = window.setTimeout(() => setEnrichDone(false), 2500);
+      return () => window.clearTimeout(t);
+    }
+    wasReEnrichRunning.current = reEnrichRunning;
+  }, [reEnrichRunning]);
 
   if (!lead) return null;
 
@@ -1119,11 +1125,11 @@ export function LeadDetailDialog({ lead: leadProp, onClose, onEmail }: Props) {
             size="sm"
             variant="outline"
             onClick={handleReEnrich}
-            disabled={scrapeLead.isPending}
+            disabled={reEnrichBusy}
             className="shrink-0"
           >
-            <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${scrapeLead.isPending ? "animate-spin" : ""}`} />
-            {scrapeLead.isPending ? "Researching…" : enrichDone ? "Done!" : "Re-enrich"}
+            <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${reEnrichBusy ? "animate-spin" : ""}`} />
+            {reEnrichBusy ? "Researching…" : enrichDone ? "Done!" : "Re-enrich"}
           </Button>
         </div>
       </div>
