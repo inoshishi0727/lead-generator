@@ -19,42 +19,58 @@ from src.db.local_dedup import add_local_dedup_key, load_local_dedup_keys
 log = structlog.get_logger()
 
 
-def _normalize_name(name: str) -> str:
-    """Normalize a business name for dedup comparison."""
-    return name.strip().lower()
+def _normalize_name(name: str | None) -> str:
+    """Normalize a business name for dedup comparison.
+
+    Reuses the richer exclusion-list normalizer: lowercases, strips company
+    suffixes (Ltd/Limited/Group/...), and collapses whitespace, so cosmetic
+    variance in a Google Maps name doesn't fork the dedup key.
+    """
+    from src.db.exclusions import _normalize_name as _strict_name
+    return _strict_name(name or "")
 
 
 def _extract_domain(url_or_address: str | None) -> str:
-    """Extract a normalized domain from a URL, or return lowered address."""
+    """Extract a normalized domain from a URL, else a normalized address string."""
     if not url_or_address:
         return ""
-    # Try as URL first
-    try:
-        parsed = urlparse(url_or_address)
-        if parsed.netloc:
-            return parsed.netloc.lower().removeprefix("www.")
-    except Exception:
-        pass
-    # Fall back to raw string (address)
-    return url_or_address.strip().lower()
+    from src.db.exclusions import _extract_domain as _strict_domain, _normalize_address
+
+    s = url_or_address.strip()
+    first_segment = s.split("/")[0]
+    # Looks like a URL/domain (has a scheme, or a dot with no spaces before the path)?
+    if "://" in s or ("." in first_segment and " " not in first_segment):
+        dom = _strict_domain(s)
+        if dom:
+            return dom
+    # Otherwise treat it as a street address.
+    return _normalize_address(s) or s.strip().lower()
 
 
-def build_dedup_key(source: str, name: str, address: str | None) -> str:
+def build_dedup_key(
+    source: str, name: str, address: str | None, place_id: str | None = None
+) -> str:
     """Build a composite dedup key.
 
-    The key is source-agnostic for matching purposes: we store with source
-    for attribution, but match on name|domain only.
+    When a stable Google Maps ``place_id`` is available it anchors the key so
+    the same venue always produces the same key regardless of name/address/
+    website drift. Otherwise we fall back to name|domain. Source is kept as a
+    prefix for attribution; matching strips it (see ``build_universal_key``).
     """
-    parts = [
-        source,
-        _normalize_name(name),
-        _extract_domain(address),
-    ]
-    return "|".join(parts)
+    if place_id:
+        return f"{source}|gmaps:{place_id.strip()}"
+    return "|".join([source, _normalize_name(name), _extract_domain(address)])
 
 
-def build_universal_key(name: str, domain_or_address: str | None) -> str:
-    """Build a source-agnostic key for cross-source dedup."""
+def build_universal_key(
+    name: str, domain_or_address: str | None, place_id: str | None = None
+) -> str:
+    """Build a source-agnostic key for cross-source dedup.
+
+    Prefers the stable ``place_id`` (``gmaps:<id>``); falls back to name|domain.
+    """
+    if place_id:
+        return f"gmaps:{place_id.strip()}"
     return f"{_normalize_name(name)}|{_extract_domain(domain_or_address)}"
 
 
@@ -76,8 +92,9 @@ def get_all_dedup_keys_universal() -> set[str]:
                 data = doc.to_dict()
                 name = data.get("business_name", "")
                 website = data.get("website") or data.get("address") or ""
-                if name:
-                    universal_keys.add(build_universal_key(name, website))
+                place_id = data.get("google_maps_place_id")
+                if name or place_id:
+                    universal_keys.add(build_universal_key(name, website, place_id))
         except Exception as exc:
             log.warning("firestore_dedup_load_failed", error=str(exc))
 

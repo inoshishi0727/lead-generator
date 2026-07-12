@@ -20,13 +20,52 @@ log = structlog.get_logger()
 
 
 def _dedup_key(lead: Lead) -> str:
-    """Generate a composite dedup key from source, name, and address/website."""
+    """Generate a composite dedup key from source, name, address/website, place_id."""
     from src.db.dedup import build_dedup_key
     return build_dedup_key(
         lead.source.value,
         lead.business_name,
         lead.website or lead.address,
+        getattr(lead, "google_maps_place_id", None),
     )
+
+
+def _resolve_existing_lead_id(
+    collection,
+    universals: list[str],
+    dedup_keys: Optional[list[str]] = None,
+) -> Optional[str]:
+    """Return the id of an existing lead matching ANY known dedup representation.
+
+    Primary match is ``array_contains_any`` over the doc's ``dedup_universals``
+    list, which holds both the place_id key and the name|domain key — so a venue
+    seen once WITH a place_id and once WITHOUT still resolves to one doc. Falls
+    back to legacy scalar ``universal_dedup_key`` / ``dedup_key`` equality for
+    docs written before ``dedup_universals`` existed.
+    """
+    vals = [u for u in dict.fromkeys(universals) if u][:10]
+    try:
+        if vals:
+            hit = collection.where(
+                filter=FieldFilter("dedup_universals", "array_contains_any", vals)
+            ).limit(1).get()
+            if hit:
+                return hit[0].id
+        for u in vals:
+            hit = collection.where(
+                filter=FieldFilter("universal_dedup_key", "==", u)
+            ).limit(1).get()
+            if hit:
+                return hit[0].id
+        for k in [k for k in dict.fromkeys(dedup_keys or []) if k]:
+            hit = collection.where(
+                filter=FieldFilter("dedup_key", "==", k)
+            ).limit(1).get()
+            if hit:
+                return hit[0].id
+    except Exception as exc:
+        log.warning("resolve_existing_lead_failed", error=str(exc))
+    return None
 
 
 def get_known_dedup_keys(source: str = "google_maps") -> set[str]:
@@ -80,27 +119,29 @@ def save_lead_immediate(lead: Lead) -> bool:
         return False
 
     from hashlib import sha1
-    from src.db.dedup import build_universal_key
+    from src.db.dedup import build_dedup_key, build_universal_key
 
-    key = _dedup_key(lead)
-    universal = build_universal_key(
-        lead.business_name,
-        lead.website or lead.address,
-    )
+    place_id = getattr(lead, "google_maps_place_id", None)
+    site = lead.website or lead.address
+    key = _dedup_key(lead)                                    # place_id-aware primary
+    universal = build_universal_key(lead.business_name, site, place_id)
+    # name|domain fallback representation, stored alongside so a venue seen once
+    # WITH a place_id and once WITHOUT still dedups to a single doc.
+    alt_universal = build_universal_key(lead.business_name, site, None)
+    alt_key = build_dedup_key(lead.source.value, lead.business_name, site, None)
+    universals = list(dict.fromkeys([universal, alt_universal]))
     name_lower = lead.business_name.strip().lower()
     collection = db.collection("leads")
 
-    # ---- Step 0: legacy check (pre-claim-era leads have no claim doc) ---
-    existing_legacy = collection.where(
-        filter=FieldFilter("dedup_key", "==", key)
-    ).limit(1).get()
-    if existing_legacy:
+    # ---- Step 0: resolve against ANY known representation ----------------
+    existing_id = _resolve_existing_lead_id(collection, universals, [key, alt_key])
+    if existing_id:
         # Point the lead at the EXISTING doc so callers update it, not a throwaway uuid.
         try:
-            lead.id = UUID(existing_legacy[0].id)
+            lead.id = UUID(existing_id)
         except Exception:
             pass
-        log.debug("lead_already_exists_legacy", business_name=lead.business_name, key=key)
+        log.debug("lead_already_exists", business_name=lead.business_name, key=key)
         return False
 
     # ---- Step 1: claim the venue atomically -----------------------------
@@ -121,14 +162,12 @@ def save_lead_immediate(lead: Lead) -> bool:
             # AlreadyExists from Firestore — duplicate; don't write the lead.
             if "AlreadyExists" in type(claim_exc).__name__ or "already exists" in str(claim_exc).lower():
                 # Resolve the existing lead doc so callers update it, not a throwaway uuid.
-                try:
-                    dup = collection.where(
-                        filter=FieldFilter("universal_dedup_key", "==", universal)
-                    ).limit(1).get()
-                    if dup:
-                        lead.id = UUID(dup[0].id)
-                except Exception:
-                    pass
+                existing_id = _resolve_existing_lead_id(collection, universals, [key, alt_key])
+                if existing_id:
+                    try:
+                        lead.id = UUID(existing_id)
+                    except Exception:
+                        pass
                 log.debug("lead_already_claimed", business_name=lead.business_name, key=key)
                 return False
             raise
@@ -138,6 +177,7 @@ def save_lead_immediate(lead: Lead) -> bool:
         doc_data = lead.model_dump(mode="json")
         doc_data["dedup_key"] = key
         doc_data["universal_dedup_key"] = universal
+        doc_data["dedup_universals"] = universals
         doc_data["business_name_lower"] = name_lower
         doc_ref.set(doc_data)
         cache.invalidate("leads:")
@@ -189,10 +229,11 @@ def save_leads(leads: list[Lead]) -> int:
         for lead in leads:
             key = _dedup_key(lead)
             name_lower = lead.business_name.strip().lower()
-            universal = build_universal_key(
-                lead.business_name,
-                lead.website or lead.address,
-            )
+            place_id = getattr(lead, "google_maps_place_id", None)
+            site = lead.website or lead.address
+            universal = build_universal_key(lead.business_name, site, place_id)
+            alt_universal = build_universal_key(lead.business_name, site, None)
+            universals = list(dict.fromkeys([universal, alt_universal]))
 
             if key in existing_keys:
                 log.debug("lead_dedup_skip", business_name=lead.business_name)
@@ -205,6 +246,7 @@ def save_leads(leads: list[Lead]) -> int:
             doc_data = lead.model_dump(mode="json")
             doc_data["dedup_key"] = key
             doc_data["universal_dedup_key"] = universal
+            doc_data["dedup_universals"] = universals
             doc_data["business_name_lower"] = name_lower
             batch.set(doc_ref, doc_data)
             existing_keys.add(key)

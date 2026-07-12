@@ -52,6 +52,21 @@ _GMAPS_HOSTS = {"google.com", "www.google.com", "maps.google.com", "goo.gl", "ma
 
 _LIST_PREFIX_RE = re.compile(r"^\s*(?:\d+\s*[\.\):]\s*|[\-\*•]\s+|\*\*)+\s*")
 
+# Google Maps place id embedded in the place URL (same pattern the bulk scraper
+# reads off listing cards). Captured so single-venue re-scrapes carry the stable
+# id the deterministic dedup key relies on.
+_PLACE_ID_RE = re.compile(r"!1s(0x[0-9a-f]+:[0-9a-fx]+)", re.IGNORECASE)
+
+
+def _extract_place_id_from_url(url: str | None) -> Optional[str]:
+    """Pull the stable Google Maps place id out of a place URL, if present."""
+    if not url:
+        return None
+    m = _PLACE_ID_RE.search(url)
+    if not m:
+        m = re.search(r"place_id[=:]([A-Za-z0-9_-]+)", url)
+    return m.group(1) if m else None
+
 
 def _normalize_input(raw: str) -> str:
     """Strip list-style prefixes a user might paste from notes / emails.
@@ -220,7 +235,8 @@ async def _scrape_from_gmaps_url(scraper: GoogleMapsScraper, page, url: str) -> 
         return None
 
     detail = await scraper._extract_detail(page)
-    return _detail_to_lead(detail, LeadSource.GOOGLE_MAPS)
+    place_id = _extract_place_id_from_url(page.url)
+    return _detail_to_lead(detail, LeadSource.GOOGLE_MAPS, place_id)
 
 
 async def _scrape_from_name(scraper: GoogleMapsScraper, page, name: str) -> Optional[Lead]:
@@ -262,7 +278,8 @@ async def _scrape_from_name(scraper: GoogleMapsScraper, page, name: str) -> Opti
         return None
 
     detail = await scraper._extract_detail(page)
-    return _detail_to_lead(detail, LeadSource.GOOGLE_MAPS)
+    place_id = _extract_place_id_from_url(page.url)
+    return _detail_to_lead(detail, LeadSource.GOOGLE_MAPS, place_id)
 
 
 async def _scrape_from_website(scraper: GoogleMapsScraper, page, raw_url: str) -> Optional[Lead]:
@@ -327,7 +344,9 @@ async def _enrich_and_score(lead: Lead, log_prefix: str = "") -> tuple[bool, boo
     return enriched, scored
 
 
-def _detail_to_lead(detail: dict, source: LeadSource) -> Optional[Lead]:
+def _detail_to_lead(
+    detail: dict, source: LeadSource, place_id: Optional[str] = None
+) -> Optional[Lead]:
     """Convert the raw extracted detail dict into a Lead pydantic model."""
     name = (detail.get("name") or "").strip()
     if not name:
@@ -342,5 +361,6 @@ def _detail_to_lead(detail: dict, source: LeadSource) -> Optional[Lead]:
         rating=detail.get("rating"),
         review_count=detail.get("review_count"),
         category=detail.get("category"),
+        google_maps_place_id=place_id,
         stage=PipelineStage.SCRAPED,
     )
