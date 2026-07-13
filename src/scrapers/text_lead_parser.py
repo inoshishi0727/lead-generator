@@ -75,7 +75,7 @@ For each lead, return:
 - instagram_handle (an instagram.com URL if present, else null)
 - phone (if present, null if not)
 - address (if present, null if not)
-- notes (any relevant context from the text — descriptions, region hints, why they matter — null if nothing useful)
+- notes (relevant context — region hints, why they matter — kept to ONE short sentence; null if nothing useful)
 - google_maps_url (if any URL is a Google Maps link, put it here instead of website)
 
 Either business_name OR website OR instagram_handle MUST be present.
@@ -209,6 +209,59 @@ def research_lead_via_gemini(seed: str) -> dict[str, Any] | None:
     return None
 
 
+def _parse_json_array(raw: str) -> list:
+    """Parse a JSON array of objects, tolerating truncation.
+
+    Long listicles can overflow the model's output token cap, cutting the array
+    off mid-object. First try a normal parse; if that fails, scan for balanced
+    top-level {...} objects (string/escape aware) and parse each complete one,
+    salvaging every venue that made it out intact.
+    """
+    start = raw.find("[")
+    if start < 0:
+        return []
+    body = raw[start:]
+    end = body.rfind("]")
+    if end > 0:
+        try:
+            parsed = json.loads(body[: end + 1])
+            if isinstance(parsed, list):
+                return parsed
+        except Exception:
+            pass
+
+    objs: list = []
+    depth = 0
+    obj_start = None
+    in_str = False
+    esc = False
+    for i, ch in enumerate(body):
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            if depth == 0:
+                obj_start = i
+            depth += 1
+        elif ch == "}":
+            if depth > 0:
+                depth -= 1
+                if depth == 0 and obj_start is not None:
+                    try:
+                        objs.append(json.loads(body[obj_start : i + 1]))
+                    except Exception:
+                        pass
+                    obj_start = None
+    return objs
+
+
 def parse_leads_from_text(text: str) -> list[dict[str, Any]]:
     """Run Gemini over pasted text and return structured lead dicts.
 
@@ -228,24 +281,21 @@ def parse_leads_from_text(text: str) -> list[dict[str, Any]]:
     try:
         from google import genai
         client = genai.Client(api_key=api_key)
-        prompt = _PROMPT.format(content=text[:16000])
+        prompt = _PROMPT.format(content=text[:20000])
         response = client.models.generate_content(
             model="gemini-2.5-flash",
             contents=prompt,
-            config={"max_output_tokens": 4096, "temperature": 0.1},
+            config={"max_output_tokens": 16384, "temperature": 0.1},
         )
         raw = (response.text or "").strip()
         raw = re.sub(r"```json\s*", "", raw)
         raw = raw.replace("```", "").strip()
 
-        start = raw.find("[")
-        end = raw.rfind("]")
-        if start < 0 or end <= start:
+        # Truncation-tolerant: a 20-venue listicle can still overflow the cap, so
+        # salvage every complete object even if the array was cut off mid-write.
+        parsed = _parse_json_array(raw)
+        if not parsed:
             log.warning("text_lead_parser_no_json", raw=raw[:300])
-            return []
-
-        parsed = json.loads(raw[start:end + 1])
-        if not isinstance(parsed, list):
             return []
 
         cleaned = []
