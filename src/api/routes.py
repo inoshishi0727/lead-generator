@@ -723,7 +723,17 @@ def _run_scrape_url_job(batch_id: str, url: str) -> None:
     _set_item(0, step="extracting venues")
     venues = parse_leads_from_text(page_text) if page_text else []
     if not venues:
-        _fail_all("No venues could be extracted from that page.")
+        # Distinguish "the page never served its content to us" (login wall /
+        # anti-bot API / failed hydration — a tiny body) from "we read a full page
+        # but it just has no venues" — so the user knows whether to retry vs paste.
+        if len(page_text) < 1500:
+            _fail_all(
+                "This page didn't load its content for automated reading — it likely "
+                "requires login or blocks scrapers. Try pasting the venue names, or a "
+                "different source."
+            )
+        else:
+            _fail_all("Read the page, but found no venues in it.")
         return
 
     # Re-seed the tracker with one row per extracted venue.
