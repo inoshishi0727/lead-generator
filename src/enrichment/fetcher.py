@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 import tempfile
@@ -500,7 +501,7 @@ async def fetch_website_text(
     discovered_html_links: list[str] = []
 
     try:
-        browser, engine = await launch_browser(headless=config.headless)
+        from src.scrapers.orchestrator import _is_transient
 
         proxy = get_proxy_config()
         context_kwargs = {
@@ -512,23 +513,58 @@ async def fetch_website_text(
             "geolocation": {"latitude": 51.5074, "longitude": -0.1278},
             "permissions": ["geolocation"],
         }
-        if proxy:
-            context_kwargs["proxy"] = proxy
-        context = await browser.new_context(**context_kwargs)
-        page = await context.new_page()
         timeout_ms = config.camoufox_timeout_seconds * 1000
 
-        # Step 1: Visit homepage
-        try:
-            await page.goto(url, wait_until="networkidle", timeout=timeout_ms)
-        except Exception:
+        async def _launch_and_load(use_proxy: bool):
+            # Camoufox/Firefox ignores a context-level proxy — it must be set at launch
+            # time (see src/scrapers/browser.py). So we relaunch the whole browser per
+            # attempt: proxy on, then direct as a fallback.
+            br, eng = await launch_browser(
+                headless=config.headless,
+                proxy=proxy if (use_proxy and proxy) else None,
+            )
             try:
-                await page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+                ctx = await br.new_context(**context_kwargs)
+                pg = await ctx.new_page()
+                # Step 1: Visit homepage
+                try:
+                    await pg.goto(url, wait_until="networkidle", timeout=timeout_ms)
+                except Exception:
+                    await pg.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+                return br, eng, ctx, pg
+            except Exception:
+                await close_browser(br, eng)
+                raise
+
+        # Homepage load is the flaky make-or-break step. Retry through the proxy on
+        # transient errors, then fall back to a direct (no-proxy) connection so a single
+        # bad proxy hop can't blank out an otherwise-reachable site (-> empty menu).
+        loaded = False
+        last_error: Exception | None = None
+        if proxy:
+            for attempt in range(2):
+                try:
+                    browser, engine, context, page = await _launch_and_load(use_proxy=True)
+                    loaded = True
+                    break
+                except Exception as e:
+                    last_error, browser = e, None
+                    if not _is_transient(e):
+                        break
+                    if attempt == 0:
+                        await asyncio.sleep(3)
+        if not loaded:
+            try:
+                browser, engine, context, page = await _launch_and_load(use_proxy=False)
+                loaded = True
+                if proxy:
+                    log.warning("fetch_proxy_fallback_direct", url=url)
             except Exception as e:
-                log.warning("homepage_fetch_failed", url=url, error=str(e))
-                await context.close()
-                await close_browser(browser, engine)
-                return FetchResult(text="")
+                last_error, browser = e, None
+
+        if not loaded:
+            log.warning("homepage_fetch_failed", url=url, error=str(last_error))
+            return FetchResult(text="")
 
         # Dismiss cookie/location popups
         await _dismiss_popups(page)
