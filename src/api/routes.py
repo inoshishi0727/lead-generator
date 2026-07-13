@@ -712,7 +712,7 @@ def _run_scrape_url_job(batch_id: str, url: str) -> None:
     # Step 1: fetch the page text (reuses the retry-hardened enrichment fetcher).
     try:
         enrich_cfg = load_config().scraping.enrichment
-        fetched = asyncio.run(fetch_website_text(url, enrich_cfg))
+        fetched = asyncio.run(fetch_website_text(url, enrich_cfg, listing_mode=True))
         page_text = fetched.text or ""
     except Exception as exc:
         log.exception("scrape_url_fetch_failed", batch_id=batch_id, url=url)
