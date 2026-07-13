@@ -198,6 +198,7 @@ def main() -> None:
                 survivors.pop(l["id"], None)
 
     backfilled = 0
+    backfill_skipped = 0
     for l in survivors.values():
         universals = _new_universals(l)
         primary = _primary_universal(l)
@@ -209,23 +210,33 @@ def main() -> None:
             _place_id(l),
         )
         if APPLY:
-            db.collection("leads").document(l["id"]).update({
-                "dedup_key": new_key,
-                "universal_dedup_key": primary,
-                "dedup_universals": universals,
-            })
-            claim_id = sha1(primary.encode("utf-8")).hexdigest()
-            db.collection("dedup_claims").document(claim_id).set({
-                "universal_dedup_key": primary,
-                "dedup_key": new_key,
-                "business_name": l.get("business_name"),
-            })
+            # Tolerant + idempotent: a survivor may have been deleted by a
+            # concurrent writer since the initial read — skip it rather than
+            # abort the whole backfill, so the script is safe to re-run.
+            try:
+                db.collection("leads").document(l["id"]).update({
+                    "dedup_key": new_key,
+                    "universal_dedup_key": primary,
+                    "dedup_universals": universals,
+                })
+                claim_id = sha1(primary.encode("utf-8")).hexdigest()
+                db.collection("dedup_claims").document(claim_id).set({
+                    "universal_dedup_key": primary,
+                    "dedup_key": new_key,
+                    "business_name": l.get("business_name"),
+                })
+            except Exception as exc:
+                backfill_skipped += 1
+                print(f"  ! skip backfill {l['id'][:8]} ({l.get('business_name','?')}): {exc}")
+                continue
         backfilled += 1
 
     print(f"\nSummary ({'APPLIED' if APPLY else 'DRY-RUN — nothing written'}):")
     print(f"  duplicate docs deleted:   {deleted}")
     print(f"  references migrated:      {refs_moved}")
     print(f"  survivors key-backfilled: {backfilled}")
+    if backfill_skipped:
+        print(f"  backfill skipped (stale): {backfill_skipped}")
     if not APPLY:
         print("\nRe-run with --apply to perform these changes.")
 
