@@ -628,6 +628,174 @@ def _batch_state_to_response(batch_id: str) -> ScrapeBatchStatusResponse:
 
 
 # ---------------------------------------------------------------------------
+# Universal URL ingest — any URL (blog / listicle / venue) -> N enriched leads
+# ---------------------------------------------------------------------------
+
+
+async def _enrich_parsed_venue(venue: dict):
+    """Turn one parsed venue dict into a saved, enriched, scored Lead.
+
+    Returns (lead, outcome, error) where outcome is "added" | "duplicate" |
+    "error". Reuses the same save/enrich/score glue as single-venue scraping.
+    """
+    from src.db.models import Lead, LeadSource, PipelineStage
+    from src.db.firestore import save_lead_immediate, update_lead
+    from src.scrapers.single_venue import _enrich_and_score
+    from src.scrapers.text_lead_parser import research_lead_via_gemini
+
+    name = (venue.get("business_name") or "").strip()
+    website = (venue.get("website") or "").strip() or None
+    if not name and not website:
+        return None, "error", "No name or website for this entry."
+
+    lead = Lead(
+        source=LeadSource.MANUAL,
+        business_name=name or website,
+        website=website,
+        phone=venue.get("phone"),
+        address=venue.get("address"),
+        instagram_handle=venue.get("instagram_handle"),
+        stage=PipelineStage.SCRAPED,
+    )
+    is_new = save_lead_immediate(lead)
+
+    # No website on the listing entry — let Gemini (with Google-Search
+    # grounding) find one so website enrichment has something to read.
+    if not lead.website and name:
+        try:
+            researched = research_lead_via_gemini(name)
+            if researched and researched.get("website"):
+                lead.website = researched["website"]
+        except Exception as exc:
+            log.warning("scrape_url_research_failed", venue=name, error=str(exc))
+
+    await _enrich_and_score(lead, log_prefix=lead.business_name)
+    try:
+        update_lead(str(lead.id), lead.model_dump(mode="json", exclude_none=True))
+    except Exception as exc:
+        log.warning("scrape_url_update_failed", lead=lead.business_name, error=str(exc))
+
+    return lead, ("added" if is_new else "duplicate"), None
+
+
+def _run_scrape_url_job(batch_id: str, url: str) -> None:
+    """Background thread: fetch a URL, extract every venue via Gemini, and
+    enrich each into a lead. Progress lands in the shared _scrape_batches
+    tracker — one item per extracted venue."""
+    from src.enrichment.fetcher import fetch_website_text
+    from src.scrapers.text_lead_parser import parse_leads_from_text
+
+    def _update(**fields):
+        with _scrape_batch_lock:
+            _scrape_batches[batch_id].update(fields)
+
+    def _set_item(idx: int, **fields):
+        with _scrape_batch_lock:
+            _scrape_batches[batch_id]["items"][idx].update(fields)
+
+    def _bump(field: str):
+        with _scrape_batch_lock:
+            _scrape_batches[batch_id][field] += 1
+
+    def _fail_all(err: str):
+        _set_item(0, status="error", error=err)
+        _bump("failed")
+        _bump("completed")
+        _update(status="completed", completed_at=datetime.now().isoformat())
+
+    _update(status="running")
+    _set_item(0, status="running")
+
+    # Step 1: fetch the page text (reuses the retry-hardened enrichment fetcher).
+    try:
+        enrich_cfg = load_config().scraping.enrichment
+        fetched = asyncio.run(fetch_website_text(url, enrich_cfg))
+        page_text = fetched.text or ""
+    except Exception as exc:
+        log.exception("scrape_url_fetch_failed", batch_id=batch_id, url=url)
+        _fail_all(f"Couldn't fetch that page: {exc}")
+        return
+
+    # Step 2: extract venues from the page text via Gemini.
+    venues = parse_leads_from_text(page_text) if page_text else []
+    if not venues:
+        _fail_all("No venues could be extracted from that page.")
+        return
+
+    # Re-seed the tracker with one row per extracted venue.
+    with _scrape_batch_lock:
+        _scrape_batches[batch_id]["items"] = [
+            {"input": (v.get("business_name") or v.get("website") or url),
+             "status": "pending", "business_name": v.get("business_name"),
+             "detected_kind": "venue", "lead_id": None, "error": None}
+            for v in venues
+        ]
+        _scrape_batches[batch_id]["total"] = len(venues)
+
+    # Step 3: save + enrich + score each venue (serial — protects VPS memory).
+    for idx, venue in enumerate(venues):
+        _set_item(idx, status="running")
+        try:
+            lead, outcome, err = asyncio.run(_enrich_parsed_venue(venue))
+        except Exception as exc:
+            log.exception("scrape_url_venue_failed", batch_id=batch_id, idx=idx)
+            _set_item(idx, status="error", error=str(exc))
+            _bump("failed")
+            _bump("completed")
+            continue
+
+        if outcome == "error" or lead is None:
+            _set_item(idx, status="error", error=err or "Could not enrich venue.")
+            _bump("failed")
+        elif outcome == "duplicate":
+            _set_item(idx, status="duplicate", business_name=lead.business_name, lead_id=str(lead.id))
+            _bump("duplicate")
+        else:
+            _set_item(idx, status="added", business_name=lead.business_name, lead_id=str(lead.id))
+            _bump("added")
+        _bump("completed")
+
+    _update(status="completed", completed_at=datetime.now().isoformat())
+    log.info("scrape_url_done", batch_id=batch_id, url=url, venues=len(venues))
+
+
+@router.post("/scrape-url", response_model=ScrapeBatchStatusResponse)
+async def scrape_url(req: ScrapeOneRequest) -> ScrapeBatchStatusResponse:
+    """Universal URL ingest: fetch any URL (a blog, a "best restaurants"
+    listicle, or a single venue site), extract every venue mentioned via
+    Gemini, and enrich each into a lead. Returns a batch_id immediately; poll
+    /scrape-batch/{batch_id} for per-venue progress.
+    """
+    url = (req.input or "").strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="No URL provided.")
+    if not url.startswith(("http://", "https://")):
+        url = "https://" + url
+
+    batch_id = str(uuid4())
+    started_at = datetime.now().isoformat()
+    with _scrape_batch_lock:
+        _scrape_batches[batch_id] = {
+            "batch_id": batch_id,
+            "status": "pending",
+            "total": 1,
+            "completed": 0,
+            "added": 0,
+            "duplicate": 0,
+            "failed": 0,
+            "started_at": started_at,
+            "completed_at": None,
+            "items": [
+                {"input": url, "status": "pending", "business_name": None,
+                 "detected_kind": "url", "lead_id": None, "error": None}
+            ],
+        }
+
+    threading.Thread(target=_run_scrape_url_job, args=(batch_id, url), daemon=True).start()
+    return _batch_state_to_response(batch_id)
+
+
+# ---------------------------------------------------------------------------
 # Quick-add (skeleton leads, no scrape)
 # ---------------------------------------------------------------------------
 
