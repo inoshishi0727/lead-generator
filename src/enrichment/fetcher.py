@@ -626,11 +626,25 @@ async def fetch_website_text(
             try:
                 from src.scrapers.humanize.scroll import scroll_like_human
                 await _dismiss_popups(page, timeout=1500)  # 2nd pass: stacked gates
-                await scroll_like_human(page, total_distance=6000)
-                try:
-                    await page.wait_for_load_state("networkidle", timeout=timeout_ms)
-                except Exception:
-                    await page.wait_for_timeout(1500)
+                # Scroll to the bottom repeatedly until the page stops growing, so
+                # lazy-loaded / infinite-scroll venue cards actually render. Bounded
+                # by the fetch budget.
+                prev_height = 0
+                for _ in range(8):
+                    if _over_budget():
+                        break
+                    await scroll_like_human(page, total_distance=5000)
+                    try:
+                        await page.wait_for_load_state("networkidle", timeout=8000)
+                    except Exception:
+                        await page.wait_for_timeout(1200)
+                    try:
+                        height = int(await page.evaluate("document.body.scrollHeight"))
+                    except Exception:
+                        break
+                    if height <= prev_height:
+                        break
+                    prev_height = height
                 body = (await page.inner_text("body")).strip()
             except Exception as e:
                 log.debug("listing_scroll_failed", url=url, error=str(e))
