@@ -681,10 +681,42 @@ async def _enrich_parsed_venue(venue: dict):
     return lead, ("added" if is_new else "duplicate"), note
 
 
+import re as _re
+
+# A listicle/article/directory (many venues) vs a single venue's own site. On a
+# venue's own site, mining the page text grabs tangential mentions and can miss
+# the venue itself, so those route through the GMaps single-venue resolver.
+_LISTICLE_URL_HINTS = _re.compile(
+    r"best[-\s]|/guides?/|top[-\s]?\d+|/lists?/|round[-\s]?up|-in-[a-z]{3,}|"
+    r"where[-\s]to|/blog/|/reviews?/|/features?/|things-to-do|/going-out",
+    _re.IGNORECASE,
+)
+_PUBLISHER_DOMAINS = (
+    "timeout.", "theinfatuation.", "squaremeal.", "designmynight.", "opentable.",
+    "hardens.", "michelin.", "cntraveller.", "conde", "standard.co.uk", "sluurpy.",
+    "yelp.", "tripadvisor.", "theguardian.", "eater.", "londonxlondon.", "hot-dinners.",
+)
+
+
+def _is_listicle_url(url: str) -> bool:
+    """True if the URL looks like a multi-venue listicle/article/directory rather
+    than a single venue's own website."""
+    from urllib.parse import urlparse
+    u = url.lower()
+    host = urlparse(u).netloc
+    if any(d in host for d in _PUBLISHER_DOMAINS):
+        return True
+    return bool(_LISTICLE_URL_HINTS.search(u))
+
+
 def _run_scrape_url_job(batch_id: str, url: str) -> None:
-    """Background thread: fetch a URL, extract every venue via Gemini, and
-    enrich each into a lead. Progress lands in the shared _scrape_batches
-    tracker — one item per extracted venue."""
+    """Background thread: fetch a URL and turn it into lead(s).
+
+    A listicle/article/directory → mine the page text for every venue and enrich
+    each. A single venue's own site → resolve the actual venue via the GMaps
+    single-venue path (accurate; avoids extracting tangential mentions).
+    Progress lands in the shared _scrape_batches tracker.
+    """
     from src.enrichment.fetcher import fetch_website_text
     from src.scrapers.text_lead_parser import parse_leads_from_text
 
@@ -707,6 +739,30 @@ def _run_scrape_url_job(batch_id: str, url: str) -> None:
         _update(status="completed", completed_at=datetime.now().isoformat())
 
     _update(status="running")
+
+    # Single venue's own site → resolve the ACTUAL venue via the GMaps single-venue
+    # path (accurate), instead of mining page text which grabs tangential mentions
+    # and can miss the venue itself. Falls through to listicle extraction if nothing
+    # resolves (the URL might really be a multi-venue page).
+    if not _is_listicle_url(url):
+        from src.scrapers.single_venue import scrape_single_venue
+        _set_item(0, status="running", step="resolving venue")
+        result = None
+        try:
+            result = asyncio.run(scrape_single_venue(url))
+        except Exception:
+            log.exception("scrape_url_single_failed", batch_id=batch_id, url=url)
+        if result and result.lead:
+            outcome = "added" if result.is_new else "duplicate"
+            _set_item(0, status=outcome, step=None,
+                      business_name=result.lead.business_name, lead_id=str(result.lead.id))
+            _bump(outcome)
+            _bump("completed")
+            _update(status="completed", completed_at=datetime.now().isoformat())
+            log.info("scrape_url_single_done", batch_id=batch_id, url=url,
+                     venue=result.lead.business_name)
+            return
+
     _set_item(0, status="running", step="fetching page")
 
     # Step 1: fetch the page text (reuses the retry-hardened enrichment fetcher).
