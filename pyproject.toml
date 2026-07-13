@@ -6,7 +6,11 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "camoufox[geoip]>=0.4",
-    "playwright>=1.40",
+    # Pin below 1.60: playwright 1.60.0 (microsoft/playwright#39767) reads
+    # pageError.location.url without a null guard, crashing camoufox 0.4.11's
+    # Firefox 135 in the headed weekly batch scrape (camoufox#617). camoufox has
+    # no release past 0.4.11, so we hold playwright at the last compatible line.
+    "playwright>=1.49,<1.60",
     "firebase-admin>=6.0",
     "google-genai>=1.0",
     "anthropic>=0.40",
