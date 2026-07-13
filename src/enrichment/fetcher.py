@@ -622,38 +622,66 @@ async def fetch_website_text(
         # stacked cookie/age walls, and return the article text — NO menu sub-page
         # crawl, no PDF/image extraction.
         if listing_mode:
-            body = homepage_text
+            # Capture body text at EACH scroll step and union unique lines. Virtualized
+            # / intersection-observer lists (e.g. The Infatuation) unmount off-screen
+            # items, so a single read at the bottom misses most of them — but each item
+            # IS present while it's in the viewport. Short waits + stop when the page
+            # stops growing keep well-behaved pages fast; the budget caps the rest.
+            snapshots = [homepage_text]
             try:
-                from src.scrapers.humanize.scroll import scroll_like_human
                 await _dismiss_popups(page, timeout=1500)  # 2nd pass: stacked gates
-                # Scroll to the bottom repeatedly until the page stops growing, so
-                # lazy-loaded / infinite-scroll venue cards actually render. Bounded
-                # by the fetch budget.
                 prev_height = 0
-                for _ in range(8):
+                stagnant = 0
+                for _ in range(15):
                     if _over_budget():
                         break
-                    await scroll_like_human(page, total_distance=5000)
                     try:
-                        await page.wait_for_load_state("networkidle", timeout=8000)
+                        snap = (await page.inner_text("body")).strip()
+                        if snap:
+                            snapshots.append(snap)
                     except Exception:
-                        await page.wait_for_timeout(1200)
+                        pass
+                    try:
+                        await page.mouse.wheel(0, 2500)
+                    except Exception:
+                        try:
+                            await page.evaluate("window.scrollBy(0, 2500)")
+                        except Exception:
+                            break
+                    await page.wait_for_timeout(1000)
                     try:
                         height = int(await page.evaluate("document.body.scrollHeight"))
                     except Exception:
                         break
                     if height <= prev_height:
-                        break
+                        stagnant += 1
+                        if stagnant >= 2:
+                            break
+                    else:
+                        stagnant = 0
                     prev_height = height
-                body = (await page.inner_text("body")).strip()
+                try:
+                    snapshots.append((await page.inner_text("body")).strip())
+                except Exception:
+                    pass
             except Exception as e:
                 log.debug("listing_scroll_failed", url=url, error=str(e))
             try:
                 await context.close()
             except Exception:
                 pass
-            best = body if len(body) >= len(homepage_text) else homepage_text
-            log.info("listing_text_fetched", url=url, chars=len(best))
+            # Union unique non-empty lines across snapshots (preserve first-seen order),
+            # so virtualized items seen at different scroll positions are all kept.
+            seen_lines: set[str] = set()
+            merged: list[str] = []
+            for snap in snapshots:
+                for line in snap.split("\n"):
+                    ls = line.strip()
+                    if ls and ls not in seen_lines:
+                        seen_lines.add(ls)
+                        merged.append(ls)
+            best = "\n".join(merged)
+            log.info("listing_text_fetched", url=url, chars=len(best), snapshots=len(snapshots))
             return FetchResult(text=best[: config.gemini_max_input_chars])
 
         # Step 2: Discover links from homepage
