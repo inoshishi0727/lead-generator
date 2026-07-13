@@ -715,8 +715,7 @@ async def quick_add_leads(req: QuickAddRequest) -> QuickAddResponse:
 # ---------------------------------------------------------------------------
 
 
-@router.post("/leads/{lead_id}/scrape-now", response_model=ScrapeOneResponse)
-async def scrape_lead_by_id(lead_id: str) -> ScrapeOneResponse:
+async def _scrape_lead_now_core(lead_id: str) -> ScrapeOneResponse:
     """Enrich an existing lead. Same pipeline as email ingestion:
 
       1. If the lead has a Google Maps URL → use the Maps scraper path
@@ -907,6 +906,106 @@ async def scrape_lead_by_id(lead_id: str) -> ScrapeOneResponse:
             "website / more context."
         ),
     )
+
+
+@router.post("/leads/{lead_id}/scrape-now", response_model=ScrapeOneResponse)
+async def scrape_lead_by_id(lead_id: str) -> ScrapeOneResponse:
+    """Synchronous single-lead enrich (legacy).
+
+    Kept for callers/tests that block on the result. The UI should prefer
+    /leads/{lead_id}/scrape-now-async, which dodges the Netlify ~26s gateway
+    timeout by running the same pipeline as a background job.
+    """
+    return await _scrape_lead_now_core(lead_id)
+
+
+def _run_scrape_now_job(batch_id: str, lead_id: str) -> None:
+    """Background thread: run the full scrape-now pipeline for one lead,
+    recording progress in the shared _scrape_batches tracker (batch of size 1)."""
+    def _update(**fields):
+        with _scrape_batch_lock:
+            _scrape_batches[batch_id].update(fields)
+
+    def _set_item(idx: int, **fields):
+        with _scrape_batch_lock:
+            _scrape_batches[batch_id]["items"][idx].update(fields)
+
+    def _finish_failed(err: str) -> None:
+        _set_item(0, status="error", error=err)
+        with _scrape_batch_lock:
+            _scrape_batches[batch_id]["failed"] += 1
+            _scrape_batches[batch_id]["completed"] += 1
+        _update(status="completed", completed_at=datetime.now().isoformat())
+
+    _update(status="running")
+    _set_item(0, status="running")
+    try:
+        resp = asyncio.run(_scrape_lead_now_core(lead_id))
+    except HTTPException as exc:
+        _finish_failed(str(exc.detail))
+        return
+    except Exception as exc:
+        log.exception("scrape_now_job_failed", batch_id=batch_id, lead_id=lead_id)
+        _finish_failed(str(exc))
+        return
+
+    if resp.ok:
+        _set_item(0, status="added", business_name=resp.business_name,
+                  detected_kind=resp.detected_kind, lead_id=resp.lead_id or lead_id)
+        with _scrape_batch_lock:
+            _scrape_batches[batch_id]["added"] += 1
+        with _scrape_batch_lock:
+            _scrape_batches[batch_id]["completed"] += 1
+        _update(status="completed", completed_at=datetime.now().isoformat())
+    else:
+        _set_item(0, business_name=resp.business_name,
+                  detected_kind=resp.detected_kind, lead_id=resp.lead_id or lead_id)
+        _finish_failed(resp.error or "Enrichment failed.")
+    log.info("scrape_now_job_done", batch_id=batch_id, lead_id=lead_id, ok=resp.ok)
+
+
+@router.post("/leads/{lead_id}/scrape-now-async", response_model=ScrapeBatchStatusResponse)
+async def scrape_lead_by_id_async(lead_id: str) -> ScrapeBatchStatusResponse:
+    """Async single-lead enrich: kick off a background job, return a batch_id
+    immediately, and poll /scrape-batch/{batch_id} for progress — the same
+    in-memory tracker the bulk scrape uses. Runs the full 4-step scrape-now
+    pipeline (unlike /leads/scrape-selected, which only calls scrape_single_venue).
+    """
+    from src.db.firestore import get_lead_by_id
+
+    existing = get_lead_by_id(lead_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Lead not found")
+
+    batch_id = str(uuid4())
+    started_at = datetime.now().isoformat()
+    label = existing.get("business_name") or lead_id
+
+    with _scrape_batch_lock:
+        _scrape_batches[batch_id] = {
+            "batch_id": batch_id,
+            "status": "pending",
+            "total": 1,
+            "completed": 0,
+            "added": 0,
+            "duplicate": 0,
+            "failed": 0,
+            "started_at": started_at,
+            "completed_at": None,
+            "items": [
+                {"input": label, "status": "pending",
+                 "business_name": existing.get("business_name"),
+                 "detected_kind": None, "lead_id": lead_id, "error": None}
+            ],
+        }
+
+    threading.Thread(
+        target=_run_scrape_now_job,
+        args=(batch_id, lead_id),
+        daemon=True,
+    ).start()
+
+    return _batch_state_to_response(batch_id)
 
 
 # ---------------------------------------------------------------------------

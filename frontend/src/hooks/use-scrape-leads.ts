@@ -69,6 +69,131 @@ export function useScrapeLeadNow() {
   });
 }
 
+/** Per-lead async scrape jobs (leadId -> batchId), persisted so an in-flight
+ *  single-lead re-enrich survives navigation/unmount, mirroring the batch hook. */
+const NOW_JOBS_KEY = "scrape_now_async_jobs";
+
+function loadNowJobs(): Record<string, string> {
+  if (typeof window === "undefined") return {};
+  try {
+    return JSON.parse(localStorage.getItem(NOW_JOBS_KEY) || "{}") as Record<string, string>;
+  } catch {
+    return {};
+  }
+}
+
+function storeNowJobs(jobs: Record<string, string>) {
+  if (typeof window === "undefined") return;
+  try {
+    if (Object.keys(jobs).length) localStorage.setItem(NOW_JOBS_KEY, JSON.stringify(jobs));
+    else localStorage.removeItem(NOW_JOBS_KEY);
+  } catch {
+    // Quota / privacy mode — degrade to "lose state on navigation".
+  }
+}
+
+/**
+ * Async single-lead scrape + enrich. Kicks off a background job (full 4-step
+ * scrape-now pipeline) and polls the shared batch tracker, so it never hits the
+ * Netlify ~26s gateway timeout the synchronous {@link useScrapeLeadNow} does.
+ * Tracks multiple concurrent per-lead jobs (for the leads-table Zap buttons).
+ */
+export function useScrapeNowAsync() {
+  const [jobs, setJobsState] = useState<Record<string, string>>(() => loadNowJobs());
+  const queryClient = useQueryClient();
+
+  const setJob = (leadId: string, batchId: string | null) => {
+    setJobsState((prev) => {
+      const next = { ...prev };
+      if (batchId) next[leadId] = batchId;
+      else delete next[leadId];
+      storeNowJobs(next);
+      return next;
+    });
+  };
+
+  const start = useMutation({
+    mutationFn: async (leadId: string): Promise<{ leadId: string; data: ScrapeBatchStatus }> => {
+      const res = await fetch(`/api/leads/${leadId}/scrape-now-async`, { method: "POST" });
+      const data = (await res.json().catch(() => ({}))) as ScrapeBatchStatus | { error?: string };
+      if (!res.ok || !("batch_id" in data)) {
+        throw new Error((data as { error?: string }).error || `HTTP ${res.status}`);
+      }
+      return { leadId, data: data as ScrapeBatchStatus };
+    },
+    onSuccess: ({ leadId, data }) => {
+      setJob(leadId, data.batch_id);
+    },
+    onError: (err: Error) => {
+      toast.error("Scrape failed", { description: err.message });
+    },
+  });
+
+  const activeBatchIds = Object.values(jobs);
+
+  const statusQuery = useQuery({
+    queryKey: ["scrape-now-async", activeBatchIds.sort().join(",")],
+    queryFn: async (): Promise<Record<string, ScrapeBatchStatus>> => {
+      const out: Record<string, ScrapeBatchStatus> = {};
+      for (const [leadId, batchId] of Object.entries(jobs)) {
+        const res = await fetch(`/api/scrape-batch/${batchId}`);
+        if (res.status === 404) {
+          setJob(leadId, null); // stale job id — stop polling it
+          continue;
+        }
+        if (!res.ok) continue;
+        out[leadId] = (await res.json()) as ScrapeBatchStatus;
+      }
+      return out;
+    },
+    enabled: activeBatchIds.length > 0,
+    refetchInterval: (query) => {
+      const data = query.state.data as Record<string, ScrapeBatchStatus> | undefined;
+      if (!data) return 2000;
+      const anyActive = Object.values(data).some(
+        (s) => s.status !== "completed" && s.status !== "failed",
+      );
+      return anyActive ? 2000 : false;
+    },
+  });
+
+  // Clear finished jobs and refresh leads when any single scrape completes.
+  useEffect(() => {
+    const data = statusQuery.data;
+    if (!data) return;
+    let anyDone = false;
+    for (const [leadId, s] of Object.entries(data)) {
+      if (s.status === "completed" || s.status === "failed") {
+        setJob(leadId, null);
+        anyDone = true;
+        const item = s.items?.[0];
+        if (item?.status === "error" && item.error) {
+          toast.error("Scrape failed", { description: item.error });
+        } else if (item?.business_name) {
+          toast.success(`Scraped: ${item.business_name}`);
+        }
+      }
+    }
+    if (anyDone) queryClient.invalidateQueries({ queryKey: ["leads"] });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [statusQuery.data]);
+
+  const statusFor = (leadId: string): ScrapeBatchStatus | null =>
+    statusQuery.data?.[leadId] ?? null;
+
+  return {
+    start: (leadId: string) => start.mutate(leadId),
+    isStarting: start.isPending,
+    statusFor,
+    /** True while a scrape for this lead is queued or running. */
+    isRunning: (leadId: string): boolean => {
+      const polled = statusQuery.data?.[leadId]?.status;
+      const status = polled ?? (jobs[leadId] ? "pending" : undefined);
+      return status === "pending" || status === "running";
+    },
+  };
+}
+
 /**
  * Bulk scrape selected existing leads. Returns a batch_id + polling.
  */
