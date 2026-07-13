@@ -675,7 +675,10 @@ async def _enrich_parsed_venue(venue: dict):
     except Exception as exc:
         log.warning("scrape_url_update_failed", lead=lead.business_name, error=str(exc))
 
-    return lead, ("added" if is_new else "duplicate"), None
+    # Surface the enrichment failure reason (empty menu / no website found) so
+    # the UI can show WHY a saved venue couldn't be fully read.
+    note = getattr(lead.enrichment, "enrichment_error", None) if lead.enrichment else None
+    return lead, ("added" if is_new else "duplicate"), note
 
 
 def _run_scrape_url_job(batch_id: str, url: str) -> None:
@@ -704,7 +707,7 @@ def _run_scrape_url_job(batch_id: str, url: str) -> None:
         _update(status="completed", completed_at=datetime.now().isoformat())
 
     _update(status="running")
-    _set_item(0, status="running")
+    _set_item(0, status="running", step="fetching page")
 
     # Step 1: fetch the page text (reuses the retry-hardened enrichment fetcher).
     try:
@@ -717,6 +720,7 @@ def _run_scrape_url_job(batch_id: str, url: str) -> None:
         return
 
     # Step 2: extract venues from the page text via Gemini.
+    _set_item(0, step="extracting venues")
     venues = parse_leads_from_text(page_text) if page_text else []
     if not venues:
         _fail_all("No venues could be extracted from that page.")
@@ -734,24 +738,27 @@ def _run_scrape_url_job(batch_id: str, url: str) -> None:
 
     # Step 3: save + enrich + score each venue (serial — protects VPS memory).
     for idx, venue in enumerate(venues):
-        _set_item(idx, status="running")
+        vname = venue.get("business_name") or venue.get("website") or "venue"
+        _set_item(idx, status="running", step=f"enriching {vname}")
         try:
             lead, outcome, err = asyncio.run(_enrich_parsed_venue(venue))
         except Exception as exc:
             log.exception("scrape_url_venue_failed", batch_id=batch_id, idx=idx)
-            _set_item(idx, status="error", error=str(exc))
+            _set_item(idx, status="error", step=None, error=str(exc))
             _bump("failed")
             _bump("completed")
             continue
 
         if outcome == "error" or lead is None:
-            _set_item(idx, status="error", error=err or "Could not enrich venue.")
+            _set_item(idx, status="error", step=None, error=err or "Could not enrich venue.")
             _bump("failed")
         elif outcome == "duplicate":
-            _set_item(idx, status="duplicate", business_name=lead.business_name, lead_id=str(lead.id))
+            _set_item(idx, status="duplicate", step=None,
+                      business_name=lead.business_name, lead_id=str(lead.id), error=err)
             _bump("duplicate")
         else:
-            _set_item(idx, status="added", business_name=lead.business_name, lead_id=str(lead.id))
+            _set_item(idx, status="added", step=None,
+                      business_name=lead.business_name, lead_id=str(lead.id), error=err)
             _bump("added")
         _bump("completed")
 

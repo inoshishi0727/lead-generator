@@ -9,6 +9,8 @@ export interface ScrapeBatchItem {
   detected_kind?: string | null;
   lead_id?: string | null;
   error?: string | null;
+  /** Live progress label while running, e.g. "fetching page", "enriching X". */
+  step?: string | null;
 }
 
 export interface ScrapeBatchStatus {

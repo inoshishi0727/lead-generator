@@ -75,7 +75,9 @@ export function ScrapeStatus({ status }: Props) {
   const isActive = status.status === "pending" || status.status === "running";
   const progress = status.progress ?? 0;
   const phase = status.phase ?? "";
-  const phaseLabel = phaseLabels[phase] ?? (isActive ? "Starting..." : "");
+  const phaseLabel =
+    phaseLabels[phase] ??
+    (phase.startsWith("batch") ? "Scraping venues..." : isActive ? "Starting..." : "");
 
   return (
     <Card className="shadow-md">
