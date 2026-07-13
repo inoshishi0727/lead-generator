@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import re
 import tempfile
+import time
 from urllib.parse import urljoin, urlparse
 
 import structlog
@@ -435,6 +437,30 @@ def _looks_like_404(text: str) -> bool:
     return m.start() < 400 or len(t) < 800
 
 
+# Cloudflare / Akamai / generic bot-challenge interstitials — HTTP 200 with a
+# "prove you're human" body instead of the real page. Treated as a transient
+# block so the fetch retries on a fresh residential proxy IP.
+BOTWALL_PATTERN = re.compile(
+    r"just a moment|verify you are (?:a )?human|checking your browser|"
+    r"attention required|enable javascript and cookies|access denied|"
+    r"cf-ray|cloudflare|ddos protection|are you a robot",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_botwall(text: str) -> bool:
+    """True if a page body looks like a bot-challenge / block wall (Cloudflare et al.)."""
+    if not text:
+        return False
+    t = text.strip()
+    m = BOTWALL_PATTERN.search(t)
+    if not m:
+        return False
+    # Real content that merely mentions "cloudflare" in a footer is long; a challenge
+    # page is short and the phrase sits near the top.
+    return len(t) < 1500 or m.start() < 600
+
+
 async def _menu_trigger_texts(page, limit: int = 4) -> list[str]:
     """Visible text of clickable elements (button / link / role) that look like menu
     triggers — used to CLICK through JS/SPA sites where the menu isn't a plain <a href>."""
@@ -467,24 +493,21 @@ async def _menu_trigger_texts(page, limit: int = 4) -> list[str]:
 async def fetch_website_text(
     url: str,
     config: EnrichmentConfig,
-) -> tuple[str, str | None]:
-    """Fetch text content from a venue website.
+    listing_mode: bool = False,
+) -> FetchResult:
+    """Fetch text content from a website.
 
-    Strategy:
-    1. Launch browser (Camoufox -> CloakBrowser fallback) with proxy
-    2. Visit homepage, dismiss popups
-    3. Discover relevant internal links (menu, drinks, about, etc.)
-       - PDFs collected before same-domain check (catches CDN-hosted menus)
-       - Menu-relevant images collected for Vision extraction
-    4. Visit discovered links + fallback static paths
-    5. Download and extract PDF menu links (Vision fallback for scanned PDFs)
-    6. Extract text from image menus via Gemini Vision
-    7. Sort parts so menu content comes first before truncation
-    8. Concatenate all text for Gemini analysis
+    Two modes:
+    - Full crawl (default): visit homepage + sub-pages + guessed menu paths,
+      pull PDF/image menus. Used for per-venue enrichment.
+    - listing_mode=True: read the JS-rendered article/homepage text ONLY (scroll
+      to trigger lazy-loaded venue cards, no sub-page crawl). Used for the initial
+      fetch of a listicle/blog URL, whose text is then mined for venue names.
 
-    Returns (text, menu_url) where menu_url is the best menu asset URL found
-    (priority: menu PDF > image menu > menu HTML page), or None if not found.
-    Returns ("", None) on total failure.
+    Both share a bot-wall-aware launch (Cloudflare et al. → retry on a fresh
+    residential proxy IP) and, in full crawl, a wall-clock budget.
+
+    Returns a FetchResult; FetchResult(text="") on total failure.
     """
     from src.scrapers.browser import close_browser, get_proxy_config, launch_browser
 
@@ -499,9 +522,15 @@ async def fetch_website_text(
     browser = None
     engine = "camoufox"
     discovered_html_links: list[str] = []
+    start = time.monotonic()
+    budget_s = config.fetch_budget_seconds
+
+    def _over_budget() -> bool:
+        return (time.monotonic() - start) > budget_s
 
     try:
         from src.scrapers.orchestrator import _is_transient
+        from src.scrapers.base import TransientScraperError
 
         proxy = get_proxy_config()
         context_kwargs = {
@@ -513,7 +542,10 @@ async def fetch_website_text(
             "geolocation": {"latitude": 51.5074, "longitude": -0.1278},
             "permissions": ["geolocation"],
         }
-        timeout_ms = config.camoufox_timeout_seconds * 1000
+        timeout_ms = (
+            config.listing_timeout_seconds if listing_mode else config.camoufox_timeout_seconds
+        ) * 1000
+        subpage_timeout_ms = config.subpage_timeout_seconds * 1000
 
         async def _launch_and_load(use_proxy: bool):
             # Camoufox/Firefox ignores a context-level proxy — it must be set at launch
@@ -531,6 +563,16 @@ async def fetch_website_text(
                     await pg.goto(url, wait_until="networkidle", timeout=timeout_ms)
                 except Exception:
                     await pg.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+                # Bot-challenge interstitial? Give it a beat to auto-clear (camoufox +
+                # residential IP passes most managed challenges), then re-check; if still
+                # walled, raise transient so we retry on a fresh proxy IP.
+                for _ in range(3):
+                    if not _looks_like_botwall((await pg.inner_text("body")).strip()):
+                        break
+                    await pg.wait_for_timeout(5000)
+                else:
+                    log.warning("botwall_detected", url=url)
+                    raise TransientScraperError(f"botwall: {url}")
                 return br, eng, ctx, pg
             except Exception:
                 await close_browser(br, eng)
@@ -575,6 +617,31 @@ async def fetch_website_text(
             log.debug("page_fetched", url=url, chars=len(homepage_text))
         visited.add(urlparse(url).path or "/")
 
+        # Listing mode: this URL is a blog/listicle whose text we mine for venue
+        # names. Trigger lazy-loaded venue cards with a human-like scroll, clear any
+        # stacked cookie/age walls, and return the article text — NO menu sub-page
+        # crawl, no PDF/image extraction.
+        if listing_mode:
+            body = homepage_text
+            try:
+                from src.scrapers.humanize.scroll import scroll_like_human
+                await _dismiss_popups(page, timeout=1500)  # 2nd pass: stacked gates
+                await scroll_like_human(page, total_distance=6000)
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=timeout_ms)
+                except Exception:
+                    await page.wait_for_timeout(1500)
+                body = (await page.inner_text("body")).strip()
+            except Exception as e:
+                log.debug("listing_scroll_failed", url=url, error=str(e))
+            try:
+                await context.close()
+            except Exception:
+                pass
+            best = body if len(body) >= len(homepage_text) else homepage_text
+            log.info("listing_text_fetched", url=url, chars=len(best))
+            return FetchResult(text=best[: config.gemini_max_input_chars])
+
         # Step 2: Discover links from homepage
         discovered, pdf_links, image_links = await _discover_links(page, url)
         discovered_html_links = list(discovered)
@@ -612,8 +679,10 @@ async def fetch_website_text(
 
         # Step 4: Visit each HTML page; also collect any additional PDF/image links found
         for target_url in to_visit:
+            if _over_budget():
+                break
             try:
-                await page.goto(target_url, wait_until="networkidle", timeout=timeout_ms)
+                await page.goto(target_url, wait_until="domcontentloaded", timeout=subpage_timeout_ms)
                 await _dismiss_popups(page, timeout=1000)
                 text = (await page.inner_text("body")).strip()
                 if text and len(text) > 50 and not _looks_like_404(text):
@@ -646,8 +715,10 @@ async def fetch_website_text(
 
         # Step 4-deep: follow menu sub-category links one extra level (cap 4).
         for target_url in deep_menu_links[:4]:
+            if _over_budget():
+                break
             try:
-                await page.goto(target_url, wait_until="networkidle", timeout=timeout_ms)
+                await page.goto(target_url, wait_until="domcontentloaded", timeout=subpage_timeout_ms)
                 await _dismiss_popups(page, timeout=1000)
                 text = (await page.inner_text("body")).strip()
                 if text and len(text) > 50 and not _looks_like_404(text):
@@ -661,6 +732,8 @@ async def fetch_website_text(
         # Real navigation — done BEFORE any path guessing. Re-anchor to the homepage per click.
         got_click_content = False
         for trig in menu_triggers[:3]:
+            if _over_budget():
+                break
             label = f"click:{trig.lower()}"
             if label in visited:
                 continue
@@ -689,18 +762,31 @@ async def fetch_website_text(
         # + clicks) found nothing. Abort the instant a guess returns a client-side 404 body, so we
         # never keep hopping /menu, /drinks-menu, ... on JS/SPA sites.
         if not got_click_content:
-            for static_path in STATIC_PATHS[:8]:
+            shell_sigs: set[str] = set()
+            shell_repeats = 0
+            for static_path in STATIC_PATHS[:5]:
+                if _over_budget() or shell_repeats >= 2:
+                    break
                 if static_path in visited:
                     continue
                 visited.add(static_path)
                 target_url = urljoin(url, static_path)
                 try:
-                    await page.goto(target_url, wait_until="domcontentloaded", timeout=timeout_ms)
+                    await page.goto(target_url, wait_until="domcontentloaded", timeout=subpage_timeout_ms)
                     await _dismiss_popups(page, timeout=1000)
                     text = (await page.inner_text("body")).strip()
                     if _looks_like_404(text):
                         log.debug("spa_404_stop_guessing", url=target_url)
                         break
+                    # SPA shell that isn't a 404 body: every guessed route returns the
+                    # same page (which _looks_like_404 misses). Detect the repeat by
+                    # signature and stop guessing instead of hopping all paths.
+                    sig = hashlib.md5(f"{len(text)}:{text[:200]}".encode()).hexdigest()
+                    if sig in shell_sigs:
+                        shell_repeats += 1
+                        log.debug("spa_shell_repeat", url=target_url)
+                        continue
+                    shell_sigs.add(sig)
                     if text and len(text) > 50:
                         collected_parts.append(f"--- PAGE: {static_path} ---\n{text}")
                         log.debug("page_fetched", url=target_url, chars=len(text))
@@ -729,15 +815,19 @@ async def fetch_website_text(
     # Re-sort PDFs after sub-page discovery (new ones may have been added)
     pdf_links.sort(key=lambda u: (0 if PDF_PRIORITY_PATTERN.search(u) else 1))
 
-    # Step 5: Fetch PDF menus (up to 4, sorted by relevance)
-    for pdf_url in pdf_links[:4]:
+    # Step 5: Fetch PDF menus (sorted by relevance). Keep the top menu PDF even when
+    # over budget — it's usually the whole menu — but trim the rest.
+    pdf_cap = 1 if _over_budget() else 3
+    for pdf_url in pdf_links[:pdf_cap]:
         text = await _fetch_pdf_text(pdf_url, config)
         if text and len(text) > 50:
             path = urlparse(pdf_url).path
             collected_parts.append(f"--- PDF: {path} ---\n{text}")
 
-    # Step 6: Extract text from image menus via Gemini Vision (up to 3)
-    for img_url in image_links[:3]:
+    # Step 6: Extract text from image menus via Gemini Vision (skip when over budget —
+    # Vision is the slowest step).
+    img_cap = 0 if _over_budget() else 2
+    for img_url in image_links[:img_cap]:
         text = await _fetch_image_text(img_url, config)
         if text and len(text) > 20:
             path = urlparse(img_url).path

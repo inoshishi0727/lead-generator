@@ -128,6 +128,9 @@ class EmailExtractionConfig(BaseModel):
 class EnrichmentConfig(BaseModel):
     enabled: bool = True
     camoufox_timeout_seconds: int = 20
+    subpage_timeout_seconds: int = 10   # shorter timeout for sub-page/static-path gotos
+    listing_timeout_seconds: int = 40   # longer homepage timeout in listing mode (heavy JS / bot challenges)
+    fetch_budget_seconds: int = 90      # overall wall-clock cap for a single full-crawl fetch
     pages_to_visit: list[str] = ["/", "/menu", "/about", "/contact"]
     gemini_model: str = "gemini-2.5-flash"
     gemini_max_input_chars: int = 40000
