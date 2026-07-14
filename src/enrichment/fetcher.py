@@ -543,6 +543,7 @@ async def fetch_website_text(
     url: str,
     config: EnrichmentConfig,
     listing_mode: bool = False,
+    on_step=None,
 ) -> FetchResult:
     """Fetch text content from a website.
 
@@ -556,9 +557,14 @@ async def fetch_website_text(
     Both share a bot-wall-aware launch (Cloudflare et al. → retry on a fresh
     residential proxy IP) and, in full crawl, a wall-clock budget.
 
+    `on_step(msg)` (optional) surfaces live progress ("reading menu (/drinks)",
+    "extracting menu PDF") to the enrichment/scrape UI.
+
     Returns a FetchResult; FetchResult(text="") on total failure.
     """
     from src.scrapers.browser import close_browser, get_proxy_config, launch_browser
+
+    step = on_step if callable(on_step) else (lambda _m: None)
 
     if not url:
         return FetchResult(text="")
@@ -660,6 +666,7 @@ async def fetch_website_text(
         # Dismiss cookie/location popups
         await _dismiss_popups(page)
 
+        step("reading homepage")
         homepage_text = (await page.inner_text("body")).strip()
         if homepage_text:
             collected_parts.append(f"--- PAGE: homepage ---\n{homepage_text}")
@@ -784,6 +791,7 @@ async def fetch_website_text(
             if _over_budget():
                 break
             try:
+                step(f"reading menu ({urlparse(target_url).path})")
                 await page.goto(target_url, wait_until="domcontentloaded", timeout=subpage_timeout_ms)
                 await _dismiss_popups(page, timeout=1000)
                 text = (await page.inner_text("body")).strip()
@@ -917,10 +925,13 @@ async def fetch_website_text(
     # Re-sort PDFs after sub-page discovery (new ones may have been added)
     pdf_links.sort(key=lambda u: (0 if PDF_PRIORITY_PATTERN.search(u) else 1))
 
-    # Step 5: Fetch PDF menus (sorted by relevance). Keep the top menu PDF even when
-    # over budget — it's usually the whole menu — but trim the rest.
-    pdf_cap = 1 if _over_budget() else 3
-    for pdf_url in pdf_links[:pdf_cap]:
+    # Step 5: Fetch PDF menus (sorted by relevance). A venue often splits its menu
+    # across several PDFs (food / drinks / afternoon tea) — grab them all, since
+    # the drinks list is exactly what we score on. Keep the top one even over budget.
+    pdf_cap = 1 if _over_budget() else 5
+    pdfs_to_fetch = pdf_links[:pdf_cap]
+    for i, pdf_url in enumerate(pdfs_to_fetch):
+        step(f"extracting menu PDF ({i + 1} of {len(pdfs_to_fetch)})")
         text = await _fetch_pdf_text(pdf_url, config)
         if text and len(text) > 50:
             path = urlparse(pdf_url).path
@@ -928,8 +939,9 @@ async def fetch_website_text(
 
     # Step 6: Extract text from image menus via Gemini Vision (skip when over budget —
     # Vision is the slowest step).
-    img_cap = 0 if _over_budget() else 2
+    img_cap = 0 if _over_budget() else 3
     for img_url in image_links[:img_cap]:
+        step("reading menu image")
         text = await _fetch_image_text(img_url, config)
         if text and len(text) > 20:
             path = urlparse(img_url).path

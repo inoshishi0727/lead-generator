@@ -38,14 +38,22 @@ function EnrichRow({ item }: { item: EnrichItem }) {
           ROW_ICON[item.status] ?? <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/40" />
         )}
       </span>
-      <span className="min-w-0 flex-1 truncate text-sm text-foreground">
-        {item.business_name || item.lead_id}
-      </span>
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-sm text-foreground">
+          {item.business_name || item.lead_id}
+        </div>
+        {running && item.step && (
+          <div className="flex items-center gap-1.5 truncate text-xs text-muted-foreground">
+            <span className="h-1 w-1 animate-pulse rounded-full bg-primary" />
+            {item.step}
+          </div>
+        )}
+      </div>
       {item.status === "failed" && item.error && (
-        <span className="max-w-[45%] shrink-0 truncate text-xs text-rose-400/90">{item.error}</span>
+        <span className="max-w-[40%] shrink-0 truncate text-xs text-rose-400/90">{item.error}</span>
       )}
       {item.status === "skipped" && (
-        <span className="shrink-0 text-xs text-muted-foreground">no website</span>
+        <span className="shrink-0 text-xs text-muted-foreground">no data found</span>
       )}
     </div>
   );
@@ -114,7 +122,8 @@ export function EnrichmentProgressPanel() {
             {active && status.current_lead ? (
               <>
                 <span className="mr-1 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-primary align-middle" />
-                now: <span className="text-foreground">{status.current_lead}</span>
+                <span className="text-foreground">{status.current_lead}</span>
+                {status.current_step ? ` — ${status.current_step}` : ""}
               </>
             ) : active ? (
               "starting…"

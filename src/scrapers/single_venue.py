@@ -149,10 +149,11 @@ def _shorten_name_for_search(raw: str) -> str:
 # ----------------------------------------------------- Scrape one
 
 
-async def scrape_single_venue(raw_input: str) -> SingleVenueResult:
+async def scrape_single_venue(raw_input: str, on_step=None) -> SingleVenueResult:
     """Top-level entry: detect → scrape → persist → return.
 
     Keeps a single Camoufox process for the run; closes it before return.
+    `on_step(msg)` surfaces live progress (resolve → enrich sub-steps) to the UI.
     """
     cleaned_input = _normalize_input(raw_input)
     if not cleaned_input:
@@ -192,7 +193,8 @@ async def scrape_single_venue(raw_input: str) -> SingleVenueResult:
 
         # Enrich + score in the same request. Failures here are non-fatal — the
         # base lead is already saved.
-        enriched, scored = await _enrich_and_score(lead, log_prefix=lead.business_name)
+        enriched, scored = await _enrich_and_score(
+            lead, log_prefix=lead.business_name, on_step=on_step)
         if enriched or scored:
             try:
                 from src.db.firestore import update_lead as _update_lead
@@ -208,6 +210,34 @@ async def scrape_single_venue(raw_input: str) -> SingleVenueResult:
     except Exception as exc:
         log.exception("scrape_one_failed", kind=kind)
         return SingleVenueResult(lead=None, is_new=False, detected_kind=kind, error=str(exc))
+    finally:
+        try:
+            await scraper._close_browser()
+        except Exception:
+            pass
+
+
+async def resolve_gmaps_details(name: str) -> Optional[Lead]:
+    """Resolve a venue's Google Maps details (website, rating, review_count,
+    category, address, phone, place_id) by name — WITHOUT saving, enriching or
+    scoring. Enrichment uses this to discover a missing website + Maps signals
+    (Maps has the authority website link even when the site-crawler can't find
+    it). Returns a Lead carrying only the GMaps-derived fields, or None.
+
+    Kept separate from `scrape_single_venue` (which persists + enriches) to avoid
+    recursion when called from inside `EnrichmentEngine.enrich_lead`.
+    """
+    cleaned = _normalize_input(name)
+    if not cleaned:
+        return None
+    scraper = GoogleMapsScraper(config=load_config())
+    try:
+        ctx = await scraper._launch_browser(headless=True)
+        page = await ctx.new_page()
+        return await _scrape_from_name(scraper, page, cleaned)
+    except Exception as exc:
+        log.warning("gmaps_resolve_failed", name=cleaned[:80], error=str(exc))
+        return None
     finally:
         try:
             await scraper._close_browser()
@@ -314,11 +344,12 @@ async def _scrape_from_website(scraper: GoogleMapsScraper, page, raw_url: str) -
 # ----------------------------------------------------- Mapping
 
 
-async def _enrich_and_score(lead: Lead, log_prefix: str = "") -> tuple[bool, bool]:
+async def _enrich_and_score(lead: Lead, log_prefix: str = "", on_step=None) -> tuple[bool, bool]:
     """Run enrichment then scoring on a single lead, in-place.
 
     Returns (enriched, scored) flags. Both are best-effort: an exception in
     either stage is logged and swallowed so the saved Lead survives.
+    `on_step(msg)` surfaces live enrichment progress to the scrape UI.
     """
     enriched = False
     scored = False
@@ -326,7 +357,7 @@ async def _enrich_and_score(lead: Lead, log_prefix: str = "") -> tuple[bool, boo
     try:
         from src.enrichment.engine import EnrichmentEngine
         engine = EnrichmentEngine()
-        await engine.enrich_lead(lead)
+        await engine.enrich_lead(lead, on_step=on_step)
         enriched = True
         log.info("scrape_one_enriched", business=log_prefix)
     except Exception as exc:

@@ -184,6 +184,7 @@ class EnrichItem(BaseModel):
     lead_id: Optional[str] = None
     status: str = "pending"  # pending | enriching | success | failed | skipped
     error: Optional[str] = None
+    step: Optional[str] = None  # live sub-step, e.g. "reading menu (/drinks)"
 
 
 class EnrichStatusResponse(BaseModel):
@@ -192,6 +193,7 @@ class EnrichStatusResponse(BaseModel):
     total: int = 0
     completed: int = 0
     current_lead: Optional[str] = None  # business name currently being enriched
+    current_step: Optional[str] = None  # what the current lead is doing right now
     enriched: int = 0
     failed: int = 0
     skipped: int = 0
