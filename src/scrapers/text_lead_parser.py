@@ -80,6 +80,8 @@ For each lead, return:
 
 Either business_name OR website OR instagram_handle MUST be present.
 
+If the text ends with a "--- LINKS (venue name — website) ---" section, it maps venue names to their own websites. Use it to fill in the `website` for venues you already extracted from the article body (match by name) — do NOT emit a second, duplicate entry for a venue just because it also appears in that section. Ignore link rows that aren't one of the venues featured in the article.
+
 Do NOT extract noise that isn't an actual prospect: the site's own legal/holding company or footer company registration (e.g. an "... Ltd"/"... Inc." in a copyright or "registered in England" line), payment or technology providers, investors or parent companies, cookie/consent vendors, or the publisher / media brand of an article (e.g. the magazine or blog whose page this is). Extract only the real venues / bars / restaurants / hospitality businesses that are the SUBJECT of the content.
 
 A pasted list item like "3. Best Wines (London): Despite the name, they are major spirit consultants" should yield {{"business_name": "Best Wines", "notes": "Major spirit consultants. Based in London.", ...}}.
