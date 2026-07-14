@@ -9,6 +9,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useScrape } from "@/hooks/use-scrape";
 import { SCRAPE_LEAD_NOW_KEY } from "@/hooks/use-scrape-leads";
+import { useActiveScrapeUrl } from "@/hooks/use-active-scrape-url";
+import { LiveScrapePanel } from "@/components/live-scrape-panel";
 import {
   dismissScrapeRun,
   watchScrapeRuns,
@@ -237,6 +239,7 @@ export default function ScrapesPage() {
   const [runs, setRuns] = useState<ScrapeRunRecord[] | null>(null);
   const [leadActivity, setLeadActivity] = useState<RecentLeadActivity[] | null>(null);
   const { startScrape, isStarting } = useScrape();
+  const urlScrape = useActiveScrapeUrl(); // active paste-a-URL scrape, if any
 
   // Lead IDs currently being re-enriched anywhere in the app (lead-detail
   // dialog, leads-table row action, etc.). Observed via TanStack's mutation
@@ -303,6 +306,8 @@ export default function ScrapesPage() {
         <h2 className="text-sm font-medium text-muted-foreground">
           Live
         </h2>
+        {/* Paste-a-URL scrape (per-venue steps) — shows itself when running */}
+        <LiveScrapePanel />
         {isLoading ? (
           <Card>
             <CardContent className="pt-6 text-sm text-muted-foreground">
@@ -310,11 +315,13 @@ export default function ScrapesPage() {
             </CardContent>
           </Card>
         ) : liveRuns.length === 0 && inFlightEnrichments.length === 0 ? (
-          <Card>
-            <CardContent className="pt-6 text-sm text-muted-foreground">
-              No scrapes in progress.
-            </CardContent>
-          </Card>
+          urlScrape ? null : (
+            <Card>
+              <CardContent className="pt-6 text-sm text-muted-foreground">
+                No scrapes in progress.
+              </CardContent>
+            </Card>
+          )
         ) : (
           <div className="space-y-3">
             {liveRuns.map((run) => (
