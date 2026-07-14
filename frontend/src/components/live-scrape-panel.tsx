@@ -1,9 +1,33 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Loader2, Check, X, Copy, CheckCircle2 } from "lucide-react";
 import { useActiveScrapeUrl } from "@/hooks/use-active-scrape-url";
+import { URL_SOURCE_KEY, SCRAPE_URL_STARTED_EVENT } from "@/hooks/use-scrape-url";
 import type { ScrapeBatchItem } from "@/hooks/use-scrape-batch";
+
+/** Best-effort label for what kind of page was pasted, from the URL + how many
+ *  venues came out. Just for display so the user sees what was detected. */
+function classifyUrl(url: string | null, total: number): string {
+  const u = (url || "").toLowerCase();
+  let host = "";
+  try {
+    host = new URL(u.startsWith("http") ? u : `https://${u}`).hostname;
+  } catch {}
+  const publishers = [
+    "timeout", "theinfatuation", "squaremeal", "designmynight", "opentable",
+    "hardens", "michelin", "cntraveller", "conde", "standard.co", "sluurpy",
+    "yelp", "tripadvisor", "guardian", "eater", "londonxlondon", "hot-dinners",
+  ];
+  if (publishers.some((p) => host.includes(p))) return "Listicle / directory";
+  if (/\/blog\//.test(u)) return "Blog post";
+  if (/\/(articles?|features?|news|stories)\//.test(u)) return "Article";
+  if (/best[-\s]|\/guides?\/|top[-\s]?\d|round[-\s]?up|-in-[a-z]{3,}|where[-\s]to/.test(u))
+    return "Listicle";
+  if (total >= 3) return "Listicle";
+  if (total === 1) return "Single venue";
+  return "Web page";
+}
 
 const CHIP: Record<string, { cls: string; label: string }> = {
   added: { cls: "bg-emerald-500/12 text-emerald-500 border-emerald-500/25", label: "Added" },
@@ -69,12 +93,29 @@ function VenueRow({ item }: { item: ScrapeBatchItem }) {
 export function LiveScrapePanel() {
   const status = useActiveScrapeUrl();
   const [dismissed, setDismissed] = useState<string | null>(null);
+  const [sourceUrl, setSourceUrl] = useState<string | null>(() =>
+    typeof window !== "undefined" ? localStorage.getItem(URL_SOURCE_KEY) : null,
+  );
+
+  useEffect(() => {
+    const onStart = (e: Event) => {
+      const u = (e as CustomEvent).detail?.sourceUrl as string | undefined;
+      if (u) setSourceUrl(u);
+    };
+    window.addEventListener(SCRAPE_URL_STARTED_EVENT, onStart);
+    return () => window.removeEventListener(SCRAPE_URL_STARTED_EVENT, onStart);
+  }, []);
 
   if (!status || status.batch_id === dismissed) return null;
 
   const active = status.status !== "completed" && status.status !== "failed";
   const total = status.total || status.items.length || 1;
   const pct = active ? Math.max(6, Math.round((status.completed / total) * 100)) : 100;
+  const kind = classifyUrl(sourceUrl, total);
+  let host = "";
+  try {
+    if (sourceUrl) host = new URL(sourceUrl.startsWith("http") ? sourceUrl : `https://${sourceUrl}`).hostname.replace(/^www\./, "");
+  } catch {}
 
   return (
     <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
@@ -94,12 +135,19 @@ export function LiveScrapePanel() {
         </span>
 
         <div className="min-w-0 flex-1">
-          <div className="text-sm font-semibold text-foreground">
-            {active ? "Scraping URL" : "Scrape complete"}
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-semibold text-foreground">
+              {active ? "Scraping URL" : "Scrape complete"}
+            </span>
+            <span className="shrink-0 rounded-full border border-primary/25 bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary">
+              {kind}
+            </span>
           </div>
           <div className="truncate text-xs text-muted-foreground">
+            {host && <span className="text-foreground">{host}</span>}
+            {host && " — "}
             {active
-              ? "Extracting & enriching venues from the page"
+              ? "extracting & enriching venues"
               : [
                   `${status.added} added`,
                   status.duplicate ? `${status.duplicate} already had` : null,

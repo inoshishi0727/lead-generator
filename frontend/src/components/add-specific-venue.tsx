@@ -54,7 +54,7 @@ export function AddSpecificVenue() {
   };
 
   return (
-    <form onSubmit={onSubmit} className="sp-add-venue">
+    <form onSubmit={onSubmit} className="sp-add-venue" style={{ width: "100%" }}>
       <input
         type="text"
         placeholder="Paste a URL (blog / listing / venue) to extract & enrich, or a name to save"
@@ -62,6 +62,7 @@ export function AddSpecificVenue() {
         onChange={(e) => setValue(e.target.value)}
         disabled={busy}
         className="sp-add-venue-input"
+        style={{ flex: 1, minWidth: 0 }}
         aria-label="Add a lead — paste a URL to scrape or a name to save"
       />
       <button type="submit" disabled={busy || !value.trim()} className="sp-btn primary">
