@@ -6,6 +6,8 @@ import type { ScrapeBatchStatus } from "./use-scrape-batch";
 /** Persist the in-flight URL-ingest batch id so a page navigation doesn't lose
  *  the "extracting N venues…" progress. Mirrors useScrapeSelectedLeads. */
 export const URL_BATCH_KEY = "scrape_url_batch_id";
+/** The URL of the in-flight scrape, so the live panel can label its type. */
+export const URL_SOURCE_KEY = "scrape_url_source";
 
 /** Fired when a URL scrape kicks off, so a standalone live panel can pick it up. */
 export const SCRAPE_URL_STARTED_EVENT = "scrape-url-started";
@@ -57,12 +59,18 @@ export function useScrapeUrl() {
       }
       return data as ScrapeBatchStatus;
     },
-    onSuccess: (data) => {
+    onSuccess: (data, url) => {
       setBatchId(data.batch_id);
-      // Let the standalone live panel start tracking this scrape immediately.
+      // Let the standalone live panel start tracking this scrape immediately,
+      // and remember the source URL so it can label the page type.
       if (typeof window !== "undefined") {
+        try {
+          localStorage.setItem(URL_SOURCE_KEY, url);
+        } catch {}
         window.dispatchEvent(
-          new CustomEvent(SCRAPE_URL_STARTED_EVENT, { detail: { batchId: data.batch_id } }),
+          new CustomEvent(SCRAPE_URL_STARTED_EVENT, {
+            detail: { batchId: data.batch_id, sourceUrl: url },
+          }),
         );
       }
       toast.success("Reading page & extracting venues…");
