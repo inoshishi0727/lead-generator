@@ -97,7 +97,7 @@ Return a JSON object with ALL of these fields:
   "location_area": "neighbourhood name only, e.g. 'Shoreditch' or 'Peckham' or null",
   "menu_fit": one of ["strong", "moderate", "weak", "unknown"],
   "menu_fit_signals": ["short bullet points of evidence, e.g. 'Negroni on menu', 'spritz section', 'stocks craft vermouth'"],
-  "drinks_programme": "List actual drinks/cocktails from their menu. Semicolon-separated. e.g. 'Negroni; Espresso Martini; Aperol Spritz; Old Fashioned; House Vermouth Cocktail; Campari Soda'. If no specific drinks listed on website, list the spirit categories they stock e.g. 'Gin; Vodka; Whisky; Vermouth; Amaro'. null ONLY if zero drinks info on website. NEVER summarize in prose — list the actual items.",
+  "drinks_programme": "List EVERY drink item across ALL menu sections in the content — cocktails, signature/house drinks, coffee & coffee-cocktails, hot chocolate, teas, wine, champagne, beer, spirits, aperitifs, digestifs, soft/non-alcoholic. Semicolon-separated, include the item name (and price if shown). e.g. 'Negroni; Espresso Martini; The Wolseley Imperial (coffee cocktail); Hot Chocolate with rum; Botanical Fizz; Pommery Brut Royale NV; House Vermouth'. Do NOT stop at a few examples and do NOT summarize in prose — enumerate the complete list you can see. If no specific drinks are listed, give the spirit categories stocked e.g. 'Gin; Vodka; Whisky; Vermouth; Amaro'. null ONLY if there is zero drinks info.",
   "menu": "The FULL menu, cleaned. Every drink/food item, grouped under UPPERCASE category headers (e.g. 'COCKTAILS', 'WINE', 'FOOD'), one item per line, with its price appended as ' - £X' when a price is shown. If the site lists only menu sections/categories without individual items or prices, list those sections instead. Include ONLY the menu itself. EXCLUDE all navigation, buttons, opening hours, phone numbers, addresses, booking/reservation blurbs, footers, cookie/terms/shipping text, and any 'page not found' / error-page text. Return \"\" (empty string) ONLY if there is no drinks or food menu information anywhere on the site.",
   "why_asterley_fits": "MAX 20 words. Concrete reason. e.g. 'Already stocks Campari for Negronis — DISPENSE is a direct swap. Spritz menu would suit ASTERLEY ORIGINAL.'",
   "context_notes": "MAX 15 words. One specific hook for the email. e.g. 'Saw the Calvados Negroni on your Apéritif Hour menu.'",
@@ -273,6 +273,42 @@ def _safe_enum(enum_cls, value, default=None):
         return enum_cls(value)
     except ValueError:
         return default
+
+
+def research_to_enrichment(researched: dict) -> EnrichmentData:
+    """Convert grounded-research output (``research_lead_via_gemini``) into an
+    ``EnrichmentData``. This is a multi-source profile (Google Maps, reviews,
+    articles, LinkedIn, social) — used as the enrichment when there's no
+    scrapeable website, and merged with website analysis when there is. Mirrors
+    the persist mapping in the routes scrape-one path."""
+    venue_category = _safe_enum(VenueCategory, researched.get("venue_category"))
+    menu_fit = _safe_enum(MenuFit, researched.get("menu_fit"), MenuFit.UNKNOWN)
+    tone_tier = _safe_enum(ToneTier, researched.get("tone_tier"))
+    lead_products = CATEGORY_PRODUCTS.get(venue_category, []) if venue_category else []
+    contact = None
+    if researched.get("contact_name") or researched.get("contact_role"):
+        contact = ContactInfo(
+            name=researched.get("contact_name"),
+            role=researched.get("contact_role"),
+            confidence="uncertain",
+        )
+    return EnrichmentData(
+        venue_category=venue_category,
+        business_summary=researched.get("business_summary"),
+        location_area=researched.get("location_area"),
+        menu_fit=menu_fit,
+        menu_fit_signals=researched.get("menu_fit_signals") or [],
+        drinks_programme=researched.get("drinks_programme"),
+        why_asterley_fits=researched.get("why_asterley_fits"),
+        context_notes=researched.get("notes"),
+        lead_products=lead_products,
+        tone_tier=tone_tier,
+        contact=contact,
+        opening_hours_summary=researched.get("opening_hours_summary"),
+        price_tier=researched.get("price_tier"),
+        enrichment_source="research",
+        enrichment_status="success",
+    )
 
 
 async def analyze_website(

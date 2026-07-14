@@ -12,6 +12,7 @@ export interface EnrichItem {
   lead_id?: string | null;
   status: "pending" | "enriching" | "success" | "failed" | "skipped" | string;
   error?: string | null;
+  step?: string | null;
 }
 
 export interface EnrichStatus {
@@ -20,6 +21,7 @@ export interface EnrichStatus {
   total: number;
   completed: number;
   current_lead?: string | null;
+  current_step?: string | null;
   enriched: number;
   failed: number;
   skipped: number;

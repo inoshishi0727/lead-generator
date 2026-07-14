@@ -356,7 +356,7 @@ def _run_enrichment(run_id: str, lead_ids: list[str] | None, limit: int | None =
         _enrich_runs[run_id]["total"] = len(leads)
         _enrich_runs[run_id]["items"] = [
             {"business_name": l.business_name, "lead_id": str(l.id),
-             "status": "pending", "error": None}
+             "status": "pending", "error": None, "step": None}
             for l in leads
         ]
         log.info("enrichment_leads_found", total_docs=len(docs), reconstructed=len(leads))
@@ -372,8 +372,13 @@ def _run_enrichment(run_id: str, lead_ids: list[str] | None, limit: int | None =
             for idx, lead in enumerate(leads):
                 _enrich_runs[run_id]["current_lead"] = lead.business_name
                 _enrich_runs[run_id]["items"][idx]["status"] = "enriching"
+
+                def _step(msg: str, _i: int = idx) -> None:
+                    _enrich_runs[run_id]["items"][_i]["step"] = msg
+                    _enrich_runs[run_id]["current_step"] = msg
+
                 try:
-                    await engine.enrich_lead(lead)
+                    await engine.enrich_lead(lead, on_step=_step)
                     if lead.enrichment:
                         update_lead(str(lead.id), {
                             "enrichment": lead.enrichment.model_dump(mode="json"),
@@ -658,16 +663,17 @@ def _batch_state_to_response(batch_id: str) -> ScrapeBatchStatusResponse:
 # ---------------------------------------------------------------------------
 
 
-async def _enrich_parsed_venue(venue: dict):
+async def _enrich_parsed_venue(venue: dict, on_step=None):
     """Turn one parsed venue dict into a saved, enriched, scored Lead.
 
     Returns (lead, outcome, error) where outcome is "added" | "duplicate" |
     "error". Reuses the same save/enrich/score glue as single-venue scraping.
+    Website discovery (Google Maps + grounded research) now happens inside
+    `enrich_lead`, so no separate research-for-website step is needed here.
     """
     from src.db.models import Lead, LeadSource, PipelineStage
     from src.db.firestore import save_lead_immediate, update_lead
     from src.scrapers.single_venue import _enrich_and_score
-    from src.scrapers.text_lead_parser import research_lead_via_gemini
 
     name = (venue.get("business_name") or "").strip()
     website = (venue.get("website") or "").strip() or None
@@ -685,17 +691,7 @@ async def _enrich_parsed_venue(venue: dict):
     )
     is_new = save_lead_immediate(lead)
 
-    # No website on the listing entry — let Gemini (with Google-Search
-    # grounding) find one so website enrichment has something to read.
-    if not lead.website and name:
-        try:
-            researched = research_lead_via_gemini(name)
-            if researched and researched.get("website"):
-                lead.website = researched["website"]
-        except Exception as exc:
-            log.warning("scrape_url_research_failed", venue=name, error=str(exc))
-
-    await _enrich_and_score(lead, log_prefix=lead.business_name)
+    await _enrich_and_score(lead, log_prefix=lead.business_name, on_step=on_step)
     try:
         update_lead(str(lead.id), lead.model_dump(mode="json", exclude_none=True))
     except Exception as exc:
@@ -845,7 +841,8 @@ def _run_scrape_url_job(batch_id: str, url: str) -> None:
         _set_item(0, status="running", step="resolving venue")
         result = None
         try:
-            result = asyncio.run(scrape_single_venue(url))
+            result = asyncio.run(scrape_single_venue(
+                url, on_step=lambda s: _set_item(0, step=s)))
         except Exception:
             log.exception("scrape_url_single_failed", batch_id=batch_id, url=url)
         if result and result.lead:
@@ -912,7 +909,8 @@ def _run_scrape_url_job(batch_id: str, url: str) -> None:
         vname = venue.get("business_name") or venue.get("website") or "venue"
         _set_item(idx, status="running", step=f"enriching {vname}")
         try:
-            lead, outcome, err = asyncio.run(_enrich_parsed_venue(venue))
+            lead, outcome, err = asyncio.run(_enrich_parsed_venue(
+                venue, on_step=lambda s, i=idx: _set_item(i, step=s)))
         except Exception as exc:
             log.exception("scrape_url_venue_failed", batch_id=batch_id, idx=idx)
             _set_item(idx, status="error", step=None, error=str(exc))
@@ -1874,6 +1872,7 @@ async def start_enrichment(req: EnrichRequest) -> EnrichStatusResponse:
         "total": 0,
         "completed": 0,
         "current_lead": None,
+        "current_step": None,
         "enriched": 0,
         "failed": 0,
         "skipped": 0,

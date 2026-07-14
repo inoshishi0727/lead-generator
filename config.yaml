@@ -192,6 +192,10 @@ scraping:
     gemini_temperature: 0.2
     max_concurrent: 3
     headless: false
+    # Multi-source enrichment ("Max"): every lead is enriched from Google Maps +
+    # its website + grounded web research (reviews/articles/social), merged.
+    use_gmaps_discovery: true
+    use_grounded_research: true
 
 scoring:
   weights:

@@ -138,6 +138,10 @@ class EnrichmentConfig(BaseModel):
     gemini_temperature: float = 0.2
     max_concurrent: int = 3
     headless: bool = True
+    # Multi-source enrichment toggles (default on = "Max": every lead gets Google
+    # Maps + website + grounded research, merged). Turn off to cut cost/time.
+    use_gmaps_discovery: bool = True      # resolve website + rating/reviews via Google Maps
+    use_grounded_research: bool = True    # grounded web research (reviews/articles/social)
 
 
 class ScrapingConfig(BaseModel):
