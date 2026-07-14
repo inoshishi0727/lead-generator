@@ -16,6 +16,8 @@ interface Props {
   onStart: (queries: string[], limit: number, headless: boolean, tags: string[]) => void;
   isStarting: boolean;
   isRunning: boolean;
+  /** Render just the form body, no Card wrapper/title (for embedding in another card). */
+  bare?: boolean;
 }
 
 interface CategoryConfig {
@@ -44,7 +46,7 @@ function normalizeScrapeFingerprint(queries: string[]): string {
     .join("|");
 }
 
-export function ScrapeControl({ onStart, isStarting, isRunning }: Props) {
+export function ScrapeControl({ onStart, isStarting, isRunning, bare }: Props) {
   const { data: config } = useConfig();
   const { data: plan } = useOutreachPlan(10);
   const { data: runs } = useScrapeHistory();
@@ -135,12 +137,8 @@ export function ScrapeControl({ onStart, isStarting, isRunning }: Props) {
 
   const disabled = isStarting || isRunning || !location || enabledCategories.length === 0 || atTarget;
 
-  return (
-    <Card className="shadow-md">
-      <CardHeader>
-        <CardTitle>Run Google Maps Scrape</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
+  const content = (
+      <div className="space-y-4">
         {/* Location */}
         <div className="space-y-2">
           <label className="text-sm font-medium">Location</label>
@@ -440,7 +438,16 @@ export function ScrapeControl({ onStart, isStarting, isRunning }: Props) {
               ? "Scraping..."
               : `Start Scrape (${enabledCategories.length} categories, ~${Math.min(limit, remaining)} leads)`}
         </Button>
-      </CardContent>
+      </div>
+  );
+
+  if (bare) return content;
+  return (
+    <Card className="shadow-md">
+      <CardHeader>
+        <CardTitle>Run Google Maps Scrape</CardTitle>
+      </CardHeader>
+      <CardContent>{content}</CardContent>
     </Card>
   );
 }

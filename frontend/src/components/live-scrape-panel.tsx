@@ -116,6 +116,11 @@ export function LiveScrapePanel() {
   try {
     if (sourceUrl) host = new URL(sourceUrl.startsWith("http") ? sourceUrl : `https://${sourceUrl}`).hostname.replace(/^www\./, "");
   } catch {}
+  // What it's doing right now — the step of whatever venue is in flight.
+  const runningItem = status.items.find(
+    (i) => i.status === "running" || i.status === "pending",
+  );
+  const currentAction = runningItem?.step || (active ? "extracting venues" : "");
 
   return (
     <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
@@ -147,7 +152,7 @@ export function LiveScrapePanel() {
             {host && <span className="text-foreground">{host}</span>}
             {host && " — "}
             {active
-              ? "extracting & enriching venues"
+              ? currentAction
               : [
                   `${status.added} added`,
                   status.duplicate ? `${status.duplicate} already had` : null,
