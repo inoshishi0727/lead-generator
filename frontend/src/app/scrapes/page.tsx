@@ -39,13 +39,15 @@ function relativeTime(iso: string | null | undefined): string {
 function durationLabel(start: string, end: string | null): string {
   if (!end) return "running";
   const ms = new Date(end).getTime() - new Date(start).getTime();
-  if (!Number.isFinite(ms) || ms < 0) return "—";
+  // A real scrape never finishes in under a second — sub-second means the
+  // record has missing/equal timestamps (old runs), so show "—" not "0s".
+  if (!Number.isFinite(ms) || ms < 1000) return "duration —";
   const secs = Math.floor(ms / 1000);
-  if (secs < 60) return `${secs}s duration`;
+  if (secs < 60) return `${secs}s`;
   const mins = Math.floor(secs / 60);
-  if (mins < 60) return `${mins}m duration`;
+  if (mins < 60) return `${mins}m ${secs % 60}s`;
   const hrs = Math.floor(mins / 60);
-  return `${hrs}h ${mins % 60}m duration`;
+  return `${hrs}h ${mins % 60}m`;
 }
 
 const PHASE_STYLES: Record<string, string> = {
