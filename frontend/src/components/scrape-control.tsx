@@ -11,6 +11,7 @@ import { useOutreachPlan } from "@/hooks/use-outreach-plan";
 import { useScrapeHistory } from "@/hooks/use-scrape";
 import { useTagIndex } from "@/hooks/use-tag-index";
 import { Play, Monitor, MapPin, ChevronDown, ChevronUp, Plus, X, Sparkles, Target, AlertTriangle } from "lucide-react";
+import { toDate } from "@/lib/time";
 
 interface Props {
   onStart: (queries: string[], limit: number, headless: boolean, tags: string[]) => void;
@@ -120,7 +121,7 @@ export function ScrapeControl({ onStart, isStarting, isRunning, bare }: Props) {
 
   const duplicateDaysAgo = lastCompletedRun?.started_at
     ? Math.round(
-        (Date.now() - new Date(lastCompletedRun.started_at).getTime()) /
+        (Date.now() - toDate(lastCompletedRun.started_at).getTime()) /
           (1000 * 60 * 60 * 24),
       )
     : null;

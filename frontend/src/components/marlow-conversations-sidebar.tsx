@@ -18,10 +18,11 @@ import {
   useMarlowConversations,
   type MarlowConversationSummary,
 } from "@/hooks/use-coach-chat";
+import { toDate } from "@/lib/time";
 
 function relativeShort(iso: string | null): string {
   if (!iso) return "";
-  const ms = Date.now() - new Date(iso).getTime();
+  const ms = Date.now() - toDate(iso).getTime();
   if (!Number.isFinite(ms) || ms < 0) return "now";
   const secs = Math.floor(ms / 1000);
   if (secs < 60) return `${secs}s`;

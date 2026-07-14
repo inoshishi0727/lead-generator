@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Loader2, CheckCircle2, XCircle, Clock, Check } from "lucide-react";
 import type { ScrapeStatus as ScrapeStatusType } from "@/lib/types";
+import { toDate } from "@/lib/time";
 
 interface Props {
   status: ScrapeStatusType;
@@ -39,7 +40,7 @@ function phaseToStep(phase: string, statusStr: string): number {
 function ElapsedTime({ startedAt }: { startedAt: string }) {
   const [elapsed, setElapsed] = useState("0s");
   useEffect(() => {
-    const start = new Date(startedAt).getTime();
+    const start = toDate(startedAt).getTime();
     const tick = () => {
       const diff = Math.max(0, Math.floor((Date.now() - start) / 1000));
       const mins = Math.floor(diff / 60);

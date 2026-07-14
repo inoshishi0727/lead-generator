@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { CheckCircle2, XCircle, Loader2, Clock, SkipForward, Activity, AlertTriangle, X } from "lucide-react";
 import { dismissScrapeRun } from "@/lib/firestore-api";
 import { SCRAPE_STALE_MS, msSince } from "@/lib/stale-thresholds";
+import { toDate } from "@/lib/time";
 import { toast } from "sonner";
 
 const JOB_LABELS: Record<string, string> = {
@@ -16,7 +17,7 @@ const JOB_LABELS: Record<string, string> = {
 };
 
 function formatDate(iso: string): string {
-  return new Date(iso).toLocaleDateString("en-GB", {
+  return toDate(iso).toLocaleDateString("en-GB", {
     day: "numeric",
     month: "short",
     hour: "2-digit",
@@ -26,7 +27,7 @@ function formatDate(iso: string): string {
 
 function formatDuration(start: string, end: string | null): string {
   if (!end) return "running...";
-  const secs = Math.round((new Date(end).getTime() - new Date(start).getTime()) / 1000);
+  const secs = Math.round((toDate(end).getTime() - toDate(start).getTime()) / 1000);
   if (secs < 60) return `${secs}s`;
   return `${Math.floor(secs / 60)}m ${secs % 60}s`;
 }

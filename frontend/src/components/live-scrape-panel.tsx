@@ -1,7 +1,8 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
-import { Loader2, Check, X, Copy, CheckCircle2 } from "lucide-react";
+import { Loader2, Check, X, Copy, CheckCircle2, ArrowRight } from "lucide-react";
 import { useActiveScrapeUrl } from "@/hooks/use-active-scrape-url";
 import { URL_SOURCE_KEY, SCRAPE_URL_STARTED_EVENT } from "@/hooks/use-scrape-url";
 import type { ScrapeBatchItem } from "@/hooks/use-scrape-batch";
@@ -200,6 +201,21 @@ export function LiveScrapePanel() {
         {status.items.map((item, i) => (
           <VenueRow key={`${item.input}-${i}`} item={item} />
         ))}
+      </div>
+
+      {/* Footer: where the leads land */}
+      <div className="flex items-center justify-between gap-3 border-t border-border/60 px-5 py-2.5">
+        <span className="text-xs text-muted-foreground">
+          {active
+            ? "Venues appear in Leads as they’re added"
+            : `${status.added} new lead${status.added === 1 ? "" : "s"} in your pipeline`}
+        </span>
+        <Link
+          href="/leads"
+          className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-primary hover:underline"
+        >
+          View in Leads <ArrowRight className="h-3 w-3" />
+        </Link>
       </div>
     </div>
   );

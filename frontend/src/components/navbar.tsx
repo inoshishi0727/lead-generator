@@ -11,10 +11,11 @@ import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
 import { useReplyNotifications } from "@/hooks/use-notifications";
 import type { ReplyNotification } from "@/lib/firestore-api";
+import { toDate } from "@/lib/time";
 
 function timeAgo(iso: string) {
   if (!iso) return "";
-  const diff = Date.now() - new Date(iso).getTime();
+  const diff = Date.now() - toDate(iso).getTime();
   const mins = Math.floor(diff / 60000);
   if (mins < 60) return `${mins}m ago`;
   const hrs = Math.floor(mins / 60);

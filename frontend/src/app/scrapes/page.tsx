@@ -21,10 +21,11 @@ import {
   type RecentLeadActivity,
   type ScrapeRunRecord,
 } from "@/lib/firestore-api";
+import { toDate } from "@/lib/time";
 
 function relativeTime(iso: string | null | undefined): string {
   if (!iso) return "";
-  const diffMs = Date.now() - new Date(iso).getTime();
+  const diffMs = Date.now() - toDate(iso).getTime();
   if (!Number.isFinite(diffMs) || diffMs < 0) return "just now";
   const secs = Math.floor(diffMs / 1000);
   if (secs < 60) return `${secs}s ago`;
@@ -38,7 +39,7 @@ function relativeTime(iso: string | null | undefined): string {
 
 function durationLabel(start: string, end: string | null): string {
   if (!end) return "running";
-  const ms = new Date(end).getTime() - new Date(start).getTime();
+  const ms = toDate(end).getTime() - toDate(start).getTime();
   // A real scrape never finishes in under a second — sub-second means the
   // record has missing/equal timestamps (old runs), so show "—" not "0s".
   if (!Number.isFinite(ms) || ms < 1000) return "duration —";
