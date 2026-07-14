@@ -109,7 +109,9 @@ class EnrichmentEngine:
             sources: list[str] = []
 
             # 1) Google Maps — authoritative website + rating / reviews / category.
-            if getattr(cfg, "use_gmaps_discovery", True):
+            # Skip when the lead already resolved from Maps (has a place_id) — its
+            # Maps fields are present, so re-resolving would just waste a browser.
+            if getattr(cfg, "use_gmaps_discovery", True) and not lead.google_maps_place_id:
                 step("checking Google Maps listing")
                 try:
                     from src.scrapers.single_venue import resolve_gmaps_details
