@@ -13,6 +13,7 @@ import { AssignLeadsDialog } from "@/components/assign-leads-dialog";
 import { BulkScrapeSelectedButton } from "@/components/bulk-scrape-selected-button";
 import { AssignRandomButton } from "@/components/assign-random-button";
 import { EnrichmentProgressPanel } from "@/components/enrichment-progress-panel";
+import { StaleLeadsCard } from "@/components/stale-leads-card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/lib/auth-context";
@@ -697,6 +698,10 @@ function LeadsPageInner() {
       {/* Live per-lead progress for the bulk "Update missing info" enrichment,
           persistent across navigation. Replaces the old static banner. */}
       <EnrichmentProgressPanel />
+
+      {/* Leads stuck in pre-enrichment (moved here from the Dashboard so the
+          re-enrich shortcut sits next to the leads it acts on). */}
+      <StaleLeadsCard />
 
       {enrichMutation.isError && (
         <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800 dark:border-red-800 dark:bg-red-950/20 dark:text-red-400">
