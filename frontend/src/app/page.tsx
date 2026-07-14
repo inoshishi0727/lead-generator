@@ -312,57 +312,15 @@ export default function DashboardPage() {
               </button>
             </Link>
           )}
-          {isAdmin && <AddSpecificVenue />}
           {isAdmin && (
-            <button
-              type="button"
-              className="sp-btn"
-              onClick={() => setBulkAddOpen(true)}
-              title="Add a list of venues at once"
-            >
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
-              Bulk add
-            </button>
-          )}
-          {isAdmin && (
-            <button
-              className={`sp-btn${isRunning || isScraping ? "" : " primary"}`}
-              onClick={triggerScrapeAnimation}
-              disabled={isRunning || isScraping}
-            >
-              {isScraping || isRunning ? (
-                <>
-                  <RefreshCw size={13} className="sp-spin" />
-                  Scraping… {Math.round(scrapeProgress * 100)}%
-                </>
-              ) : (
-                <>
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4l6 6M20 4l-6 6M4 20l6-6M20 20l-6-6"/><circle cx="12" cy="12" r="3"/></svg>
-                  Run venue scrape
-                </>
-              )}
-            </button>
+            <Link href="/scrapes">
+              <button className="sp-btn primary" title="Scrape URLs & venues, run the Google Maps scrape, watch live progress">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4l6 6M20 4l-6 6M4 20l6-6M20 20l-6-6"/><circle cx="12" cy="12" r="3"/></svg>
+                Scrapes
+              </button>
+            </Link>
           )}
         </div>
-      </div>
-
-      {/* Live scrape / scraping animation banners */}
-      {(isScraping || isRunning) && (
-        <div className="sp-scrape-banner">
-          <div className="sp-row" style={{ marginBottom: 6 }}>
-            <span style={{ fontWeight: 500 }}>Scraping venues across postcodes</span>
-            <span className="sp-spacer" />
-            <span className="sp-mono sp-muted">{Math.round(scrapeProgress * 184)} / 184 sources</span>
-          </div>
-          <div className="sp-progress-track">
-            <div className="sp-progress-fill" style={{ width: `${scrapeProgress * 100}%` }} />
-          </div>
-        </div>
-      )}
-
-      {/* Prominent live view of the current URL scrape (per-venue steps). */}
-      <div className="mb-4">
-        <LiveScrapePanel />
       </div>
 
       <ScrapeRunningBanner />
@@ -629,53 +587,10 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Admin: Scrape Controls */}
-      {isAdmin && (
-        <div className="sp-card" style={{ marginBottom: 16 }}>
-          <div className="sp-card-head">
-            <span className="sp-card-title">Scrape Controls</span>
-            <span className="sp-spacer" />
-            <button
-              className="sp-btn sm"
-              onClick={() => csvInputRef.current?.click()}
-            >
-              <Upload size={12} />
-              Upload Queries
-            </button>
-            <button className="sp-btn sm" onClick={downloadTemplate}>
-              <Download size={12} />
-              CSV Template
-            </button>
-            <input
-              ref={csvInputRef}
-              type="file"
-              accept=".csv,.txt"
-              onChange={handleCsvUpload}
-              className="hidden"
-            />
-          </div>
-          <div className="sp-card-body">
-            <UpcomingScrapeReview />
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24, marginTop: 16 }}>
-              <ScrapeControl
-                onStart={(queries, limit, headless, tags) =>
-                  startScrape({ queries, limit, headless, tags })
-                }
-                isStarting={isStarting}
-                isRunning={isRunning}
-              />
-              {status ? <ScrapeStatus status={status} /> : <ScrapeHistory />}
-            </div>
-          </div>
-        </div>
-      )}
-
       <LeadDetailDialog
         lead={selectedLead}
         onClose={() => setSelectedLead(null)}
       />
-
-      <BulkAddVenues open={bulkAddOpen} onClose={() => setBulkAddOpen(false)} />
     </div>
   );
 }
