@@ -26,17 +26,21 @@ export const CAMPAIGN_GRACE_DAYS = 1;
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
+// Backend timestamps are naive UTC (no "Z"); toDate parses them as UTC so age
+// math isn't skewed by the viewer's timezone. See lib/time.ts.
+import { toDate } from "./time";
+
 /** Days since the given ISO timestamp (or null if the input is falsy). */
 export function daysSince(iso: string | null | undefined): number | null {
   if (!iso) return null;
-  const then = new Date(iso).getTime();
+  const then = toDate(iso).getTime();
   if (Number.isNaN(then)) return null;
   return Math.floor((Date.now() - then) / MS_PER_DAY);
 }
 
 export function msSince(iso: string | null | undefined): number | null {
   if (!iso) return null;
-  const then = new Date(iso).getTime();
+  const then = toDate(iso).getTime();
   if (Number.isNaN(then)) return null;
   return Date.now() - then;
 }

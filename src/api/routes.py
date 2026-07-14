@@ -732,11 +732,34 @@ def _run_scrape_url_job(batch_id: str, url: str) -> None:
         with _scrape_batch_lock:
             _scrape_batches[batch_id][field] += 1
 
+    def _record_run(final_status: str) -> None:
+        """Persist a scrape_runs row so this URL scrape shows up in History."""
+        try:
+            from src.db.client import get_firestore_client
+            db = get_firestore_client()
+            if db is None:
+                return
+            with _scrape_batch_lock:
+                b = _scrape_batches[batch_id]
+                added, started = b.get("added", 0), b.get("started_at")
+            db.collection("scrape_runs").document(batch_id).set({
+                "source": "url_scrape",
+                "query": url,
+                "status": final_status,
+                "leads_found": added,
+                "started_at": started,
+                "completed_at": datetime.now().isoformat(),
+                "phase": "done",
+            })
+        except Exception as exc:
+            log.warning("scrape_url_run_record_failed", batch_id=batch_id, error=str(exc))
+
     def _fail_all(err: str):
         _set_item(0, status="error", error=err)
         _bump("failed")
         _bump("completed")
         _update(status="completed", completed_at=datetime.now().isoformat())
+        _record_run("failed")
 
     _update(status="running")
 
@@ -759,6 +782,7 @@ def _run_scrape_url_job(batch_id: str, url: str) -> None:
             _bump(outcome)
             _bump("completed")
             _update(status="completed", completed_at=datetime.now().isoformat())
+            _record_run("completed")
             log.info("scrape_url_single_done", batch_id=batch_id, url=url,
                      venue=result.lead.business_name)
             return
@@ -828,6 +852,7 @@ def _run_scrape_url_job(batch_id: str, url: str) -> None:
             _bump("added")
         _bump("completed")
 
+    _record_run("completed")
     _update(status="completed", completed_at=datetime.now().isoformat())
     log.info("scrape_url_done", batch_id=batch_id, url=url, venues=len(venues))
 

@@ -42,22 +42,7 @@ import { useGenerateDrafts } from "@/hooks/use-outreach";
 import { toast } from "sonner";
 import type { Lead } from "@/lib/types";
 
-function relativeTime(iso: string | null | undefined): string {
-  if (!iso) return "—";
-  const diffMs = Date.now() - new Date(iso).getTime();
-  if (!Number.isFinite(diffMs) || diffMs < 0) return "just now";
-  const secs = Math.floor(diffMs / 1000);
-  if (secs < 60) return `${secs}s ago`;
-  const mins = Math.floor(secs / 60);
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  const days = Math.floor(hrs / 24);
-  if (days < 30) return `${days}d ago`;
-  const months = Math.floor(days / 30);
-  if (months < 12) return `${months}mo ago`;
-  return `${Math.floor(months / 12)}y ago`;
-}
+import { relativeTime, toDate } from "@/lib/time";
 
 interface Props {
   leads: Lead[];
@@ -385,7 +370,7 @@ export function LeadsTable({ leads, isLoading, selectable, selectedIds = [], onS
                     <span className="truncate">{lead.business_name}</span>
                     {(() => {
                       if (!lead.created_at) return null;
-                      const ageMs = Date.now() - new Date(lead.created_at).getTime();
+                      const ageMs = Date.now() - toDate(lead.created_at).getTime();
                       if (!(ageMs >= 0 && ageMs <= 24 * 60 * 60 * 1000)) return null;
                       if (!latestCohort?.has(lead.id)) return null;
                       if (viewedSet?.has(lead.id)) return null;
@@ -489,9 +474,9 @@ export function LeadsTable({ leads, isLoading, selectable, selectedIds = [], onS
                     className="text-xs text-muted-foreground whitespace-nowrap"
                     title={
                       lead.created_at
-                        ? new Date(lead.created_at).toLocaleString()
+                        ? toDate(lead.created_at).toLocaleString()
                         : lead.scraped_at
-                        ? new Date(lead.scraped_at).toLocaleString()
+                        ? toDate(lead.scraped_at).toLocaleString()
                         : ""
                     }
                   >
