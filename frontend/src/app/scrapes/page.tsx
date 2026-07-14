@@ -331,6 +331,9 @@ export default function ScrapesPage() {
         </Card>
       </section>
 
+      {/* Live progress of the paste-a-URL scrape — right under the box so it's obvious */}
+      <LiveScrapePanel />
+
       {/* Bulk Google Maps scrape (by category / location) */}
       <section className="space-y-3">
         <h2 className="text-sm font-medium text-muted-foreground">Google Maps scrape</h2>
@@ -347,8 +350,6 @@ export default function ScrapesPage() {
         <h2 className="text-sm font-medium text-muted-foreground">
           Live
         </h2>
-        {/* Paste-a-URL scrape (per-venue steps) — shows itself when running */}
-        <LiveScrapePanel />
         {isLoading ? (
           <Card>
             <CardContent className="pt-6 text-sm text-muted-foreground">
