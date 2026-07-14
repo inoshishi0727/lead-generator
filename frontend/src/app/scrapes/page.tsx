@@ -1,9 +1,10 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useMutationState } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Radar, Loader2, X, AlertCircle, RotateCcw, Sparkles } from "lucide-react";
+import { Radar, Loader2, X, AlertCircle, RotateCcw, Sparkles, ChevronRight } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -248,6 +249,7 @@ export default function ScrapesPage() {
   const urlScrape = useActiveScrapeUrl(); // active paste-a-URL scrape, if any
   const [bulkAddOpen, setBulkAddOpen] = useState(false);
   const [mode, setMode] = useState<"url" | "gmaps">("url");
+  const [activityPage, setActivityPage] = useState(0);
 
   // Lead IDs currently being re-enriched anywhere in the app (lead-detail
   // dialog, leads-table row action, etc.). Observed via TanStack's mutation
@@ -263,9 +265,19 @@ export default function ScrapesPage() {
   }, []);
 
   useEffect(() => {
-    const unsub = watchRecentLeadActivity((next) => setLeadActivity(next), 20);
+    const unsub = watchRecentLeadActivity((next) => setLeadActivity(next), 60);
     return unsub;
   }, []);
+
+  // Paginate the per-lead activity list (newest first).
+  const ACTIVITY_PAGE_SIZE = 8;
+  const activityTotal = leadActivity?.length ?? 0;
+  const activityPageCount = Math.max(1, Math.ceil(activityTotal / ACTIVITY_PAGE_SIZE));
+  const activityPageSafe = Math.min(activityPage, activityPageCount - 1);
+  const activityPageItems = (leadActivity ?? []).slice(
+    activityPageSafe * ACTIVITY_PAGE_SIZE,
+    activityPageSafe * ACTIVITY_PAGE_SIZE + ACTIVITY_PAGE_SIZE,
+  );
 
   // Resolve each pending leadId to its business_name from the already-loaded
   // activity list. Falls back to a truncated id if the lead isn't in the
@@ -456,11 +468,47 @@ export default function ScrapesPage() {
                 No per-lead activity yet.
               </p>
             ) : (
-              <div className="divide-y divide-border/30">
-                {leadActivity.map((lead) => (
-                  <LeadActivityRow key={lead.id} lead={lead} />
-                ))}
-              </div>
+              <>
+                <div className="divide-y divide-border/30">
+                  {activityPageItems.map((lead) => (
+                    <LeadActivityRow key={lead.id} lead={lead} />
+                  ))}
+                </div>
+                {activityPageCount > 1 && (
+                  <div className="mt-4 flex items-center justify-between border-t border-border/40 pt-3">
+                    <span className="text-xs text-muted-foreground">
+                      {activityPageSafe * ACTIVITY_PAGE_SIZE + 1}–
+                      {Math.min((activityPageSafe + 1) * ACTIVITY_PAGE_SIZE, activityTotal)} of{" "}
+                      {activityTotal}
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-7 px-2 text-xs"
+                        disabled={activityPageSafe <= 0}
+                        onClick={() => setActivityPage((p) => Math.max(0, p - 1))}
+                      >
+                        Prev
+                      </Button>
+                      <span className="text-xs tabular-nums text-muted-foreground">
+                        {activityPageSafe + 1}/{activityPageCount}
+                      </span>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-7 px-2 text-xs"
+                        disabled={activityPageSafe >= activityPageCount - 1}
+                        onClick={() =>
+                          setActivityPage((p) => Math.min(activityPageCount - 1, p + 1))
+                        }
+                      >
+                        Next
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </>
             )}
           </CardContent>
         </Card>
@@ -473,9 +521,14 @@ export default function ScrapesPage() {
 
 function LeadActivityRow({ lead }: { lead: RecentLeadActivity }) {
   return (
-    <div className="flex items-start justify-between gap-3 py-2.5 first:pt-0 last:pb-0">
+    <Link
+      href={`/leads?focus=${lead.id}`}
+      className="group -mx-2 flex items-start justify-between gap-3 rounded-md px-2 py-2.5 transition-colors first:mt-0 hover:bg-muted/50"
+    >
       <div className="min-w-0 flex-1 space-y-0.5">
-        <p className="truncate text-sm font-medium">{lead.business_name}</p>
+        <p className="truncate text-sm font-medium group-hover:text-primary">
+          {lead.business_name}
+        </p>
         <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
           {lead.stage && (
             <Badge variant="outline" className="text-[10px] capitalize">
@@ -492,9 +545,12 @@ function LeadActivityRow({ lead }: { lead: RecentLeadActivity }) {
           )}
         </div>
       </div>
-      <p className="shrink-0 text-xs text-muted-foreground">
-        {relativeTime(lead.scraped_at)}
-      </p>
-    </div>
+      <div className="flex shrink-0 items-center gap-1">
+        <span className="text-xs text-muted-foreground">
+          {relativeTime(lead.scraped_at)}
+        </span>
+        <ChevronRight className="h-4 w-4 text-muted-foreground/40 transition-colors group-hover:text-primary" />
+      </div>
+    </Link>
   );
 }

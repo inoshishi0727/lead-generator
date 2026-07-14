@@ -490,6 +490,55 @@ async def _menu_trigger_texts(page, limit: int = 4) -> list[str]:
     return texts
 
 
+# Social / aggregator hosts that a listicle links to but which aren't the venue's
+# own bookable website — skip so enrichment doesn't try to read them as the site.
+_LINK_SKIP_HOSTS = (
+    "facebook.", "instagram.", "twitter.", "x.com", "tiktok.", "youtube.", "youtu.be",
+    "pinterest.", "linkedin.", "google.", "goo.gl", "apple.", "spotify.", "whatsapp.",
+    "reddit.", "wikipedia.", "amazon.", "eventbrite.", "bit.ly",
+)
+
+
+async def _collect_listing_links(page, base_url: str, limit: int = 60) -> str:
+    """On a listicle each venue name usually links to its own site, but
+    ``inner_text`` drops the ``<a href>``. Return a newline list of
+    ``anchor text — href`` for outbound, non-social links so the text parser can
+    attach a real website to each venue (without it, enrichment fails with
+    "No website URL"). Must be called before the browser context closes."""
+    from urllib.parse import urlparse
+
+    base_host = urlparse(base_url).netloc.lower().replace("www.", "")
+    try:
+        raw = await page.evaluate(
+            "() => Array.from(document.querySelectorAll('a[href]'))"
+            ".map(a => [ (a.textContent||'').trim().slice(0,90), a.href ])"
+        )
+    except Exception:
+        return ""
+    seen: set[str] = set()
+    out: list[str] = []
+    for pair in raw or []:
+        try:
+            text, href = pair[0], pair[1]
+        except Exception:
+            continue
+        if not href or not href.startswith("http"):
+            continue
+        host = urlparse(href).netloc.lower().replace("www.", "")
+        # Drop links back to the publisher itself and known social/aggregator hosts.
+        if not host or host == base_host or (base_host and base_host in host):
+            continue
+        if any(s in host for s in _LINK_SKIP_HOSTS):
+            continue
+        if href in seen:
+            continue
+        seen.add(href)
+        out.append(f"{(text or host)} — {href}")
+        if len(out) >= limit:
+            break
+    return "\n".join(out)
+
+
 async def fetch_website_text(
     url: str,
     config: EnrichmentConfig,
@@ -666,6 +715,14 @@ async def fetch_website_text(
                     pass
             except Exception as e:
                 log.debug("listing_scroll_failed", url=url, error=str(e))
+            # Capture outbound venue links BEFORE closing the context — each venue
+            # name on a listicle usually links to its own site, which inner_text
+            # drops. Appending them lets enrichment read a real website.
+            try:
+                links_block = await _collect_listing_links(page, url)
+            except Exception as e:
+                log.debug("listing_links_failed", url=url, error=str(e))
+                links_block = ""
             try:
                 await context.close()
             except Exception:
@@ -681,7 +738,10 @@ async def fetch_website_text(
                         seen_lines.add(ls)
                         merged.append(ls)
             best = "\n".join(merged)
-            log.info("listing_text_fetched", url=url, chars=len(best), snapshots=len(snapshots))
+            if links_block:
+                best = f"{best}\n\n--- LINKS (venue name — website) ---\n{links_block}"
+            log.info("listing_text_fetched", url=url, chars=len(best),
+                     snapshots=len(snapshots), link_lines=links_block.count("\n") + 1 if links_block else 0)
             return FetchResult(text=best[: config.gemini_max_input_chars])
 
         # Step 2: Discover links from homepage
