@@ -14,6 +14,7 @@ import { OutreachPlan } from "@/components/outreach-plan";
 import { LeadDetailDialog } from "@/components/lead-detail-dialog";
 import { ActionableLeadCard } from "@/components/actionable-lead-card";
 import { AddSpecificVenue } from "@/components/add-specific-venue";
+import { LiveScrapePanel } from "@/components/live-scrape-panel";
 import { BulkAddVenues } from "@/components/bulk-add-venues";
 import { useScrape } from "@/hooks/use-scrape";
 import { useGenerateDrafts } from "@/hooks/use-outreach";
@@ -358,6 +359,11 @@ export default function DashboardPage() {
           </div>
         </div>
       )}
+
+      {/* Prominent live view of the current URL scrape (per-venue steps). */}
+      <div className="mb-4">
+        <LiveScrapePanel />
+      </div>
 
       <ScrapeRunningBanner />
       <EditReflectionBanner />

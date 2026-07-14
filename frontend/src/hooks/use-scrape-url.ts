@@ -5,9 +5,12 @@ import type { ScrapeBatchStatus } from "./use-scrape-batch";
 
 /** Persist the in-flight URL-ingest batch id so a page navigation doesn't lose
  *  the "extracting N venues…" progress. Mirrors useScrapeSelectedLeads. */
-const URL_BATCH_KEY = "scrape_url_batch_id";
+export const URL_BATCH_KEY = "scrape_url_batch_id";
 
-function loadBatchId(): string | null {
+/** Fired when a URL scrape kicks off, so a standalone live panel can pick it up. */
+export const SCRAPE_URL_STARTED_EVENT = "scrape-url-started";
+
+export function loadBatchId(): string | null {
   if (typeof window === "undefined") return null;
   try {
     return localStorage.getItem(URL_BATCH_KEY);
@@ -56,6 +59,12 @@ export function useScrapeUrl() {
     },
     onSuccess: (data) => {
       setBatchId(data.batch_id);
+      // Let the standalone live panel start tracking this scrape immediately.
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(
+          new CustomEvent(SCRAPE_URL_STARTED_EVENT, { detail: { batchId: data.batch_id } }),
+        );
+      }
       toast.success("Reading page & extracting venues…");
     },
     onError: (err: Error) => {
