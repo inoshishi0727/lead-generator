@@ -304,40 +304,45 @@ export default function ScrapesPage() {
 
   return (
     <div className="mx-auto max-w-5xl space-y-6 p-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <Radar className="h-5 w-5 text-primary" />
-          <h1 className="text-xl font-semibold">Scrapes</h1>
-        </div>
-        {/* Pick a mode: paste a URL, or run the Google Maps sweep */}
-        <div className="inline-flex rounded-lg border border-border bg-muted/40 p-0.5 text-sm">
-          <button
-            onClick={() => setMode("url")}
-            className={`rounded-md px-3 py-1.5 font-medium transition-colors ${
-              mode === "url"
-                ? "bg-card text-foreground shadow-sm"
-                : "text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            Scrape a URL
-          </button>
-          <button
-            onClick={() => setMode("gmaps")}
-            className={`rounded-md px-3 py-1.5 font-medium transition-colors ${
-              mode === "gmaps"
-                ? "bg-card text-foreground shadow-sm"
-                : "text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            Google Maps
-          </button>
-        </div>
+      <div className="flex items-center gap-2">
+        <Radar className="h-5 w-5 text-primary" />
+        <h1 className="text-xl font-semibold">Scrapes</h1>
       </div>
 
-      {mode === "url" && (
-        <section className="space-y-3">
-          <Card>
-            <CardContent className="space-y-3 pt-6">
+      {/* One card: mode toggle as the header, the picked mode's controls below */}
+      <Card>
+        <div className="flex flex-wrap items-center gap-3 border-b border-border px-4 py-3">
+          <div className="inline-flex rounded-lg border border-border bg-muted/40 p-0.5 text-sm">
+            <button
+              onClick={() => setMode("url")}
+              className={`rounded-md px-3 py-1.5 font-medium transition-colors ${
+                mode === "url"
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              Scrape a URL
+            </button>
+            <button
+              onClick={() => setMode("gmaps")}
+              className={`rounded-md px-3 py-1.5 font-medium transition-colors ${
+                mode === "gmaps"
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              Google Maps
+            </button>
+          </div>
+          <span className="text-xs text-muted-foreground">
+            {mode === "url"
+              ? "Extract every venue from a link — blog, listicle, directory or a single site"
+              : "Sweep Google Maps by category & location"}
+          </span>
+        </div>
+        <CardContent className="pt-4">
+          {mode === "url" ? (
+            <div className="space-y-3">
               <AddSpecificVenue />
               <p className="text-xs text-muted-foreground">
                 Paste a website, a “best bars” listicle, or a directory — we extract the
@@ -352,24 +357,21 @@ export default function ScrapesPage() {
                 </button>
                 .
               </p>
-            </CardContent>
-          </Card>
-        </section>
-      )}
+            </div>
+          ) : (
+            <ScrapeControl
+              bare
+              onStart={(queries, limit, headless, tags) =>
+                startScrape({ queries, limit, headless, tags })
+              }
+              isStarting={isStarting}
+              isRunning={liveRuns.length > 0}
+            />
+          )}
+        </CardContent>
+      </Card>
 
-      {mode === "gmaps" && (
-        <section className="space-y-3">
-          <ScrapeControl
-            onStart={(queries, limit, headless, tags) =>
-              startScrape({ queries, limit, headless, tags })
-            }
-            isStarting={isStarting}
-            isRunning={liveRuns.length > 0}
-          />
-        </section>
-      )}
-
-      {/* Live progress of the paste-a-URL scrape — always visible when running */}
+      {/* Live progress of the paste-a-URL scrape */}
       <LiveScrapePanel />
 
       <section className="space-y-3">
