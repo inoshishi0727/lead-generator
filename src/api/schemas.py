@@ -178,13 +178,24 @@ class EnrichRequest(BaseModel):
     force: bool = False  # Re-enrich leads even if already enriched
 
 
+class EnrichItem(BaseModel):
+    """Per-lead progress inside a bulk enrichment run."""
+    business_name: Optional[str] = None
+    lead_id: Optional[str] = None
+    status: str = "pending"  # pending | enriching | success | failed | skipped
+    error: Optional[str] = None
+
+
 class EnrichStatusResponse(BaseModel):
     run_id: str
     status: str  # pending | running | completed | failed
     total: int = 0
+    completed: int = 0
+    current_lead: Optional[str] = None  # business name currently being enriched
     enriched: int = 0
     failed: int = 0
     skipped: int = 0
+    items: list[EnrichItem] = []
 
 
 # --- Scoring ---

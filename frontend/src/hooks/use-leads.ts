@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { getLeads, createLead } from "@/lib/firestore-api";
 import { vpsApi } from "@/lib/vps-api";
+import { ENRICH_STARTED_EVENT, storeEnrichRunId } from "./use-active-enrich";
 import type { Lead } from "@/lib/types";
 
 export interface LeadFilters {
@@ -59,9 +60,17 @@ export function useEnrichLeads() {
         const text = await res.text().catch(() => res.statusText);
         throw new Error(text);
       }
-      return res.json() as Promise<{ status: string; enriched: number; failed: number }>;
+      return res.json() as Promise<{ run_id?: string; status: string; enriched: number; failed: number }>;
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
+      // Hand the run id to the standalone progress panel so it can show live
+      // per-lead progress and survive navigation.
+      if (data?.run_id && typeof window !== "undefined") {
+        storeEnrichRunId(data.run_id);
+        window.dispatchEvent(
+          new CustomEvent(ENRICH_STARTED_EVENT, { detail: { runId: data.run_id } }),
+        );
+      }
       qc.invalidateQueries({ queryKey: ["leads"] });
     },
   });

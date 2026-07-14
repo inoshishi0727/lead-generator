@@ -12,6 +12,7 @@ import { SearchQueryManager } from "@/components/search-query-manager";
 import { AssignLeadsDialog } from "@/components/assign-leads-dialog";
 import { BulkScrapeSelectedButton } from "@/components/bulk-scrape-selected-button";
 import { AssignRandomButton } from "@/components/assign-random-button";
+import { EnrichmentProgressPanel } from "@/components/enrichment-progress-panel";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/lib/auth-context";
@@ -693,11 +694,9 @@ function LeadsPageInner() {
         )}
       </div>
 
-      {enrichMutation.isSuccess && (
-        <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/20 dark:text-emerald-400">
-          Enrichment started. This runs in the background using the backend. Check back in a few minutes.
-        </div>
-      )}
+      {/* Live per-lead progress for the bulk "Update missing info" enrichment,
+          persistent across navigation. Replaces the old static banner. */}
+      <EnrichmentProgressPanel />
 
       {enrichMutation.isError && (
         <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800 dark:border-red-800 dark:bg-red-950/20 dark:text-red-400">
