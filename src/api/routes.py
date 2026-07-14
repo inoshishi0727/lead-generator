@@ -354,31 +354,57 @@ def _run_enrichment(run_id: str, lead_ids: list[str] | None, limit: int | None =
                 log.warning("lead_reconstruct_failed", doc_id=doc.get("id"), source=doc.get("source"), error=str(exc))
 
         _enrich_runs[run_id]["total"] = len(leads)
+        _enrich_runs[run_id]["items"] = [
+            {"business_name": l.business_name, "lead_id": str(l.id),
+             "status": "pending", "error": None}
+            for l in leads
+        ]
         log.info("enrichment_leads_found", total_docs=len(docs), reconstructed=len(leads))
 
         config = load_config()
         engine = EnrichmentEngine(config=config)
-        enriched = asyncio.run(engine.enrich_leads(leads))
 
-        # Update leads in Firestore
-        for lead in enriched:
-            if lead.enrichment:
-                updates = {
-                    "enrichment": lead.enrichment.model_dump(mode="json"),
-                    "enriched_at": lead.enriched_at.isoformat() if lead.enriched_at else None,
-                    "stage": lead.stage.value,
-                }
-                update_lead(str(lead.id), updates)
+        # Enrich one lead at a time so the run tracker can report live per-lead
+        # progress (X/N, current venue, per-item success/failed) to the UI —
+        # mirrors the scrape-batch tracker. enrich_lead mutates the lead in place.
+        async def _enrich_all() -> tuple[int, int, int]:
+            success = failed = skipped = 0
+            for idx, lead in enumerate(leads):
+                _enrich_runs[run_id]["current_lead"] = lead.business_name
+                _enrich_runs[run_id]["items"][idx]["status"] = "enriching"
+                try:
+                    await engine.enrich_lead(lead)
+                    if lead.enrichment:
+                        update_lead(str(lead.id), {
+                            "enrichment": lead.enrichment.model_dump(mode="json"),
+                            "enriched_at": lead.enriched_at.isoformat() if lead.enriched_at else None,
+                            "stage": lead.stage.value,
+                        })
+                    st = lead.enrichment.enrichment_status if lead.enrichment else "failed"
+                    if st == "success":
+                        success += 1
+                    elif st == "skipped":
+                        skipped += 1
+                    else:
+                        st, failed = "failed", failed + 1
+                    _enrich_runs[run_id]["items"][idx].update(
+                        status=st, error=(lead.enrichment.enrichment_error if lead.enrichment else None))
+                except Exception as exc:
+                    failed += 1
+                    _enrich_runs[run_id]["items"][idx].update(status="failed", error=str(exc))
+                    log.warning("enrich_lead_failed", lead=lead.business_name, error=str(exc))
+                _enrich_runs[run_id].update(
+                    completed=idx + 1, enriched=success, failed=failed, skipped=skipped)
+            return success, failed, skipped
 
-        success = sum(1 for l in enriched if l.enrichment and l.enrichment.enrichment_status == "success")
-        failed = sum(1 for l in enriched if l.enrichment and l.enrichment.enrichment_status == "failed")
-        skipped = sum(1 for l in enriched if l.enrichment and l.enrichment.enrichment_status == "skipped")
+        success, failed, skipped = asyncio.run(_enrich_all())
 
         _enrich_runs[run_id].update(
             status="completed",
             enriched=success,
             failed=failed,
             skipped=skipped,
+            current_lead=None,
             completed_at=datetime.now(),
         )
         log.info("enrich_thread_done", run_id=run_id, enriched=success, failed=failed, skipped=skipped)
@@ -1846,9 +1872,12 @@ async def start_enrichment(req: EnrichRequest) -> EnrichStatusResponse:
     _enrich_runs[run_id] = {
         "status": "pending",
         "total": 0,
+        "completed": 0,
+        "current_lead": None,
         "enriched": 0,
         "failed": 0,
         "skipped": 0,
+        "items": [],
     }
 
     thread = threading.Thread(
