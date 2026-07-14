@@ -11,6 +11,9 @@ import { useScrape } from "@/hooks/use-scrape";
 import { SCRAPE_LEAD_NOW_KEY } from "@/hooks/use-scrape-leads";
 import { useActiveScrapeUrl } from "@/hooks/use-active-scrape-url";
 import { LiveScrapePanel } from "@/components/live-scrape-panel";
+import { AddSpecificVenue } from "@/components/add-specific-venue";
+import { ScrapeControl } from "@/components/scrape-control";
+import { BulkAddVenues } from "@/components/bulk-add-venues";
 import {
   dismissScrapeRun,
   watchScrapeRuns,
@@ -240,6 +243,7 @@ export default function ScrapesPage() {
   const [leadActivity, setLeadActivity] = useState<RecentLeadActivity[] | null>(null);
   const { startScrape, isStarting } = useScrape();
   const urlScrape = useActiveScrapeUrl(); // active paste-a-URL scrape, if any
+  const [bulkAddOpen, setBulkAddOpen] = useState(false);
 
   // Lead IDs currently being re-enriched anywhere in the app (lead-detail
   // dialog, leads-table row action, etc.). Observed via TanStack's mutation
@@ -301,6 +305,41 @@ export default function ScrapesPage() {
         <Radar className="h-5 w-5 text-primary" />
         <h1 className="text-xl font-semibold">Scrapes</h1>
       </div>
+
+      {/* Scrape a URL / venue (universal ingest) */}
+      <section className="space-y-3">
+        <h2 className="text-sm font-medium text-muted-foreground">Scrape a URL or venue</h2>
+        <Card>
+          <CardContent className="space-y-3 pt-6">
+            <AddSpecificVenue />
+            <p className="text-xs text-muted-foreground">
+              Paste a website, a “best bars” listicle, or a directory — we extract the
+              venues on the page and enrich each into a lead. Watch progress in{" "}
+              <span className="font-medium text-foreground">Live</span> below. Or{" "}
+              <button
+                type="button"
+                onClick={() => setBulkAddOpen(true)}
+                className="font-medium text-primary hover:underline"
+              >
+                bulk-add a list
+              </button>
+              .
+            </p>
+          </CardContent>
+        </Card>
+      </section>
+
+      {/* Bulk Google Maps scrape (by category / location) */}
+      <section className="space-y-3">
+        <h2 className="text-sm font-medium text-muted-foreground">Google Maps scrape</h2>
+        <ScrapeControl
+          onStart={(queries, limit, headless, tags) =>
+            startScrape({ queries, limit, headless, tags })
+          }
+          isStarting={isStarting}
+          isRunning={liveRuns.length > 0}
+        />
+      </section>
 
       <section className="space-y-3">
         <h2 className="text-sm font-medium text-muted-foreground">
@@ -394,6 +433,8 @@ export default function ScrapesPage() {
           </CardContent>
         </Card>
       </section>
+
+      <BulkAddVenues open={bulkAddOpen} onClose={() => setBulkAddOpen(false)} />
     </div>
   );
 }
