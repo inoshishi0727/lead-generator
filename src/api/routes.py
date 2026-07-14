@@ -709,6 +709,53 @@ def _is_listicle_url(url: str) -> bool:
     return bool(_LISTICLE_URL_HINTS.search(u))
 
 
+def _name_tokens(name: str) -> list[str]:
+    """Distinctive lowercase tokens (>=4 chars) of a venue name, minus generic
+    words that would match unrelated domains."""
+    stop = {"the", "and", "bar", "pub", "club", "cafe", "restaurant", "kitchen",
+            "house", "room", "rooms", "london", "soho", "at", "of", "co"}
+    return [t for t in _re.split(r"[^a-z0-9]+", name.lower())
+            if len(t) >= 4 and t not in stop]
+
+
+def _attach_listicle_websites(venues: list[dict], page_text: str) -> int:
+    """Fill in `website` for venues from the "--- LINKS ---" block the fetcher
+    appends in listing mode. A link is only trusted when the venue's OWN name
+    token appears in BOTH the link label and the link's host — so a listicle's
+    third-party press/review links (e.g. a name that links to a magazine review)
+    are ignored, leaving those to the Gemini website-research fallback. Returns
+    the count filled. Mutates `venues` in place."""
+    from urllib.parse import urlparse
+
+    i = page_text.find("--- LINKS")
+    if i < 0:
+        return 0
+    links: list[tuple[str, str, str]] = []  # (label_lower, href, host_slug)
+    for line in page_text[i:].split("\n")[1:]:
+        label, sep, href = line.partition("—")
+        href = href.strip()
+        if not sep or not href.startswith("http"):
+            continue
+        host = urlparse(href).netloc.lower().replace("www.", "")
+        links.append((label.strip().lower(), href, host.replace(".", "")))
+    if not links:
+        return 0
+
+    filled = 0
+    for v in venues:
+        if v.get("website"):
+            continue
+        tokens = _name_tokens(v.get("business_name") or "")
+        if not tokens:
+            continue
+        for label, href, host_slug in links:
+            if any(t in host_slug for t in tokens) and any(t in label for t in tokens):
+                v["website"] = href
+                filled += 1
+                break
+    return filled
+
+
 def _run_scrape_url_job(batch_id: str, url: str) -> None:
     """Background thread: fetch a URL and turn it into lead(s).
 
@@ -802,6 +849,14 @@ def _run_scrape_url_job(batch_id: str, url: str) -> None:
     # Step 2: extract venues from the page text via Gemini.
     _set_item(0, step="extracting venues")
     venues = parse_leads_from_text(page_text) if page_text else []
+    # Attach each venue's own website from the listicle's outbound links (Gemini
+    # is deliberately conservative about URLs, so match them in code) — this is
+    # what lets enrichment actually read a site instead of failing "No website".
+    if venues and page_text:
+        filled = _attach_listicle_websites(venues, page_text)
+        if filled:
+            log.info("scrape_url_links_attached", batch_id=batch_id, filled=filled,
+                     total=len(venues))
     if not venues:
         # Distinguish "the page never served its content to us" (login wall /
         # anti-bot API / failed hydration — a tiny body) from "we read a full page
